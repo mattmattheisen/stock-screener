@@ -74,13 +74,13 @@ class StaticArtifactCombiner:
         current = self._discover(
             Path(artifacts_dir),
             source_label="current",
-            required=required,
+            required={},
         )
         fallback = (
             self._discover(
                 Path(fallback_artifacts_dir),
                 source_label="fallback",
-                required=fallback_required,
+                required={},
             )
             if fallback_artifacts_dir is not None
             else {}
@@ -106,6 +106,11 @@ class StaticArtifactCombiner:
             raise RuntimeError(
                 "No market artifacts are available to combine into a static-site bundle"
             )
+        self._validate_selected_formulas(
+            selected=selected,
+            required=required,
+            fallback_required=fallback_required,
+        )
 
         generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         warnings: list[str] = []
@@ -206,6 +211,31 @@ class StaticArtifactCombiner:
             return date.fromisoformat(text.split("T", 1)[0])
         except ValueError:
             return None
+
+    @classmethod
+    def _validate_selected_formulas(
+        cls,
+        *,
+        selected: dict[str, dict[str, Any]],
+        required: Mapping[str, str],
+        fallback_required: Mapping[str, str],
+    ) -> None:
+        for market, artifact in selected.items():
+            required_formulas = (
+                fallback_required
+                if artifact["source_label"] == "fallback"
+                else required
+            )
+            expected = required_formulas.get(market)
+            if expected is None:
+                continue
+            artifact["entry"] = cls._validate_formula(
+                market=market,
+                source_label=artifact["source_label"],
+                metadata=artifact["metadata"],
+                market_dir=artifact["market_dir"],
+                expected_formula=expected,
+            )
 
     def _discover(
         self,

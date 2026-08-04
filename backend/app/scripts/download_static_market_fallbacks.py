@@ -218,6 +218,51 @@ def _candidate_is_newer(
     )
 
 
+def _workflow_run_upper_bound_date(run: dict[str, Any]) -> date | None:
+    for key in ("run_started_at", "created_at", "updated_at"):
+        run_date = _coerce_manifest_date(run.get(key))
+        if run_date is not None:
+            return run_date
+    return None
+
+
+def _run_cannot_beat_incumbent(
+    *,
+    run_upper_bound: date | None,
+    incumbent_date: date | None,
+) -> bool:
+    return (
+        run_upper_bound is not None
+        and incumbent_date is not None
+        and run_upper_bound <= incumbent_date
+    )
+
+
+def _install_market_candidate(
+    *,
+    target_dir: Path,
+    candidate_dir: Path,
+) -> None:
+    backup_dir: Path | None = None
+    if target_dir.exists() or target_dir.is_symlink():
+        backup_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{target_dir.name}.previous-",
+                dir=target_dir.parent,
+            )
+        )
+        shutil.rmtree(backup_dir)
+        target_dir.rename(backup_dir)
+    try:
+        candidate_dir.rename(target_dir)
+    except Exception:
+        if backup_dir is not None and backup_dir.exists() and not target_dir.exists():
+            backup_dir.rename(target_dir)
+        raise
+    if backup_dir is not None and backup_dir.exists():
+        shutil.rmtree(backup_dir)
+
+
 def download_fallback_artifacts(
     *,
     repo: str,
@@ -271,6 +316,7 @@ def download_fallback_artifacts(
         run_id = run.get("id")
         if run_id == current_run_id:
             continue
+        run_upper_bound = _workflow_run_upper_bound_date(run)
         try:
             artifact_pages = gh_json(
                 [
@@ -307,6 +353,11 @@ def download_fallback_artifacts(
             # Download fallback artifacts for current markets too; the combiner
             # compares dates and keeps a newer last-known-good artifact when a
             # cache-only current run had to rewind.
+            if market in fallback_markets and _run_cannot_beat_incumbent(
+                run_upper_bound=run_upper_bound,
+                incumbent_date=fallback_dates_by_market.get(market),
+            ):
+                continue
             target_dir = fallback_dir / artifact_name
             candidate_dir = Path(
                 tempfile.mkdtemp(
@@ -358,8 +409,18 @@ def download_fallback_artifacts(
                 shutil.rmtree(candidate_dir, ignore_errors=True)
                 continue
 
-            shutil.rmtree(target_dir, ignore_errors=True)
-            candidate_dir.rename(target_dir)
+            try:
+                _install_market_candidate(
+                    target_dir=target_dir,
+                    candidate_dir=candidate_dir,
+                )
+            except OSError as exc:
+                warn(
+                    f"{artifact_name} from run {run_id} could not replace "
+                    f"the incumbent fallback artifact ({exc})."
+                )
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+                continue
             fallback_markets.add(market)
             fallback_dates_by_market[market] = candidate_date
             print(

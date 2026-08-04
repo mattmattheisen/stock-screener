@@ -8,6 +8,9 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
+from app.scripts import download_static_market_fallbacks as fallback_script
 from app.scripts.download_static_market_fallbacks import (
     collect_current_markets,
     downloaded_market_is_compatible,
@@ -230,6 +233,55 @@ def test_static_site_validation_uses_python_module_not_inline_control_plane() ->
     assert "snapshot-failure.json" not in validation_step
 
 
+def test_static_site_fallback_candidate_install_restores_incumbent_on_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    target_dir = tmp_path / "static-market-US"
+    candidate_dir = tmp_path / ".static-market-US.candidate-222"
+    target_dir.mkdir()
+    candidate_dir.mkdir()
+    (target_dir / "manifest.market.json").write_text(
+        json.dumps(
+            {
+                "market": "US",
+                "schema_version": "static-site-v3",
+                "entry": {"as_of_date": "2026-07-31"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (candidate_dir / "manifest.market.json").write_text(
+        json.dumps(
+            {
+                "market": "US",
+                "schema_version": "static-site-v3",
+                "entry": {"as_of_date": "2026-08-03"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_rename = Path.rename
+
+    def flaky_rename(self, target):
+        if self == candidate_dir and Path(target) == target_dir:
+            raise OSError("install failed")
+        return original_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky_rename)
+
+    with pytest.raises(OSError, match="install failed"):
+        fallback_script._install_market_candidate(
+            target_dir=target_dir,
+            candidate_dir=candidate_dir,
+        )
+
+    manifest = json.loads(
+        (target_dir / "manifest.market.json").read_text(encoding="utf-8")
+    )
+    assert manifest["entry"]["as_of_date"] == "2026-07-31"
+
+
 def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_market(tmp_path) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
@@ -261,10 +313,10 @@ def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_mark
         args = sys.argv[1:]
         if args[:3] == ["api", "--paginate", "--slurp"] and "actions/workflows/static-site.yml/runs" in args[3]:
             print(json.dumps([{{"workflow_runs": [
-                {{"id": 999, "conclusion": "failure"}},
-                {{"id": 333, "conclusion": "success"}},
-                {{"id": 222, "conclusion": "success"}},
-                {{"id": 111, "conclusion": "success"}}
+                {{"id": 999, "conclusion": "failure", "created_at": "2026-08-05T00:00:00Z"}},
+                {{"id": 333, "conclusion": "success", "created_at": "2026-08-05T00:00:00Z"}},
+                {{"id": 222, "conclusion": "success", "created_at": "2026-08-04T00:00:00Z"}},
+                {{"id": 111, "conclusion": "success", "created_at": "2026-08-03T00:00:00Z"}}
             ]}}]))
         elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/333/artifacts" in args[3]:
             print(json.dumps([{{"artifacts": [
@@ -337,7 +389,6 @@ def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_mark
         {"run": "333", "artifact": "static-market-TW"},
         {"run": "333", "artifact": "static-market-US"},
         {"run": "222", "artifact": "static-market-US"},
-        {"run": "111", "artifact": "static-market-US"},
     ]
     us_manifest = json.loads(
         (fallback_dir / "static-market-US" / "manifest.market.json").read_text(
