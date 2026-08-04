@@ -27,6 +27,46 @@ class _ReadyGroupRankBackfill:
         return {"status": "completed"}
 
 
+def test_refresh_static_daily_prices_uses_exposure_lookback_for_history_hydration(
+    monkeypatch,
+):
+    init_kwargs: dict[str, object] = {}
+    refresh_kwargs: dict[str, object] = {}
+
+    class _FakeStaticDailyPriceRefreshService:
+        def __init__(self, **kwargs):
+            init_kwargs.update(kwargs)
+
+        def refresh(self, **kwargs):
+            refresh_kwargs.update(kwargs)
+            return {"status": "completed"}
+
+    monkeypatch.setattr(
+        export_static_site,
+        "StaticDailyPriceRefreshService",
+        _FakeStaticDailyPriceRefreshService,
+    )
+    monkeypatch.setattr(export_static_site, "SessionLocal", object())
+    monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
+    monkeypatch.setattr(export_static_site, "BulkDataFetcher", lambda: object())
+
+    result = export_static_site._refresh_static_daily_prices(
+        as_of_date=date(2026, 7, 31),
+        market="US",
+    )
+
+    assert result == {"status": "completed"}
+    assert (
+        init_kwargs["breadth_history_price_lookback_days"]
+        == EXPOSURE_BACKFILL_DAYS
+    )
+    assert refresh_kwargs == {
+        "as_of_date": date(2026, 7, 31),
+        "market": "US",
+        "ensure_static_history": True,
+    }
+
+
 def test_static_daily_refresh_ensures_market_breadth_before_exposure(monkeypatch):
     events: list[tuple[str, str]] = []
     breadth_call: dict[str, object] = {}

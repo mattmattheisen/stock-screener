@@ -468,7 +468,7 @@ def test_static_daily_price_refresh_hydrates_short_history_for_rrg_startup() -> 
     result = service.refresh(
         as_of_date=date(2026, 6, 4),
         market="IN",
-        ensure_rrg_history=True,
+        ensure_static_history=True,
     )
 
     assert fetch_calls == [
@@ -555,7 +555,7 @@ def test_static_daily_price_refresh_hydrates_sparse_old_rows_for_rrg_startup() -
     result = service.refresh(
         as_of_date=date(2026, 6, 4),
         market="IN",
-        ensure_rrg_history=True,
+        ensure_static_history=True,
     )
 
     assert fetch_calls == [
@@ -626,7 +626,7 @@ def test_static_daily_price_refresh_continues_when_rrg_calendar_lookup_fails() -
     result = service.refresh(
         as_of_date=date(2026, 6, 4),
         market="IN",
-        ensure_rrg_history=True,
+        ensure_static_history=True,
     )
 
     assert fetch_calls == [

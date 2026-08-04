@@ -301,11 +301,12 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
         price_cache=get_price_cache(),
         fetcher=BulkDataFetcher(),
         batch_size_for_market=_static_daily_price_refresh_batch_size,
+        breadth_history_price_lookback_days=EXPOSURE_BACKFILL_DAYS,
     )
     return service.refresh(
         as_of_date=as_of_date,
         market=market,
-        ensure_rrg_history=True,
+        ensure_static_history=True,
     )
 
 
