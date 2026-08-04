@@ -230,6 +230,7 @@ jobs:
         run: |
           cd backend
           set +e
+          EXPORT_LOG="$(mktemp)"
           python -m app.scripts.export_static_market_artifact \
             --output-dir /tmp/static-data \
             --refresh-daily \
@@ -238,25 +239,45 @@ jobs:
             --skip-fundamentals-refresh \
             --market "${{ matrix.market }}" \
             --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES" \
-            --rrg-history-dir "$RRG_HISTORY_DIR"
-          status=$?
+            --rrg-history-dir "$RRG_HISTORY_DIR" 2>&1 | tee "$EXPORT_LOG"
+          pipeline_status=("${PIPESTATUS[@]}")
+          status="${pipeline_status[0]}"
+          log_status="${pipeline_status[1]}"
           set -e
+          if [ "$log_status" -ne 0 ]; then
+            echo "Failed to persist the export log." >&2
+            exit "$log_status"
+          fi
+          STATUS_PATH="/tmp/static-data/status/${MARKET_LOWER}/status.json"
           if [ "$status" -eq 78 ]; then
             echo "Market ${{ matrix.market }} is not a trading day; no current static artifact will be uploaded."
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
+            echo "has_price_bundle=false" >> "$GITHUB_OUTPUT"
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -eq 79 ]; then
             echo "Market ${{ matrix.market }} produced diagnostics but no current market artifact will be uploaded; combine will use fallback artifacts if available."
+            has_price_bundle="$(jq -r '.has_price_bundle // false' "$STATUS_PATH" 2>/dev/null || echo false)"
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
+            echo "has_price_bundle=$has_price_bundle" >> "$GITHUB_OUTPUT"
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
+          echo "has_price_bundle=true" >> "$GITHUB_OUTPUT"
+          if grep -q "using benchmark-backed as-of date" "$EXPORT_LOG"; then
+            echo "Rolling RRG history publication disabled for ${{ matrix.market }} because the market export rewound to an older benchmark-backed date."
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rrg_history_publishable=true" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$RRG_HISTORY_ENABLED" = "true" ] && [ "$RRG_RESTORE_STATUS" = "failed" ]; then
             echo "Rolling RRG history restore failed for ${{ matrix.market }}; current output will not replace the last good market artifact."
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
@@ -278,15 +299,46 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build daily price bundle
-        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
+        id: build-daily-price-bundle
+        if: ${{ steps.export-market.outputs.has_price_bundle == 'true' }}
+        env:
+          MARKET: ${{ matrix.market }}
         run: |
           cd backend
+          MIN_SYMBOL_COVERAGE="$(python - <<'PY'
+          import os
+          from app.services.market_rs_inputs import MarketRsInputLoader
+
+          print(MarketRsInputLoader._minimum_current_price_coverage(os.environ["MARKET"]))
+          PY
+          )"
+          set +e
+          BUILD_LOG="$(mktemp)"
           python -m app.scripts.build_daily_price_bundle \
-            --market "${{ matrix.market }}" \
-            --output-dir /tmp/daily-price
+            --market "$MARKET" \
+            --output-dir /tmp/daily-price \
+            --require-complete \
+            --min-symbol-coverage "$MIN_SYMBOL_COVERAGE" 2>&1 | tee "$BUILD_LOG"
+          build_pipeline_status=("${PIPESTATUS[@]}")
+          status="${build_pipeline_status[0]}"
+          build_log_status="${build_pipeline_status[1]}"
+          set -e
+          if [ "$build_log_status" -ne 0 ]; then
+            echo "Failed to persist the daily price bundle build log." >&2
+            exit "$build_log_status"
+          fi
+          if [ "$status" -ne 0 ]; then
+            if grep -q "Daily price bundle coverage .* is below required" "$BUILD_LOG"; then
+              echo "Daily price bundle publication skipped for $MARKET because current-session coverage is below the static publish threshold."
+              echo "price_bundle_ready=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            exit "$status"
+          fi
+          echo "price_bundle_ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload daily price assets
-        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
+        if: ${{ steps.export-market.outputs.has_price_bundle == 'true' && steps.build-daily-price-bundle.outputs.price_bundle_ready == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -311,7 +363,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish rolling RRG history
-        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.rrg-history.outputs.enabled == 'true' && steps.restore-rrg-history.outputs.safe_to_publish == 'true' }}
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.export-market.outputs.rrg_history_publishable == 'true' && steps.rrg-history.outputs.enabled == 'true' && steps.restore-rrg-history.outputs.safe_to_publish == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -381,11 +433,13 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
           BRANCH_NAME: ${{ github.ref_name }}
+          RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
         run: |
           cd backend
           python -m app.scripts.download_static_market_fallbacks \
             --current-dir /tmp/static-market-artifacts-current \
-            --fallback-dir /tmp/static-market-artifacts-fallback
+            --fallback-dir /tmp/static-market-artifacts-fallback \
+            --fallback-rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
 
       - name: Validate market artifacts
         env:

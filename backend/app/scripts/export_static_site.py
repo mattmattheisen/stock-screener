@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
@@ -401,6 +401,53 @@ def _benchmark_resolution_candidates(resolution: Any) -> tuple[str, ...]:
     return ()
 
 
+def _date_from_iso(value: object) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _latest_static_rs_benchmark_backed_as_of_date(
+    result: Mapping[str, Any],
+    *,
+    requested_as_of_date: date,
+) -> date | None:
+    if (
+        result.get("reason_code")
+        != MARKET_RS_REASON_BENCHMARK_ADJUSTED_ANCHOR_MISSING
+    ):
+        return None
+    diagnostics = result.get("diagnostics")
+    if not isinstance(diagnostics, Mapping):
+        return None
+    if _date_from_iso(diagnostics.get("date")) != requested_as_of_date:
+        return None
+    candidates = diagnostics.get("benchmark_candidates")
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+        return None
+
+    latest_dates = [
+        latest_date
+        for candidate in candidates
+        if isinstance(candidate, Mapping)
+        for latest_date in (_date_from_iso(candidate.get("latest_date")),)
+        if latest_date is not None and latest_date <= requested_as_of_date
+    ]
+    if not latest_dates:
+        return None
+    latest_backed_date = max(latest_dates)
+    if latest_backed_date >= requested_as_of_date:
+        return None
+    return latest_backed_date
+
+
 def _hydrate_remaining_static_rs_benchmarks(
     *,
     market: str,
@@ -687,7 +734,8 @@ def _ensure_breadth_history(
         undercovered_dates = _static_breadth_undercovered_backfill_dates(
             db,
             market=normalized_market,
-            dates=recompute_dates,
+            dates=target_dates,
+            as_of_date=as_of_date,
             minimum_validated_stocks=minimum_validated_stocks,
             stats=stats,
         )
@@ -734,6 +782,7 @@ def _static_breadth_undercovered_backfill_dates(
     *,
     market: str,
     dates: Sequence[date],
+    as_of_date: date,
     minimum_validated_stocks: int,
     stats: Mapping[str, Any],
 ) -> list[date]:
@@ -752,17 +801,23 @@ def _static_breadth_undercovered_backfill_dates(
         .all()
     )
     rows_by_date = {row.date: row for row in rows}
-    return [
-        calc_date
-        for calc_date in dates
-        if (
-            calc_date not in rows_by_date
-            or not _static_breadth_row_has_accepted_coverage(
-                rows_by_date[calc_date],
+    undercovered_dates: list[date] = []
+    has_seen_valid_history = False
+    for calc_date in sorted(set(dates)):
+        row = rows_by_date.get(calc_date)
+        has_accepted_coverage = (
+            row is not None
+            and _static_breadth_row_has_accepted_coverage(
+                row,
                 minimum_validated_stocks=minimum_validated_stocks,
             )
         )
-    ]
+        if has_accepted_coverage:
+            has_seen_valid_history = True
+            continue
+        if calc_date == as_of_date or has_seen_valid_history:
+            undercovered_dates.append(calc_date)
+    return undercovered_dates
 
 
 def _static_breadth_recompute_dates(
@@ -947,11 +1002,29 @@ def _run_daily_refresh(
         # and select balanced RS before any Feature, Group, or RRG consumer runs.
         market_rs_results: dict[str, Any] = {}
         for selected_market in selected_markets:
-            market_rs_results[selected_market] = _prepare_static_rs_formula(
+            market_as_of = as_of_by_market[selected_market]
+            market_rs_result = _prepare_static_rs_formula(
                 market=selected_market,
-                as_of_date=as_of_by_market[selected_market],
+                as_of_date=market_as_of,
                 formula_version=formula_by_market[selected_market],
             )
+            benchmark_backed_as_of = _latest_static_rs_benchmark_backed_as_of_date(
+                market_rs_result,
+                requested_as_of_date=market_as_of,
+            )
+            if benchmark_backed_as_of is not None:
+                warnings.append(
+                    f"Static export market {selected_market} using benchmark-backed "
+                    f"as-of date {benchmark_backed_as_of.isoformat()} because "
+                    f"benchmarks were unavailable for {market_as_of.isoformat()}."
+                )
+                as_of_by_market[selected_market] = benchmark_backed_as_of
+                market_rs_result = _prepare_static_rs_formula(
+                    market=selected_market,
+                    as_of_date=benchmark_backed_as_of,
+                    formula_version=formula_by_market[selected_market],
+                )
+            market_rs_results[selected_market] = market_rs_result
         results["market_rs"] = market_rs_results
         market_rs_artifact_states = {
             selected_market: classify_static_market_rs_artifact_result(

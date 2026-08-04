@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
 import json
-from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
 
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
@@ -74,20 +75,22 @@ class StaticArtifactCombiner:
         current = self._discover(
             Path(artifacts_dir),
             source_label="current",
-            required=required,
+            required={},
         )
         fallback = (
             self._discover(
                 Path(fallback_artifacts_dir),
                 source_label="fallback",
-                required=fallback_required,
+                required={},
             )
             if fallback_artifacts_dir is not None
             else {}
         )
-        selected = dict(current)
-        for market, artifact in fallback.items():
-            selected.setdefault(market, artifact)
+        selected, fallback_reasons = self._select_artifacts(
+            current=current,
+            fallback=fallback,
+            fallback_required=fallback_required,
+        )
 
         if required:
             missing = sorted(
@@ -105,6 +108,11 @@ class StaticArtifactCombiner:
             raise RuntimeError(
                 "No market artifacts are available to combine into a static-site bundle"
             )
+        self._validate_selected_formulas(
+            selected=selected,
+            required=required,
+            fallback_required=fallback_required,
+        )
 
         generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         warnings: list[str] = []
@@ -113,10 +121,16 @@ class StaticArtifactCombiner:
             entries[market] = artifact["entry"]
             warnings.extend(str(item) for item in artifact["metadata"].get("warnings", []))
             if artifact["source_label"] == "fallback":
-                warnings.append(
-                    f"{market} reused from a previous static-site market artifact "
-                    "because the current run produced no artifact."
-                )
+                if fallback_reasons.get(market) == "newer":
+                    warnings.append(
+                        f"{market} reused from a previous static-site market artifact "
+                        "because it is newer than the current artifact."
+                    )
+                else:
+                    warnings.append(
+                        f"{market} reused from a previous static-site market artifact "
+                        "because the current run produced no artifact."
+                    )
         optional_missing = sorted(market for market in optional if market not in entries)
         warnings.extend(
             f"Static export market {market} was omitted from the combined bundle "
@@ -149,6 +163,112 @@ class StaticArtifactCombiner:
             warnings=tuple(warnings),
             manifest=manifest,
         )
+
+    @classmethod
+    def _select_artifacts(
+        cls,
+        *,
+        current: dict[str, dict[str, Any]],
+        fallback: dict[str, dict[str, Any]],
+        fallback_required: Mapping[str, str],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        selected = dict(current)
+        fallback_reasons: dict[str, str] = {}
+        for market, fallback_artifact in fallback.items():
+            expected_fallback_formula = fallback_required.get(market)
+            if (
+                expected_fallback_formula is not None
+                and not cls._artifact_matches_formula(
+                    market=market,
+                    artifact=fallback_artifact,
+                    expected_formula=expected_fallback_formula,
+                )
+            ):
+                continue
+            current_artifact = selected.get(market)
+            if current_artifact is None:
+                selected[market] = fallback_artifact
+                fallback_reasons[market] = "missing"
+                continue
+            if cls._artifact_is_newer(fallback_artifact, current_artifact):
+                selected[market] = fallback_artifact
+                fallback_reasons[market] = "newer"
+        return selected, fallback_reasons
+
+    @classmethod
+    def _artifact_is_newer(
+        cls,
+        candidate: dict[str, Any],
+        incumbent: dict[str, Any],
+    ) -> bool:
+        candidate_date = cls._artifact_as_of_date(candidate)
+        incumbent_date = cls._artifact_as_of_date(incumbent)
+        return candidate_date is not None and (
+            incumbent_date is None or candidate_date > incumbent_date
+        )
+
+    @staticmethod
+    def _artifact_as_of_date(artifact: dict[str, Any]) -> date | None:
+        entry = artifact.get("entry")
+        value = entry.get("as_of_date") if isinstance(entry, dict) else None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return date.fromisoformat(text.split("T", 1)[0])
+        except ValueError:
+            return None
+
+    @classmethod
+    def _artifact_matches_formula(
+        cls,
+        *,
+        market: str,
+        artifact: dict[str, Any],
+        expected_formula: str,
+    ) -> bool:
+        try:
+            cls._validate_formula(
+                market=market,
+                source_label=artifact["source_label"],
+                metadata=artifact["metadata"],
+                market_dir=artifact["market_dir"],
+                expected_formula=expected_formula,
+            )
+        except StaticArtifactFormulaError:
+            return False
+        return True
+
+    @classmethod
+    def _validate_selected_formulas(
+        cls,
+        *,
+        selected: dict[str, dict[str, Any]],
+        required: Mapping[str, str],
+        fallback_required: Mapping[str, str],
+    ) -> None:
+        for market, artifact in selected.items():
+            required_formulas = (
+                fallback_required
+                if artifact["source_label"] == "fallback"
+                else required
+            )
+            expected = required_formulas.get(market)
+            if expected is None:
+                continue
+            artifact["entry"] = cls._validate_formula(
+                market=market,
+                source_label=artifact["source_label"],
+                metadata=artifact["metadata"],
+                market_dir=artifact["market_dir"],
+                expected_formula=expected,
+            )
 
     def _discover(
         self,

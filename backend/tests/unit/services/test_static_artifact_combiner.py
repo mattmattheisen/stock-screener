@@ -143,7 +143,7 @@ def test_combiner_rejects_wrong_formula_fallback(tmp_path):
     fallback = write_market_artifact(
         tmp_path / "fallback", market="HK", formula=LEGACY_RS_FORMULA_VERSION
     )
-    with pytest.raises(StaticArtifactFormulaError, match="HK fallback"):
+    with pytest.raises(NoPublishedStaticMarketArtifact, match="HK"):
         combiner().combine(
             artifacts_dir=tmp_path / "empty-current",
             fallback_artifacts_dir=fallback,
