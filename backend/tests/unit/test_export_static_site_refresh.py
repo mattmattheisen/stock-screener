@@ -167,6 +167,130 @@ def test_static_daily_refresh_ensures_market_breadth_before_exposure(monkeypatch
     }
 
 
+def test_static_daily_refresh_rewinds_to_latest_benchmark_backed_session(
+    monkeypatch,
+):
+    prepare_calls: list[date] = []
+    snapshot_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(export_static_site, "STATIC_EXPORT_MARKETS", ("DE",))
+    monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(export_static_site, "disable_serialized_data_fetch_lock", nullcontext)
+    monkeypatch.setattr(export_static_site, "disable_serialized_market_workload", nullcontext)
+    monkeypatch.setattr(export_static_site, "_tracked_ibd_csv_path", lambda: "ibd.csv")
+    monkeypatch.setattr(
+        export_static_site.IBDIndustryService,
+        "load_from_csv",
+        lambda _db, csv_path: 0,
+    )
+    monkeypatch.setattr(
+        export_static_site,
+        "_resolve_latest_completed_trading_date",
+        lambda market: date(2026, 8, 3),
+    )
+    monkeypatch.setattr(
+        export_static_site,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date, market: {"status": "completed", "market": market},
+    )
+
+    def prepare_static_rs(*, market, as_of_date, formula_version):
+        prepare_calls.append(as_of_date)
+        if as_of_date == date(2026, 8, 3):
+            return {
+                "status": "failed",
+                "market": market,
+                "as_of_date": "2026-08-03",
+                "formula_version": formula_version,
+                "reason_code": "benchmark_adjusted_anchor_missing",
+                "diagnostics": {
+                    "error": "benchmark_not_current",
+                    "market": market,
+                    "date": "2026-08-03",
+                    "benchmark_candidates": [
+                        {
+                            "symbol": "^GDAXI",
+                            "role": "primary",
+                            "source": "fetch",
+                            "status": "stale_required_date",
+                            "latest_date": "2026-07-31",
+                        },
+                    ],
+                },
+                "market_rs_run_id": None,
+            }
+        return {
+            "status": "completed",
+            "market": market,
+            "as_of_date": as_of_date.isoformat(),
+            "formula_version": formula_version,
+            "market_rs_run_id": 42,
+        }
+
+    monkeypatch.setattr(export_static_site, "_prepare_static_rs_formula", prepare_static_rs)
+    monkeypatch.setattr(
+        export_static_site,
+        "_ensure_breadth_history",
+        lambda **kwargs: {
+            "status": "completed",
+            "market": kwargs["market"],
+            "as_of_date": kwargs["as_of_date"].isoformat(),
+        },
+    )
+    monkeypatch.setattr(
+        export_static_site,
+        "_compute_static_market_exposure",
+        lambda **kwargs: {
+            "market": kwargs["market"],
+            "date": kwargs["as_of_date"].isoformat(),
+            "status": "stored",
+        },
+    )
+
+    import app.interfaces.tasks.feature_store_tasks as feature_store_tasks
+
+    def build_snapshot(**kwargs):
+        snapshot_calls.append(kwargs)
+        return {
+            "status": "published",
+            "run_id": 7,
+            "market": kwargs["market"],
+            "as_of_date": kwargs["as_of_date_str"],
+        }
+
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(run=build_snapshot),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda **kwargs: {"status": "completed"},
+    )
+    monkeypatch.setattr(
+        export_static_site,
+        "_ensure_group_rank_history",
+        lambda **kwargs: _ReadyGroupRankBackfill(),
+    )
+
+    results, warnings = export_static_site._run_daily_refresh(
+        market="DE",
+        skip_universe_refresh=True,
+        skip_fundamentals_refresh=True,
+        rs_formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+
+    assert prepare_calls == [date(2026, 8, 3), date(2026, 7, 31)]
+    assert results["market_rs"]["DE"]["status"] == "completed"
+    assert results["market_rs"]["DE"]["as_of_date"] == "2026-07-31"
+    assert snapshot_calls[0]["as_of_date_str"] == "2026-07-31"
+    assert (
+        "Static export market DE using benchmark-backed as-of date 2026-07-31 "
+        "because benchmarks were unavailable for 2026-08-03."
+    ) in warnings
+
+
 def test_static_daily_refresh_skips_exposure_when_breadth_history_errors(monkeypatch):
     monkeypatch.setattr(export_static_site, "STATIC_EXPORT_MARKETS", ("HK",))
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeSession())
@@ -762,3 +886,85 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
         "Cache-only breadth backfill has insufficient usable coverage "
         "(dates=2026-07-31, minimum_scanned=9)"
     )
+
+
+def test_ensure_breadth_history_accepts_historical_warmup_undercoverage(
+    monkeypatch,
+):
+    older_date = date(2026, 7, 30)
+    as_of_date = date(2026, 7, 31)
+    breadth_rows: list[SimpleNamespace] = []
+
+    class _FakeQuery:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class _FakeDb(_FakeSession):
+        def query(self, entity, *args):
+            if entity is MarketBreadth:
+                return _FakeQuery(breadth_rows)
+            if entity is StockUniverse.symbol:
+                return _FakeQuery([
+                    (f"AAA{i}",)
+                    for i in range(10)
+                ])
+            return _FakeQuery([])
+
+    class _FakeBreadthCalculator:
+        def __init__(self, db, price_cache, *, market):
+            self.market = market
+
+        def backfill_range(self, **kwargs):
+            breadth_rows.extend(
+                [
+                    SimpleNamespace(
+                        date=older_date,
+                        total_stocks_scanned=1,
+                    ),
+                    SimpleNamespace(
+                        date=as_of_date,
+                        total_stocks_scanned=10,
+                    ),
+                ]
+            )
+            return {
+                "total_dates": 2,
+                "processed": 2,
+                "errors": 0,
+                "error_dates": [],
+                "target_symbols": 10,
+                "symbols_with_cached_history": 10,
+                "cache_miss_stocks": 0,
+                "error_stocks": 0,
+                "cache_coverage_ratio": 1.0,
+                "insufficient_history_observations": 9,
+            }
+
+    monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
+    monkeypatch.setattr(
+        export_static_site,
+        "_generate_trading_dates",
+        lambda *args, **kwargs: [older_date, as_of_date],
+    )
+    monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
+    monkeypatch.setattr(
+        export_static_site,
+        "BreadthCalculatorService",
+        _FakeBreadthCalculator,
+    )
+
+    result = export_static_site._ensure_breadth_history(
+        as_of_date=as_of_date,
+        market="HK",
+        min_trading_days=0,
+    )
+
+    assert result["status"] == "completed"
+    assert "undercovered_dates" not in result
+    assert "error" not in result

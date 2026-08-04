@@ -115,7 +115,7 @@ def test_static_site_daily_price_seed_allows_stale_bootstrap() -> None:
     assert "--allow-stale" in seed_step
 
 
-def test_static_site_market_export_skips_artifact_steps_for_closed_market() -> None:
+def test_static_site_market_export_preserves_price_bundle_after_soft_skip() -> None:
     build_market_job = _build_market_job()
     export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
         "\n      - name: Build daily price bundle",
@@ -139,8 +139,10 @@ def test_static_site_market_export_skips_artifact_steps_for_closed_market() -> N
     assert 'if [ "$status" -eq 78 ]; then' in export_step
     assert "has_artifact=false" in export_step
     assert "has_artifact=true" in export_step
-    assert "steps.export-market.outputs.has_artifact == 'true'" in build_price_step
-    assert "steps.export-market.outputs.has_artifact == 'true'" in upload_price_step
+    assert "has_price_bundle=false" in export_step
+    assert "has_price_bundle=true" in export_step
+    assert "steps.export-market.outputs.has_price_bundle == 'true'" in build_price_step
+    assert "steps.export-market.outputs.has_price_bundle == 'true'" in upload_price_step
     assert "steps.export-market.outputs.has_artifact == 'true'" in upload_market_step
 
 
