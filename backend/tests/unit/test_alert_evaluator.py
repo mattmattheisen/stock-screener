@@ -11,6 +11,7 @@ Covers:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import time
 from typing import Any, Dict
 from unittest.mock import MagicMock
@@ -26,6 +27,7 @@ from app.services.telemetry.alert_evaluator import (
     _extraction_success_ratio,
     acknowledge_alert,
     evaluate_all,
+    evaluate_metric_values,
 )
 from app.services.telemetry.alert_thresholds import OWNERS, owner_for
 from app.services.telemetry.schema import MetricKey
@@ -310,6 +312,31 @@ class TestEvaluateAll:
         # Should swallow IntegrityError and call rollback.
         evaluate_all(db, summaries)
         assert db.rolledback == 1
+
+    def test_metric_value_batch_opens_new_alert_and_commits_once(self, monkeypatch):
+        db = self._make_db_with_summaries(monkeypatch, prefetched_active=[])
+        observed_at = datetime(2026, 4, 15, 12, 0, tzinfo=timezone.utc)
+
+        evaluate_metric_values(
+            db,
+            [
+                {
+                    "market": "US",
+                    "metric_key": MetricKey.FRESHNESS_LAG,
+                    "value": 30000.0,
+                },
+            ],
+            observed_at=observed_at,
+        )
+
+        assert db.commits == 1
+        assert db.rolledback == 0
+        assert len(db.added) == 1
+        new_alert = db.added[0]
+        assert new_alert.market == "US"
+        assert new_alert.metric_key == MetricKey.FRESHNESS_LAG
+        assert new_alert.severity == AlertSeverity.CRITICAL
+        assert new_alert.opened_at == observed_at
 
 
 class TestAcknowledge:

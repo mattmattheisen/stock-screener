@@ -12,6 +12,26 @@ from app.infra.serialization import finite_float_or_none
 OHLC_COLUMNS = ("Open", "High", "Low", "Close")
 
 
+def finite_ohlc_values(
+    open_: Any,
+    high: Any,
+    low: Any,
+    close: Any,
+) -> tuple[float, float, float, float] | None:
+    open_price = finite_float_or_none(open_)
+    high_price = finite_float_or_none(high)
+    low_price = finite_float_or_none(low)
+    close_price = finite_float_or_none(close)
+    if (
+        open_price is None
+        or high_price is None
+        or low_price is None
+        or close_price is None
+    ):
+        return None
+    return open_price, high_price, low_price, close_price
+
+
 def drop_non_finite_close_rows(data: pd.DataFrame | None) -> pd.DataFrame | None:
     """Remove rows whose OHLC values cannot be safely treated as market prices."""
     if data is None or data.empty:
@@ -68,12 +88,15 @@ def stock_price_row_from_ohlcv(
     row: Mapping[str, Any],
 ) -> dict[str, Any] | None:
     """Build a StockPrice mapping, skipping rows without complete finite OHLC."""
-    open_ = finite_float_or_none(row.get("Open"))
-    high = finite_float_or_none(row.get("High"))
-    low = finite_float_or_none(row.get("Low"))
-    close = finite_float_or_none(row.get("Close"))
-    if open_ is None or high is None or low is None or close is None:
+    ohlc = finite_ohlc_values(
+        row.get("Open"),
+        row.get("High"),
+        row.get("Low"),
+        row.get("Close"),
+    )
+    if ohlc is None:
         return None
+    open_, high, low, close = ohlc
     adj_close = finite_float_or_none(row.get("Adj Close"))
     return {
         "symbol": symbol,

@@ -9,6 +9,10 @@ from typing import Any, Callable
 from app.domain.markets.key_markets import key_market_price_symbols
 from app.domain.providers.price_symbol_support import split_supported_price_symbols
 from app.models.stock_universe import StockUniverse
+from app.services.breadth_history_price_coverage import (
+    BreadthHistoryPriceCoverageService,
+    DEFAULT_BREADTH_HISTORY_PRICE_LOOKBACK_DAYS,
+)
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.group_history_price_coverage import (
     GroupHistoryPriceCoverageService,
@@ -36,10 +40,23 @@ STATIC_RATE_LIMITED_RETRY_BATCH_SIZE = 25
 
 
 @dataclass(frozen=True)
-class _RRGHistoryCoverageOutcome:
+class _StaticHistoryCoverageOutcome:
     incomplete_symbols: tuple[str, ...]
     status: str
     error: str | None = None
+    required_dates: int = 0
+    bootstrap_symbols: tuple[str, ...] | None = None
+    missing_through_date_symbols: tuple[str, ...] = ()
+
+
+def _history_bootstrap_symbols(
+    outcome: _StaticHistoryCoverageOutcome,
+) -> tuple[str, ...]:
+    return (
+        outcome.incomplete_symbols
+        if outcome.bootstrap_symbols is None
+        else outcome.bootstrap_symbols
+    )
 
 
 def static_daily_price_refresh_batch_size(market: str | None) -> int:
@@ -91,6 +108,11 @@ class StaticDailyPriceRefreshService:
         fetcher: BulkDataFetcher,
         batch_size_for_market: Callable[[str | None], int] = static_daily_price_refresh_batch_size,
         calendar_service: MarketCalendarService | None = None,
+        group_history_price_coverage: GroupHistoryPriceCoverageService | None = None,
+        breadth_history_price_coverage: BreadthHistoryPriceCoverageService | None = None,
+        breadth_history_price_lookback_days: int = (
+            DEFAULT_BREADTH_HISTORY_PRICE_LOOKBACK_DAYS
+        ),
         sleep: Callable[[float], None] | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -98,8 +120,18 @@ class StaticDailyPriceRefreshService:
         self._fetcher = fetcher
         self._batch_size_for_market = batch_size_for_market
         self._calendar_service = calendar_service or MarketCalendarService()
-        self._group_history_price_coverage = GroupHistoryPriceCoverageService(
-            calendar_service=self._calendar_service
+        self._group_history_price_coverage = (
+            group_history_price_coverage
+            or GroupHistoryPriceCoverageService(
+                calendar_service=self._calendar_service
+            )
+        )
+        self._breadth_history_price_coverage = (
+            breadth_history_price_coverage
+            or BreadthHistoryPriceCoverageService(
+                calendar_service=self._calendar_service,
+                lookback_days=breadth_history_price_lookback_days,
+            )
         )
         if sleep is None:
             import time
@@ -112,7 +144,7 @@ class StaticDailyPriceRefreshService:
         *,
         as_of_date: date,
         market: str | None = None,
-        ensure_rrg_history: bool = False,
+        ensure_static_history: bool = False,
     ) -> dict[str, Any]:
         with self._session_factory() as db:
             query = (
@@ -142,15 +174,46 @@ class StaticDailyPriceRefreshService:
                 market=market,
                 through_date=as_of_date,
                 symbols=coverage.fresh + coverage.stale,
-                enabled=ensure_rrg_history,
+                enabled=ensure_static_history,
+            )
+            breadth_history_coverage = self._breadth_history_coverage(
+                db,
+                market=market,
+                through_date=as_of_date,
+                symbols=tuple(
+                    symbol
+                    for symbol in coverage.fresh + coverage.stale
+                    if symbol in active_symbol_set
+                ),
+                enabled=ensure_static_history,
             )
 
-        history_incomplete_symbols = list(rrg_history_coverage.incomplete_symbols)
+        rrg_history_incomplete_symbols = list(rrg_history_coverage.incomplete_symbols)
+        breadth_history_incomplete_symbols = list(
+            breadth_history_coverage.incomplete_symbols
+        )
+        breadth_history_bootstrap_symbols = list(
+            _history_bootstrap_symbols(breadth_history_coverage)
+        )
+        breadth_history_missing_through_date_symbols = list(
+            breadth_history_coverage.missing_through_date_symbols
+        )
+        history_incomplete_symbols = _dedupe_symbols(
+            [
+                *rrg_history_incomplete_symbols,
+                *breadth_history_bootstrap_symbols,
+            ]
+        )
         db_fresh_symbols = list(coverage.fresh)
         history_incomplete_symbol_set = set(history_incomplete_symbols)
         stale_symbols = [
             symbol
-            for symbol in coverage.stale
+            for symbol in _dedupe_symbols(
+                [
+                    *coverage.stale,
+                    *breadth_history_missing_through_date_symbols,
+                ]
+            )
             if symbol not in history_incomplete_symbol_set
         ]
         no_history_symbols = list(coverage.no_history)
@@ -175,8 +238,25 @@ class StaticDailyPriceRefreshService:
                 "stale_symbols": len(stale_symbols),
                 "no_history_symbols": len(no_history_symbols),
                 "history_incomplete_symbols": len(history_incomplete_symbols),
+                "rrg_history_incomplete_symbols": len(
+                    rrg_history_incomplete_symbols
+                ),
+                "breadth_history_incomplete_symbols": len(
+                    breadth_history_incomplete_symbols
+                ),
+                "breadth_history_bootstrap_symbols": len(
+                    breadth_history_bootstrap_symbols
+                ),
+                "breadth_history_missing_through_date_symbols": len(
+                    breadth_history_missing_through_date_symbols
+                ),
                 "rrg_history_coverage_status": rrg_history_coverage.status,
                 "rrg_history_coverage_error": rrg_history_coverage.error,
+                "breadth_history_coverage_status": breadth_history_coverage.status,
+                "breadth_history_coverage_error": breadth_history_coverage.error,
+                "breadth_history_required_dates": (
+                    breadth_history_coverage.required_dates
+                ),
                 "skipped_unsupported_symbols": len(skipped_symbols),
                 "yahoo_fetched_symbols": 0,
                 "yahoo_failed_symbols": 0,
@@ -197,7 +277,26 @@ class StaticDailyPriceRefreshService:
         if history_incomplete_symbols:
             print(
                 f"[static-daily prices] Hydrating {len(history_incomplete_symbols):,} "
-                "symbols with short history for RRG startup backfill.",
+                "symbols with short history for static backfills.",
+                flush=True,
+            )
+        if rrg_history_incomplete_symbols:
+            print(
+                f"[static-daily prices] RRG startup history is short for "
+                f"{len(rrg_history_incomplete_symbols):,} symbols.",
+                flush=True,
+            )
+        if breadth_history_bootstrap_symbols:
+            print(
+                f"[static-daily prices] Breadth/exposure history is short for "
+                f"{len(breadth_history_bootstrap_symbols):,} symbols.",
+                flush=True,
+            )
+        if breadth_history_missing_through_date_symbols:
+            print(
+                "[static-daily prices] Breadth/exposure current session is "
+                f"missing for {len(breadth_history_missing_through_date_symbols):,} "
+                "symbols; using stale top-up.",
                 flush=True,
             )
 
@@ -236,8 +335,25 @@ class StaticDailyPriceRefreshService:
             "stale_symbols": len(stale_symbols),
             "no_history_symbols": len(no_history_symbols),
             "history_incomplete_symbols": len(history_incomplete_symbols),
+            "rrg_history_incomplete_symbols": len(
+                rrg_history_incomplete_symbols
+            ),
+            "breadth_history_incomplete_symbols": len(
+                breadth_history_incomplete_symbols
+            ),
+            "breadth_history_bootstrap_symbols": len(
+                breadth_history_bootstrap_symbols
+            ),
+            "breadth_history_missing_through_date_symbols": len(
+                breadth_history_missing_through_date_symbols
+            ),
             "rrg_history_coverage_status": rrg_history_coverage.status,
             "rrg_history_coverage_error": rrg_history_coverage.error,
+            "breadth_history_coverage_status": breadth_history_coverage.status,
+            "breadth_history_coverage_error": breadth_history_coverage.error,
+            "breadth_history_required_dates": (
+                breadth_history_coverage.required_dates
+            ),
             "skipped_unsupported_symbols": len(skipped_symbols),
             "yahoo_fetched_symbols": refreshed,
             "yahoo_failed_symbols": failed,
@@ -252,11 +368,11 @@ class StaticDailyPriceRefreshService:
         through_date: date,
         symbols: tuple[str, ...],
         enabled: bool,
-    ) -> _RRGHistoryCoverageOutcome:
+    ) -> _StaticHistoryCoverageOutcome:
         if not enabled:
-            return _RRGHistoryCoverageOutcome((), "not_requested")
+            return _StaticHistoryCoverageOutcome((), "not_requested")
         if market is None or not symbols:
-            return _RRGHistoryCoverageOutcome((), "not_applicable")
+            return _StaticHistoryCoverageOutcome((), "not_applicable")
 
         try:
             required_anchor_dates = (
@@ -271,7 +387,7 @@ class StaticDailyPriceRefreshService:
                 f"for market={market}: {exc}",
                 flush=True,
             )
-            return _RRGHistoryCoverageOutcome(
+            return _StaticHistoryCoverageOutcome(
                 (),
                 "unverified",
                 str(exc),
@@ -284,9 +400,59 @@ class StaticDailyPriceRefreshService:
             symbols=symbols,
             required_anchor_dates=required_anchor_dates,
         )
-        return _RRGHistoryCoverageOutcome(
+        return _StaticHistoryCoverageOutcome(
             tuple(coverage.incomplete_symbols),
             "verified",
+            required_dates=len(required_anchor_dates),
+        )
+
+    def _breadth_history_coverage(
+        self,
+        db,
+        *,
+        market: str | None,
+        through_date: date,
+        symbols: tuple[str, ...],
+        enabled: bool,
+    ) -> _StaticHistoryCoverageOutcome:
+        if not enabled:
+            return _StaticHistoryCoverageOutcome((), "not_requested")
+        if market is None or not symbols:
+            return _StaticHistoryCoverageOutcome((), "not_applicable")
+
+        try:
+            coverage = self._breadth_history_price_coverage.classify(
+                db,
+                market=market,
+                through_date=through_date,
+                symbols=symbols,
+            )
+        except Exception as exc:
+            print(
+                "[static-daily prices] Could not resolve breadth history dates "
+                f"for market={market}: {exc}",
+                flush=True,
+            )
+            return _StaticHistoryCoverageOutcome(
+                (),
+                "unverified",
+                str(exc),
+            )
+
+        return _StaticHistoryCoverageOutcome(
+            tuple(coverage.incomplete_symbols),
+            "verified",
+            required_dates=coverage.required_price_date_count,
+            bootstrap_symbols=tuple(
+                getattr(
+                    coverage,
+                    "history_incomplete_symbols",
+                    coverage.incomplete_symbols,
+                )
+            ),
+            missing_through_date_symbols=tuple(
+                getattr(coverage, "missing_through_date_symbols", ())
+            ),
         )
 
     def _fetch_and_store(

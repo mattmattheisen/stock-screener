@@ -74,6 +74,14 @@ _METRIC_RULES: Dict[str, Tuple[Callable[[Dict[str, Any]], Optional[float]], str]
 }
 
 
+def _direction_for_metric(metric_key: str) -> Optional[str]:
+    if metric_key in _METRIC_RULES:
+        return _METRIC_RULES[metric_key][1]
+    if metric_key == MetricKey.EXTRACTION_SUCCESS:
+        return "lo"
+    return None
+
+
 def _classify(value: float, levels: Levels, direction: str) -> Optional[str]:
     """Return ``critical``, ``warning``, or None based on direction + thresholds."""
     crit = levels.get("critical")
@@ -89,6 +97,19 @@ def _classify(value: float, levels: Levels, direction: str) -> Optional[str]:
         if warn is not None and value <= warn:
             return AlertSeverity.WARNING
     return None
+
+
+def classify_metric_value(
+    metric_key: str,
+    market: str,
+    value: float,
+) -> Optional[str]:
+    """Classify a scalar metric gauge without mutating alert lifecycle rows."""
+    levels = thresholds_for(metric_key, market)
+    direction = _direction_for_metric(metric_key)
+    if not levels or direction is None:
+        return None
+    return _classify(value, levels, direction)
 
 
 def _format_alert(
@@ -114,6 +135,7 @@ def _evaluate_one(
     metric_key: str,
     value: Optional[float],
     active: Optional[MarketTelemetryAlert] = None,
+    observed_at: Optional[datetime] = None,
 ) -> Optional[MarketTelemetryAlert]:
     """Run hysteresis logic for one (market, metric) pair.
 
@@ -122,14 +144,8 @@ def _evaluate_one(
     INSERT/UPDATE on the session.
     """
     levels = thresholds_for(metric_key, market)
-    if not levels:
-        return None
-
-    if metric_key in _METRIC_RULES:
-        direction = _METRIC_RULES[metric_key][1]
-    elif metric_key == MetricKey.EXTRACTION_SUCCESS:
-        direction = "lo"
-    else:
+    direction = _direction_for_metric(metric_key)
+    if not levels or direction is None:
         return None
 
     if value is None:
@@ -146,7 +162,7 @@ def _evaluate_one(
         if active is None:
             return None
         active.state = AlertState.CLOSED
-        active.closed_at = datetime.now(timezone.utc)
+        active.closed_at = observed_at or datetime.now(timezone.utc)
         logger.info(
             "telemetry alert closed: market=%s metric=%s id=%s",
             market, metric_key, active.id,
@@ -164,6 +180,7 @@ def _evaluate_one(
             title=title,
             description=description,
             metrics={"value": value, "thresholds": dict(levels)},
+            opened_at=observed_at or datetime.now(timezone.utc),
         )
         db.add(new_alert)
         logger.warning(
@@ -186,8 +203,13 @@ def _evaluate_one(
     return active
 
 
-def evaluate_all(db, summaries: List[Dict[str, Any]]) -> List[MarketTelemetryAlert]:
-    """Evaluate every (market, metric) from a list of ``market_summary`` outputs.
+def evaluate_metric_values(
+    db,
+    metric_values: List[Dict[str, Any]],
+    *,
+    observed_at: Optional[datetime] = None,
+) -> List[MarketTelemetryAlert]:
+    """Evaluate scalar metric values and persist alert lifecycle updates.
 
     Returns active alerts (open + acknowledged) after evaluation, ordered by
     open time descending. Single SELECT prefetches all active alerts; single
@@ -200,30 +222,19 @@ def evaluate_all(db, summaries: List[Dict[str, Any]]) -> List[MarketTelemetryAle
         (a.market, a.metric_key): a for a in list_active_alerts(db)
     }
 
-    for summary in summaries:
-        market = summary.get("market") or SHARED_SENTINEL
-
-        for metric_key, (extractor, _direction) in _METRIC_RULES.items():
-            payload = summary.get(metric_key)
-            value = extractor(payload) if isinstance(payload, dict) else None
-            _evaluate_one(
-                db,
-                market=market,
-                metric_key=metric_key,
-                value=value,
-                active=active_by_key.get((market, metric_key)),
-            )
-
-        if market == SHARED_SENTINEL:
-            extraction = summary.get("extraction_today") or {}
-            ratio = _extraction_success_ratio(extraction)
-            _evaluate_one(
-                db,
-                market=SHARED_SENTINEL,
-                metric_key=MetricKey.EXTRACTION_SUCCESS,
-                value=ratio,
-                active=active_by_key.get((SHARED_SENTINEL, MetricKey.EXTRACTION_SUCCESS)),
-            )
+    for metric_value in metric_values:
+        metric_key = metric_value.get("metric_key")
+        if not metric_key:
+            continue
+        market = metric_value.get("market") or SHARED_SENTINEL
+        _evaluate_one(
+            db,
+            market=market,
+            metric_key=metric_key,
+            value=metric_value.get("value"),
+            active=active_by_key.get((market, metric_key)),
+            observed_at=observed_at,
+        )
 
     # Single commit keeps the whole eval pass transactional. If two workers
     # evaluate concurrently, the partial unique index ux_telemetry_alerts_active
@@ -242,6 +253,37 @@ def evaluate_all(db, summaries: List[Dict[str, Any]]) -> List[MarketTelemetryAle
         db.rollback()
 
     return list_active_alerts(db)
+
+
+def evaluate_all(db, summaries: List[Dict[str, Any]]) -> List[MarketTelemetryAlert]:
+    """Evaluate every (market, metric) from a list of ``market_summary`` outputs."""
+    metric_values: List[Dict[str, Any]] = []
+    for summary in summaries:
+        market = summary.get("market") or SHARED_SENTINEL
+
+        for metric_key, (extractor, _direction) in _METRIC_RULES.items():
+            payload = summary.get(metric_key)
+            value = extractor(payload) if isinstance(payload, dict) else None
+            metric_values.append(
+                {
+                    "market": market,
+                    "metric_key": metric_key,
+                    "value": value,
+                }
+            )
+
+        if market == SHARED_SENTINEL:
+            extraction = summary.get("extraction_today") or {}
+            ratio = _extraction_success_ratio(extraction)
+            metric_values.append(
+                {
+                    "market": SHARED_SENTINEL,
+                    "metric_key": MetricKey.EXTRACTION_SUCCESS,
+                    "value": ratio,
+                }
+            )
+
+    return evaluate_metric_values(db, metric_values)
 
 
 def _extraction_success_ratio(extraction_today: Dict[str, Any]) -> Optional[float]:

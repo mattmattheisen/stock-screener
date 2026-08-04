@@ -33,6 +33,7 @@ US_KEY_MARKET_PRICE_SYMBOLS = [
     "TLT",
     "^VIX",
 ]
+DE_KEY_MARKET_PRICE_SYMBOLS = ["^GDAXI", "EXS1.DE", "SIE.DE", "ALV.DE"]
 
 
 class _RRGStartupCalendar:
@@ -54,6 +55,47 @@ class _RRGStartupCalendar:
             189: date(2025, 6, 2),
             252: date(2025, 3, 3),
         }
+
+
+class _CompleteBreadthHistoryCoverage:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def classify(self, db, *, market, through_date, symbols):
+        self.calls.append(
+            {
+                "market": market,
+                "through_date": through_date,
+                "symbols": tuple(symbols),
+            }
+        )
+        return SimpleNamespace(
+            incomplete_symbols=(),
+            history_incomplete_symbols=(),
+            missing_through_date_symbols=(),
+            required_price_date_count=2,
+        )
+
+
+class _CompleteGroupHistoryCoverage:
+    @staticmethod
+    def required_anchor_dates(*, market, through_date):
+        return (through_date,)
+
+    @staticmethod
+    def classify(db, *, market, through_date, symbols, required_anchor_dates):
+        return SimpleNamespace(incomplete_symbols=())
+
+
+class _CurrentSessionGapBreadthHistoryCoverage:
+    @staticmethod
+    def classify(db, *, market, through_date, symbols):
+        return SimpleNamespace(
+            incomplete_symbols=tuple(symbols),
+            history_incomplete_symbols=(),
+            missing_through_date_symbols=tuple(symbols),
+            required_price_date_count=70,
+        )
 
 
 def _sqlite_session_factory():
@@ -247,6 +289,166 @@ def test_static_daily_price_refresh_refetches_fresh_rows_with_missing_or_zero_vo
     assert stored_batches[0] == {"symbols": ["MISSING", "ZERO"], "also_store_db": True, "market": "US"}
     assert result["db_fresh_symbols"] == 1
     assert result["stale_symbols"] == 2
+
+
+def test_static_daily_price_refresh_keeps_breadth_current_gap_on_stale_top_up() -> None:
+    session_factory = _sqlite_session_factory()
+
+    with session_factory() as db:
+        db.add(StockUniverse(symbol="SAP.DE", market="DE", is_active=True, market_cap=100.0))
+        db.add(
+            StockPrice(
+                symbol="SAP.DE",
+                date=date(2026, 6, 3),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1000,
+            )
+        )
+        db.commit()
+
+    fetch_calls: list[dict] = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(
+            self, symbols, period="2y", start_batch_size=None, market=None
+        ):
+            fetch_calls.append(
+                {
+                    "symbols": list(symbols),
+                    "period": period,
+                    "start_batch_size": start_batch_size,
+                    "market": market,
+                }
+            )
+            return {
+                symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+                for symbol in symbols
+            }
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
+        fetcher=_FakeFetcher(),
+        batch_size_for_market=lambda _market: 25,
+        group_history_price_coverage=_CompleteGroupHistoryCoverage(),
+        breadth_history_price_coverage=_CurrentSessionGapBreadthHistoryCoverage(),
+        sleep=lambda _seconds: None,
+    )
+
+    result = service.refresh(
+        as_of_date=date(2026, 6, 4),
+        market="DE",
+        ensure_static_history=True,
+    )
+
+    assert fetch_calls == [
+        {
+            "symbols": ["SAP.DE"],
+            "period": STATIC_DAILY_PRICE_REFRESH_PERIOD,
+            "start_batch_size": 25,
+            "market": "DE",
+        },
+        {
+            "symbols": DE_KEY_MARKET_PRICE_SYMBOLS,
+            "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
+            "start_batch_size": 25,
+            "market": "DE",
+        }
+    ]
+    assert result["stale_symbols"] == 1
+    assert result["no_history_symbols"] == len(DE_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["history_incomplete_symbols"] == 0
+    assert result["breadth_history_incomplete_symbols"] == 1
+    assert result["breadth_history_missing_through_date_symbols"] == 1
+
+
+def test_static_daily_price_refresh_top_up_breadth_only_current_gap() -> None:
+    session_factory = _sqlite_session_factory()
+
+    with session_factory() as db:
+        db.add(StockUniverse(symbol="SAP.DE", market="DE", is_active=True, market_cap=100.0))
+        db.add_all(
+            [
+                StockPrice(
+                    symbol="SAP.DE",
+                    date=date(2026, 6, 3),
+                    open=1.0,
+                    high=1.0,
+                    low=1.0,
+                    close=1.0,
+                    volume=1000,
+                ),
+                StockPrice(
+                    symbol="SAP.DE",
+                    date=date(2026, 6, 4),
+                    open=None,
+                    high=2.0,
+                    low=2.0,
+                    close=2.0,
+                    volume=1000,
+                ),
+            ]
+        )
+        db.commit()
+
+    fetch_calls: list[dict] = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(
+            self, symbols, period="2y", start_batch_size=None, market=None
+        ):
+            fetch_calls.append(
+                {
+                    "symbols": list(symbols),
+                    "period": period,
+                    "start_batch_size": start_batch_size,
+                    "market": market,
+                }
+            )
+            return {
+                symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+                for symbol in symbols
+            }
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
+        fetcher=_FakeFetcher(),
+        batch_size_for_market=lambda _market: 25,
+        group_history_price_coverage=_CompleteGroupHistoryCoverage(),
+        breadth_history_price_coverage=_CurrentSessionGapBreadthHistoryCoverage(),
+        sleep=lambda _seconds: None,
+    )
+
+    result = service.refresh(
+        as_of_date=date(2026, 6, 4),
+        market="DE",
+        ensure_static_history=True,
+    )
+
+    assert fetch_calls == [
+        {
+            "symbols": ["SAP.DE"],
+            "period": STATIC_DAILY_PRICE_REFRESH_PERIOD,
+            "start_batch_size": 25,
+            "market": "DE",
+        },
+        {
+            "symbols": DE_KEY_MARKET_PRICE_SYMBOLS,
+            "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
+            "start_batch_size": 25,
+            "market": "DE",
+        },
+    ]
+    assert result["db_fresh_symbols"] == 1
+    assert result["stale_symbols"] == 1
+    assert result["no_history_symbols"] == len(DE_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["history_incomplete_symbols"] == 0
+    assert result["breadth_history_incomplete_symbols"] == 1
+    assert result["breadth_history_missing_through_date_symbols"] == 1
 
 
 def test_static_daily_price_refresh_service_filters_to_selected_market() -> None:
@@ -456,19 +658,21 @@ def test_static_daily_price_refresh_hydrates_short_history_for_rrg_startup() -> 
                 for symbol in symbols
             }
 
+    breadth_coverage = _CompleteBreadthHistoryCoverage()
     service = StaticDailyPriceRefreshService(
         session_factory=session_factory,
         price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
         fetcher=_FakeFetcher(),
         batch_size_for_market=lambda _market: 25,
         calendar_service=_RRGStartupCalendar(),
+        breadth_history_price_coverage=breadth_coverage,
         sleep=lambda _seconds: None,
     )
 
     result = service.refresh(
         as_of_date=date(2026, 6, 4),
         market="IN",
-        ensure_rrg_history=True,
+        ensure_static_history=True,
     )
 
     assert fetch_calls == [
@@ -483,6 +687,15 @@ def test_static_daily_price_refresh_hydrates_short_history_for_rrg_startup() -> 
     assert result["stale_symbols"] == 0
     assert result["no_history_symbols"] == len(IN_KEY_MARKET_PRICE_SYMBOLS)
     assert result["history_incomplete_symbols"] == 1
+    assert result["rrg_history_coverage_status"] == "verified"
+    assert result["breadth_history_coverage_status"] == "verified"
+    assert breadth_coverage.calls == [
+        {
+            "market": "IN",
+            "through_date": date(2026, 6, 4),
+            "symbols": ("OLD.NS",),
+        }
+    ]
     assert result["yahoo_fetched_symbols"] == 6
 
 
@@ -543,19 +756,21 @@ def test_static_daily_price_refresh_hydrates_sparse_old_rows_for_rrg_startup() -
                 for symbol in symbols
             }
 
+    breadth_coverage = _CompleteBreadthHistoryCoverage()
     service = StaticDailyPriceRefreshService(
         session_factory=session_factory,
         price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
         fetcher=_FakeFetcher(),
         batch_size_for_market=lambda _market: 25,
         calendar_service=_RRGStartupCalendar(),
+        breadth_history_price_coverage=breadth_coverage,
         sleep=lambda _seconds: None,
     )
 
     result = service.refresh(
         as_of_date=date(2026, 6, 4),
         market="IN",
-        ensure_rrg_history=True,
+        ensure_static_history=True,
     )
 
     assert fetch_calls == [
@@ -568,6 +783,15 @@ def test_static_daily_price_refresh_hydrates_sparse_old_rows_for_rrg_startup() -
     ]
     assert result["db_fresh_symbols"] == 1
     assert result["history_incomplete_symbols"] == 1
+    assert result["rrg_history_coverage_status"] == "verified"
+    assert result["breadth_history_coverage_status"] == "verified"
+    assert breadth_coverage.calls == [
+        {
+            "market": "IN",
+            "through_date": date(2026, 6, 4),
+            "symbols": ("SPARSE.NS",),
+        }
+    ]
 
 
 def test_static_daily_price_refresh_continues_when_rrg_calendar_lookup_fails() -> None:
@@ -626,7 +850,7 @@ def test_static_daily_price_refresh_continues_when_rrg_calendar_lookup_fails() -
     result = service.refresh(
         as_of_date=date(2026, 6, 4),
         market="IN",
-        ensure_rrg_history=True,
+        ensure_static_history=True,
     )
 
     assert fetch_calls == [

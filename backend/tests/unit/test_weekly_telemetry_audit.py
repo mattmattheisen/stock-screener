@@ -27,6 +27,7 @@ from app.models.market_telemetry_alert import (
     AlertState,
     MarketTelemetryAlert,
 )
+from app.services.telemetry import weekly_audit
 from app.services.telemetry.schema import (
     MetricKey,
     SCHEMA_VERSION,
@@ -40,6 +41,7 @@ from app.services.telemetry.weekly_audit import (
     AUDIT_WINDOW_DAYS,
     REPORT_SCHEMA_VERSION,
     _content_hash,
+    _float_or_none,
     render_json,
     render_markdown,
     run_weekly_audit,
@@ -83,6 +85,14 @@ def _alert(**kwargs):
 
 
 _NOW = datetime(2026, 4, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestMetricValueNormalization:
+    def test_non_finite_rollup_values_are_treated_as_missing(self):
+        assert _float_or_none("nan") is None
+        assert _float_or_none(float("inf")) is None
+        assert _float_or_none("-inf") is None
+        assert _float_or_none("1.25") == pytest.approx(1.25)
 
 
 class TestRollupFreshnessLag:
@@ -323,6 +333,108 @@ class TestAlertRollup:
             AlertSeverity.WARNING: 1,
             AlertSeverity.CRITICAL: 1,
         }
+
+    def test_breached_rollups_are_reported_without_mutating_live_alerts(
+        self,
+        telemetry_session,
+        monkeypatch,
+    ):
+        telemetry_session.add_all(
+            [
+                _event(
+                    "US",
+                    MetricKey.FRESHNESS_LAG,
+                    freshness_lag_payload(
+                        last_refresh_at_epoch=(_NOW - timedelta(hours=3)).timestamp(),
+                        source="prices",
+                        symbols_refreshed=100,
+                    ),
+                    _NOW - timedelta(hours=1),
+                ),
+                _event(
+                    "HK",
+                    MetricKey.UNIVERSE_DRIFT,
+                    universe_drift_payload(current_size=200, prior_size=100),
+                    _NOW - timedelta(hours=1),
+                ),
+            ]
+        )
+        telemetry_session.commit()
+
+        def _unexpected_evaluate_metric_values(*_args, **_kwargs):
+            raise AssertionError(
+                "weekly audit must not mutate live alert rows from rollups"
+            )
+
+        monkeypatch.setattr(
+            weekly_audit,
+            "evaluate_metric_values",
+            _unexpected_evaluate_metric_values,
+            raising=False,
+        )
+
+        report = run_weekly_audit(telemetry_session, now=_NOW)
+
+        assert telemetry_session.query(MarketTelemetryAlert).count() == 0
+
+        us_alerts = next(a for a in report.alerts if a.market == "US")
+        hk_alerts = next(a for a in report.alerts if a.market == "HK")
+        assert us_alerts.opened == 0
+        assert us_alerts.still_active == 0
+        assert us_alerts.by_severity == {}
+        assert hk_alerts.opened == 0
+        assert hk_alerts.still_active == 0
+        assert hk_alerts.by_severity == {}
+
+        rollup_breaches = {
+            (breach.market, breach.metric_key): breach
+            for breach in report.rollup_breaches
+        }
+        us_freshness = rollup_breaches[("US", MetricKey.FRESHNESS_LAG)]
+        hk_drift = rollup_breaches[("HK", MetricKey.UNIVERSE_DRIFT)]
+        assert us_freshness.severity == AlertSeverity.WARNING
+        assert us_freshness.value == pytest.approx(10800.0)
+        assert hk_drift.severity == AlertSeverity.CRITICAL
+        assert hk_drift.value == pytest.approx(1.0)
+
+    def test_rollup_breaches_do_not_double_count_existing_live_alerts(
+        self,
+        telemetry_session,
+    ):
+        telemetry_session.add_all(
+            [
+                _event(
+                    "US",
+                    MetricKey.FRESHNESS_LAG,
+                    freshness_lag_payload(
+                        last_refresh_at_epoch=(_NOW - timedelta(hours=3)).timestamp(),
+                        source="prices",
+                        symbols_refreshed=100,
+                    ),
+                    _NOW - timedelta(hours=1),
+                ),
+                _alert(
+                    market="US",
+                    metric_key=MetricKey.FRESHNESS_LAG,
+                    severity=AlertSeverity.WARNING,
+                    state=AlertState.OPEN,
+                    title="existing live alert",
+                    opened_at=_NOW - timedelta(hours=2),
+                ),
+            ]
+        )
+        telemetry_session.commit()
+
+        report = run_weekly_audit(telemetry_session, now=_NOW)
+
+        us_alerts = next(a for a in report.alerts if a.market == "US")
+        assert us_alerts.opened == 1
+        assert us_alerts.still_active == 1
+        assert us_alerts.by_severity == {AlertSeverity.WARNING: 1}
+        assert [
+            (breach.market, breach.metric_key, breach.severity)
+            for breach in report.rollup_breaches
+        ] == [("US", MetricKey.FRESHNESS_LAG, AlertSeverity.WARNING)]
 
 
 class TestContentHash:
