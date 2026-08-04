@@ -6,11 +6,11 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.stock import StockPrice
 from app.services.market_calendar_service import MarketCalendarService
-from app.services.price_row_normalization import finite_ohlc_values
 
 
 DEFAULT_BREADTH_HISTORY_PRICE_LOOKBACK_DAYS = 220
@@ -24,6 +24,12 @@ class BreadthHistoryPriceCoverage:
     required_price_date_count: int
     available_price_date_counts: Mapping[str, int]
     incomplete_samples: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _SymbolPriceCoverage:
+    valid_dates: int
+    latest_date: date | None
 
 
 class BreadthHistoryPriceCoverageService:
@@ -105,20 +111,34 @@ class BreadthHistoryPriceCoverageService:
                 available_price_date_counts={},
             )
 
-        available_by_symbol = self._available_price_dates(
+        coverage_by_symbol = self._available_price_coverage(
             db,
             symbols=normalized_symbols,
             required_price_dates=price_dates,
         )
         required_count = len(price_dates)
+        minimum_observations = min(
+            required_count,
+            max(1, self._warmup_sessions + 1),
+        )
         available_counts = {
-            symbol: len(available_by_symbol.get(symbol, set()))
+            symbol: coverage_by_symbol.get(
+                symbol,
+                _SymbolPriceCoverage(valid_dates=0, latest_date=None),
+            ).valid_dates
             for symbol in normalized_symbols
         }
         incomplete = tuple(
             symbol
             for symbol in normalized_symbols
-            if available_counts[symbol] < required_count
+            if (
+                available_counts[symbol] < minimum_observations
+                or coverage_by_symbol.get(
+                    symbol,
+                    _SymbolPriceCoverage(valid_dates=0, latest_date=None),
+                ).latest_date
+                != through_date
+            )
         )
         incomplete_set = set(incomplete)
         return BreadthHistoryPriceCoverage(
@@ -132,39 +152,55 @@ class BreadthHistoryPriceCoverageService:
         )
 
     @staticmethod
-    def _available_price_dates(
+    def _finite_ohlc_filters():
+        finite_upper = float("inf")
+        finite_lower = float("-inf")
+        return (
+            StockPrice.open.isnot(None),
+            StockPrice.high.isnot(None),
+            StockPrice.low.isnot(None),
+            StockPrice.close.isnot(None),
+            StockPrice.open > finite_lower,
+            StockPrice.open < finite_upper,
+            StockPrice.high > finite_lower,
+            StockPrice.high < finite_upper,
+            StockPrice.low > finite_lower,
+            StockPrice.low < finite_upper,
+            StockPrice.close > finite_lower,
+            StockPrice.close < finite_upper,
+        )
+
+    @classmethod
+    def _available_price_coverage(
+        cls,
         db: Session,
         *,
         symbols: Sequence[str],
         required_price_dates: Collection[date],
-    ) -> dict[str, set[date]]:
-        available_by_symbol: dict[str, set[date]] = {}
+    ) -> dict[str, _SymbolPriceCoverage]:
+        coverage_by_symbol: dict[str, _SymbolPriceCoverage] = {}
         for chunk_start in range(0, len(symbols), 500):
             chunk_symbols = symbols[chunk_start : chunk_start + 500]
             rows = (
                 db.query(
                     StockPrice.symbol,
-                    StockPrice.date,
-                    StockPrice.open,
-                    StockPrice.high,
-                    StockPrice.low,
-                    StockPrice.close,
+                    func.count(StockPrice.date),
+                    func.max(StockPrice.date),
                 )
                 .filter(
                     StockPrice.symbol.in_(chunk_symbols),
                     StockPrice.date.in_(required_price_dates),
+                    *cls._finite_ohlc_filters(),
                 )
+                .group_by(StockPrice.symbol)
                 .all()
             )
-            for symbol, row_date, open_, high, low, close in rows:
-                if row_date is None:
-                    continue
-                if finite_ohlc_values(open_, high, low, close) is None:
-                    continue
-                available_by_symbol.setdefault(str(symbol).upper(), set()).add(
-                    row_date
+            for symbol, valid_dates, latest_date in rows:
+                coverage_by_symbol[str(symbol).upper()] = _SymbolPriceCoverage(
+                    valid_dates=int(valid_dates or 0),
+                    latest_date=latest_date,
                 )
-        return available_by_symbol
+        return coverage_by_symbol
 
 
 __all__ = [

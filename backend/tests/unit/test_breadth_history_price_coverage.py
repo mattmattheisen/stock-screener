@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from sqlalchemy import event
+
 from app.models.stock import StockPrice
 
 
@@ -145,4 +147,91 @@ def test_breadth_history_price_coverage_requires_every_usable_required_ohlc(
         "BAD.NS",
         "PARTIAL.NS",
         "NONE.NS",
+    )
+
+
+def test_breadth_history_price_coverage_uses_observed_bars_not_every_session(
+    universe_session,
+) -> None:
+    from app.services.breadth_history_price_coverage import (
+        BreadthHistoryPriceCoverageService,
+    )
+
+    service = BreadthHistoryPriceCoverageService(warmup_sessions=2)
+    required_dates = (
+        date(2026, 1, 2),
+        date(2026, 1, 5),
+        date(2026, 1, 6),
+        date(2026, 1, 7),
+        date(2026, 1, 8),
+    )
+    as_of_date = date(2026, 1, 8)
+
+    universe_session.add_all(
+        [
+            *[_price("LATE.NS", day, 100.0) for day in required_dates[-3:]],
+            *[_price("NOASOF.NS", day, 50.0) for day in required_dates[:3]],
+            *[_price("SHORT.NS", day, 25.0) for day in required_dates[-2:]],
+        ]
+    )
+    universe_session.commit()
+
+    coverage = service.classify(
+        universe_session,
+        market="IN",
+        through_date=as_of_date,
+        symbols=("LATE.NS", "NOASOF.NS", "SHORT.NS"),
+        required_price_dates=required_dates,
+    )
+
+    assert coverage.complete_symbols == ("LATE.NS",)
+    assert coverage.incomplete_symbols == ("NOASOF.NS", "SHORT.NS")
+    assert coverage.available_price_date_counts == {
+        "LATE.NS": 3,
+        "NOASOF.NS": 3,
+        "SHORT.NS": 2,
+    }
+
+
+def test_breadth_history_price_coverage_counts_valid_rows_in_database(
+    universe_session,
+) -> None:
+    from app.services.breadth_history_price_coverage import (
+        BreadthHistoryPriceCoverageService,
+    )
+
+    service = BreadthHistoryPriceCoverageService()
+    required_dates = (
+        date(2026, 1, 2),
+        date(2026, 1, 5),
+        date(2026, 1, 6),
+    )
+    universe_session.add_all(
+        [_price("FULL.NS", day, 100.0) for day in required_dates]
+    )
+    universe_session.commit()
+
+    statements: list[str] = []
+    engine = universe_session.get_bind()
+
+    def _capture_statement(_conn, _cursor, statement, _params, _context, _many):
+        if "stock_prices" in statement:
+            statements.append(statement.lower())
+
+    event.listen(engine, "before_cursor_execute", _capture_statement)
+    try:
+        coverage = service.classify(
+            universe_session,
+            market="IN",
+            through_date=date(2026, 1, 6),
+            symbols=("FULL.NS",),
+            required_price_dates=required_dates,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture_statement)
+
+    assert coverage.complete_symbols == ("FULL.NS",)
+    assert any(
+        "count(" in statement and "group by" in statement
+        for statement in statements
     )

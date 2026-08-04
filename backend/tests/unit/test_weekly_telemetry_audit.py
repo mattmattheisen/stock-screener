@@ -27,6 +27,7 @@ from app.models.market_telemetry_alert import (
     AlertState,
     MarketTelemetryAlert,
 )
+from app.services.telemetry import weekly_audit
 from app.services.telemetry.schema import (
     MetricKey,
     SCHEMA_VERSION,
@@ -323,6 +324,98 @@ class TestAlertRollup:
             AlertSeverity.WARNING: 1,
             AlertSeverity.CRITICAL: 1,
         }
+
+    def test_breached_rollups_are_evaluated_before_alert_counts(
+        self,
+        telemetry_session,
+        monkeypatch,
+    ):
+        telemetry_session.add_all(
+            [
+                _event(
+                    "US",
+                    MetricKey.FRESHNESS_LAG,
+                    freshness_lag_payload(
+                        last_refresh_at_epoch=(_NOW - timedelta(hours=3)).timestamp(),
+                        source="prices",
+                        symbols_refreshed=100,
+                    ),
+                    _NOW - timedelta(hours=1),
+                ),
+                _event(
+                    "HK",
+                    MetricKey.UNIVERSE_DRIFT,
+                    universe_drift_payload(current_size=200, prior_size=100),
+                    _NOW - timedelta(hours=1),
+                ),
+            ]
+        )
+        telemetry_session.commit()
+
+        evaluated_values: list[dict] = []
+
+        def _fake_evaluate_metric_values(db, values, *, observed_at=None):
+            assert observed_at == _NOW
+            evaluated_values.extend(values)
+            db.add_all(
+                [
+                    _alert(
+                        market="US",
+                        metric_key=MetricKey.FRESHNESS_LAG,
+                        severity=AlertSeverity.WARNING,
+                        state=AlertState.OPEN,
+                        title="opened by audit",
+                        opened_at=_NOW,
+                    ),
+                    _alert(
+                        market="HK",
+                        metric_key=MetricKey.UNIVERSE_DRIFT,
+                        severity=AlertSeverity.CRITICAL,
+                        state=AlertState.OPEN,
+                        title="opened by audit",
+                        opened_at=_NOW,
+                    ),
+                ]
+            )
+            db.commit()
+            return []
+
+        monkeypatch.setattr(
+            weekly_audit,
+            "evaluate_metric_values",
+            _fake_evaluate_metric_values,
+            raising=False,
+        )
+
+        report = run_weekly_audit(telemetry_session, now=_NOW)
+
+        us_freshness_value = next(
+            value
+            for value in evaluated_values
+            if (
+                value["market"] == "US"
+                and value["metric_key"] == MetricKey.FRESHNESS_LAG
+            )
+        )
+        hk_drift_value = next(
+            value
+            for value in evaluated_values
+            if (
+                value["market"] == "HK"
+                and value["metric_key"] == MetricKey.UNIVERSE_DRIFT
+            )
+        )
+        assert us_freshness_value["value"] == pytest.approx(10800.0)
+        assert hk_drift_value["value"] == pytest.approx(1.0)
+
+        us_alerts = next(a for a in report.alerts if a.market == "US")
+        hk_alerts = next(a for a in report.alerts if a.market == "HK")
+        assert us_alerts.opened == 1
+        assert us_alerts.still_active == 1
+        assert us_alerts.by_severity == {AlertSeverity.WARNING: 1}
+        assert hk_alerts.opened == 1
+        assert hk_alerts.still_active == 1
+        assert hk_alerts.by_severity == {AlertSeverity.CRITICAL: 1}
 
 
 class TestContentHash:

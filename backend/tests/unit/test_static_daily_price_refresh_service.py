@@ -56,6 +56,24 @@ class _RRGStartupCalendar:
         }
 
 
+class _CompleteBreadthHistoryCoverage:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def classify(self, db, *, market, through_date, symbols):
+        self.calls.append(
+            {
+                "market": market,
+                "through_date": through_date,
+                "symbols": tuple(symbols),
+            }
+        )
+        return SimpleNamespace(
+            incomplete_symbols=(),
+            required_price_date_count=2,
+        )
+
+
 def _sqlite_session_factory():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
@@ -456,12 +474,14 @@ def test_static_daily_price_refresh_hydrates_short_history_for_rrg_startup() -> 
                 for symbol in symbols
             }
 
+    breadth_coverage = _CompleteBreadthHistoryCoverage()
     service = StaticDailyPriceRefreshService(
         session_factory=session_factory,
         price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
         fetcher=_FakeFetcher(),
         batch_size_for_market=lambda _market: 25,
         calendar_service=_RRGStartupCalendar(),
+        breadth_history_price_coverage=breadth_coverage,
         sleep=lambda _seconds: None,
     )
 
@@ -483,6 +503,15 @@ def test_static_daily_price_refresh_hydrates_short_history_for_rrg_startup() -> 
     assert result["stale_symbols"] == 0
     assert result["no_history_symbols"] == len(IN_KEY_MARKET_PRICE_SYMBOLS)
     assert result["history_incomplete_symbols"] == 1
+    assert result["rrg_history_coverage_status"] == "verified"
+    assert result["breadth_history_coverage_status"] == "verified"
+    assert breadth_coverage.calls == [
+        {
+            "market": "IN",
+            "through_date": date(2026, 6, 4),
+            "symbols": ("OLD.NS",),
+        }
+    ]
     assert result["yahoo_fetched_symbols"] == 6
 
 
@@ -543,12 +572,14 @@ def test_static_daily_price_refresh_hydrates_sparse_old_rows_for_rrg_startup() -
                 for symbol in symbols
             }
 
+    breadth_coverage = _CompleteBreadthHistoryCoverage()
     service = StaticDailyPriceRefreshService(
         session_factory=session_factory,
         price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
         fetcher=_FakeFetcher(),
         batch_size_for_market=lambda _market: 25,
         calendar_service=_RRGStartupCalendar(),
+        breadth_history_price_coverage=breadth_coverage,
         sleep=lambda _seconds: None,
     )
 
@@ -568,6 +599,15 @@ def test_static_daily_price_refresh_hydrates_sparse_old_rows_for_rrg_startup() -
     ]
     assert result["db_fresh_symbols"] == 1
     assert result["history_incomplete_symbols"] == 1
+    assert result["rrg_history_coverage_status"] == "verified"
+    assert result["breadth_history_coverage_status"] == "verified"
+    assert breadth_coverage.calls == [
+        {
+            "market": "IN",
+            "through_date": date(2026, 6, 4),
+            "symbols": ("SPARSE.NS",),
+        }
+    ]
 
 
 def test_static_daily_price_refresh_continues_when_rrg_calendar_lookup_fails() -> None:

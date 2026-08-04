@@ -5,7 +5,8 @@ and produces a tamper-evident governance report (JSON + Markdown + SHA-256) for
 historical traceability.
 
 Design:
-- **Pure aggregation**: no I/O other than the SQL reads passed in via the
+- **Database-scoped evaluation**: reads telemetry events, promotes threshold
+  breaches into alert rows, then summarizes the alert lifecycle from the same
   session. The Celery task wrapper handles filesystem + scheduling.
 - **Self-contained snapshot per run**: the raw event log has 15d retention,
   so each weekly report must stand alone — no reliance on prior reports.
@@ -31,6 +32,7 @@ from ...utils.datetime_utils import as_aware_utc
 from ...models.market_telemetry import MarketTelemetryEvent
 from ...models.market_telemetry_alert import MarketTelemetryAlert, AlertState
 from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS
+from .alert_evaluator import evaluate_metric_values
 from .alert_thresholds import OWNERS, THRESHOLDS
 from .schema import (
     MetricKey,
@@ -94,8 +96,8 @@ def run_weekly_audit(
 ) -> GovernanceReport:
     """Produce a ``GovernanceReport`` for the 7 days ending at ``now``.
 
-    The function reads from the passed session and does not commit. ``now``
-    is injectable so tests can pin the window deterministically.
+    The function may commit alert lifecycle changes on the passed session.
+    ``now`` is injectable so tests can pin the window deterministically.
     """
     generated_at = as_aware_utc(now) or datetime.now(timezone.utc)
     window_start = generated_at - timedelta(days=AUDIT_WINDOW_DAYS)
@@ -109,6 +111,11 @@ def run_weekly_audit(
                 _summarize_metric(db, market, metric_key, window_start, generated_at)
             )
 
+    evaluate_metric_values(
+        db,
+        _metric_values_from_rollups(metrics),
+        observed_at=generated_at,
+    )
     alerts = [_summarize_alerts(db, m, window_start, generated_at) for m in markets]
 
     report = GovernanceReport(
@@ -135,6 +142,52 @@ _METRIC_KEYS: Tuple[str, ...] = (
     MetricKey.COMPLETENESS_DISTRIBUTION,
     MetricKey.FIELD_COVERAGE,
 )
+
+
+def _float_or_none(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metric_values_from_rollups(
+    metrics: List[MarketMetricSummary],
+) -> List[Dict[str, Any]]:
+    values: List[Dict[str, Any]] = []
+    for metric in metrics:
+        if (
+            metric.metric_key == MetricKey.EXTRACTION_SUCCESS
+            and metric.market != SHARED_SENTINEL
+        ):
+            continue
+        values.append(
+            {
+                "market": metric.market,
+                "metric_key": metric.metric_key,
+                "value": _alert_value_from_rollup(metric),
+            }
+        )
+    return values
+
+
+def _alert_value_from_rollup(metric: MarketMetricSummary) -> Optional[float]:
+    rollup = metric.rollup or {}
+    if metric.metric_key == MetricKey.FRESHNESS_LAG:
+        return _float_or_none(rollup.get("freshness_at_report_seconds"))
+    if metric.metric_key == MetricKey.UNIVERSE_DRIFT:
+        return _float_or_none(rollup.get("max_drift_ratio"))
+    if metric.metric_key == MetricKey.BENCHMARK_AGE:
+        return _float_or_none(rollup.get("implied_age_seconds"))
+    if metric.metric_key == MetricKey.EXTRACTION_SUCCESS:
+        return _float_or_none(rollup.get("overall_success_ratio"))
+    if metric.metric_key == MetricKey.COMPLETENESS_DISTRIBUTION:
+        return _float_or_none(rollup.get("last_snapshot_low_bucket_ratio"))
+    if metric.metric_key == MetricKey.FIELD_COVERAGE:
+        return _float_or_none(rollup.get("worst_unsupported_ratio"))
+    return None
 
 
 def _summarize_metric(
