@@ -253,10 +253,16 @@ def test_static_site_daily_price_build_requires_current_session_coverage() -> No
 
     assert "id: build-daily-price-bundle" in build_price_step
     assert "MarketRsInputLoader._minimum_current_price_coverage" in build_price_step
+    assert 'BUILD_LOG="$(mktemp)"' in build_price_step
+    assert '| tee "$BUILD_LOG"' in build_price_step
+    assert 'build_pipeline_status=("${PIPESTATUS[@]}")' in build_price_step
+    assert 'build_log_status="${build_pipeline_status[1]}"' in build_price_step
     assert "--require-complete" in build_price_step
     assert '--min-symbol-coverage "$MIN_SYMBOL_COVERAGE"' in build_price_step
+    assert "Daily price bundle coverage .* is below required" in build_price_step
     assert "price_bundle_ready=false" in build_price_step
     assert "price_bundle_ready=true" in build_price_step
+    assert 'exit "$status"' in build_price_step
     assert "steps.build-daily-price-bundle.outputs.price_bundle_ready == 'true'" in upload_price_step
 
 

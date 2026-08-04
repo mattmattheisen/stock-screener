@@ -313,17 +313,27 @@ jobs:
           PY
           )"
           set +e
+          BUILD_LOG="$(mktemp)"
           python -m app.scripts.build_daily_price_bundle \
             --market "$MARKET" \
             --output-dir /tmp/daily-price \
             --require-complete \
-            --min-symbol-coverage "$MIN_SYMBOL_COVERAGE"
-          status=$?
+            --min-symbol-coverage "$MIN_SYMBOL_COVERAGE" 2>&1 | tee "$BUILD_LOG"
+          build_pipeline_status=("${PIPESTATUS[@]}")
+          status="${build_pipeline_status[0]}"
+          build_log_status="${build_pipeline_status[1]}"
           set -e
+          if [ "$build_log_status" -ne 0 ]; then
+            echo "Failed to persist the daily price bundle build log." >&2
+            exit "$build_log_status"
+          fi
           if [ "$status" -ne 0 ]; then
-            echo "Daily price bundle publication skipped for $MARKET because current-session coverage is below the static publish threshold."
-            echo "price_bundle_ready=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            if grep -q "Daily price bundle coverage .* is below required" "$BUILD_LOG"; then
+              echo "Daily price bundle publication skipped for $MARKET because current-session coverage is below the static publish threshold."
+              echo "price_bundle_ready=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            exit "$status"
           fi
           echo "price_bundle_ready=true" >> "$GITHUB_OUTPUT"
 
