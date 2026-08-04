@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date, datetime
 import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
-from pathlib import Path
+import tempfile
 from typing import Any, Sequence
 from urllib.parse import urlencode
 
@@ -173,6 +175,49 @@ def downloaded_market_is_compatible(
     return True
 
 
+def _coerce_manifest_date(value: object) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text.split("T", 1)[0])
+    except ValueError:
+        return None
+
+
+def downloaded_market_as_of_date(target_dir: Path) -> date | None:
+    metadata_paths = sorted(target_dir.rglob(STATIC_MARKET_METADATA_FILENAME))
+    if len(metadata_paths) != 1:
+        return None
+    try:
+        metadata = read_static_market_manifest(metadata_paths[0])
+    except (
+        OSError,
+        json.JSONDecodeError,
+        TypeError,
+        StaticMarketArtifactContractError,
+    ):
+        return None
+    entry = metadata.get("entry")
+    value = entry.get("as_of_date") if isinstance(entry, dict) else None
+    return _coerce_manifest_date(value)
+
+
+def _candidate_is_newer(
+    candidate_date: date | None,
+    incumbent_date: date | None,
+) -> bool:
+    return candidate_date is not None and (
+        incumbent_date is None or candidate_date > incumbent_date
+    )
+
+
 def download_fallback_artifacts(
     *,
     repo: str,
@@ -215,6 +260,7 @@ def download_fallback_artifacts(
 
     current_markets = collect_current_markets(current_dir)
     fallback_markets: set[str] = set()
+    fallback_dates_by_market: dict[str, date | None] = {}
     if current_markets:
         print(
             f"Current run already has market artifacts: {', '.join(sorted(current_markets))}.",
@@ -261,11 +307,13 @@ def download_fallback_artifacts(
             # Download fallback artifacts for current markets too; the combiner
             # compares dates and keeps a newer last-known-good artifact when a
             # cache-only current run had to rewind.
-            if market in fallback_markets:
-                continue
-
             target_dir = fallback_dir / artifact_name
-            shutil.rmtree(target_dir, ignore_errors=True)
+            candidate_dir = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{artifact_name}.candidate-{run_id}-",
+                    dir=fallback_dir,
+                )
+            )
 
             try:
                 subprocess.run(
@@ -279,7 +327,7 @@ def download_fallback_artifacts(
                         "--name",
                         artifact_name,
                         "--dir",
-                        str(target_dir),
+                        str(candidate_dir),
                     ],
                     check=True,
                     capture_output=True,
@@ -290,19 +338,30 @@ def download_fallback_artifacts(
                     f"{artifact_name} from run {run_id} failed to download "
                     f"with exit {exc.returncode}.{command_error_detail(exc)}"
                 )
-                shutil.rmtree(target_dir, ignore_errors=True)
+                shutil.rmtree(candidate_dir, ignore_errors=True)
                 continue
 
             if not downloaded_market_is_compatible(
-                target_dir,
+                candidate_dir,
                 market=market,
                 artifact_name=artifact_name,
                 run_id=int(run_id),
             ):
-                shutil.rmtree(target_dir, ignore_errors=True)
+                shutil.rmtree(candidate_dir, ignore_errors=True)
                 continue
 
+            candidate_date = downloaded_market_as_of_date(candidate_dir)
+            if market in fallback_markets and not _candidate_is_newer(
+                candidate_date,
+                fallback_dates_by_market.get(market),
+            ):
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+                continue
+
+            shutil.rmtree(target_dir, ignore_errors=True)
+            candidate_dir.rename(target_dir)
             fallback_markets.add(market)
+            fallback_dates_by_market[market] = candidate_date
             print(
                 f"Using fallback artifact {artifact_name} from Static Site run {run_id} "
                 f"on {branch_name}.",

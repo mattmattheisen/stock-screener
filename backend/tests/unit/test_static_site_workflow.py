@@ -230,13 +230,19 @@ def test_static_site_validation_uses_python_module_not_inline_control_plane() ->
     assert "snapshot-failure.json" not in validation_step
 
 
-def test_static_site_fallback_downloader_fetches_current_markets_for_date_comparison(tmp_path) -> None:
+def test_static_site_fallback_downloader_keeps_newest_candidate_for_current_market(tmp_path) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
     current_us_dir = current_dir / "static-market-US" / "markets" / "us"
     current_us_dir.mkdir(parents=True)
     (current_us_dir / "manifest.market.json").write_text(
-        json.dumps({"market": "US", "schema_version": "static-site-v3"}),
+        json.dumps(
+            {
+                "market": "US",
+                "schema_version": "static-site-v3",
+                "entry": {"as_of_date": "2026-07-31"},
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -256,9 +262,11 @@ def test_static_site_fallback_downloader_fetches_current_markets_for_date_compar
         if args[:3] == ["api", "--paginate", "--slurp"] and "actions/workflows/static-site.yml/runs" in args[3]:
             print(json.dumps([{{"workflow_runs": [
                 {{"id": 999, "conclusion": "failure"}},
-                {{"id": 222, "conclusion": "failure"}}
+                {{"id": 333, "conclusion": "success"}},
+                {{"id": 222, "conclusion": "success"}},
+                {{"id": 111, "conclusion": "success"}}
             ]}}]))
-        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/222/artifacts" in args[3]:
+        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/333/artifacts" in args[3]:
             print(json.dumps([{{"artifacts": [
                 {{"name": "static-market-diagnostics-CN", "expired": False}},
                 {{"name": "static-market-HK", "expired": False}},
@@ -266,7 +274,16 @@ def test_static_site_fallback_downloader_fetches_current_markets_for_date_compar
                 {{"name": "static-market-US", "expired": False}},
                 {{"name": "static-market-TW", "expired": False}}
             ]}}]))
+        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/222/artifacts" in args[3]:
+            print(json.dumps([{{"artifacts": [
+                {{"name": "static-market-US", "expired": False}}
+            ]}}]))
+        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/111/artifacts" in args[3]:
+            print(json.dumps([{{"artifacts": [
+                {{"name": "static-market-US", "expired": False}}
+            ]}}]))
         elif args[:2] == ["run", "download"]:
+            run_id = args[2]
             artifact_name = args[args.index("--name") + 1]
             if artifact_name == "static-market-HK":
                 target_dir = pathlib.Path(args[args.index("--dir") + 1])
@@ -276,9 +293,18 @@ def test_static_site_fallback_downloader_fetches_current_markets_for_date_compar
                 sys.exit(7)
             target_dir = pathlib.Path(args[args.index("--dir") + 1])
             target_dir.mkdir(parents=True, exist_ok=True)
-            (target_dir / "manifest.market.json").write_text(json.dumps({{"market": artifact_name.rsplit("-", 1)[1], "schema_version": "static-site-v3"}}))
+            as_of_date_by_run = {{
+                "333": "2026-07-31",
+                "222": "2026-08-03",
+                "111": "2026-07-30",
+            }}
+            (target_dir / "manifest.market.json").write_text(json.dumps({{
+                "market": artifact_name.rsplit("-", 1)[1],
+                "schema_version": "static-site-v3",
+                "entry": {{"as_of_date": as_of_date_by_run.get(run_id, "2026-08-02")}},
+            }}))
             with downloads_log.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps({{"artifact": artifact_name}}) + "\\n")
+                handle.write(json.dumps({{"run": run_id, "artifact": artifact_name}}) + "\\n")
         else:
             print(f"unexpected gh args: {{args}}", file=sys.stderr)
             sys.exit(2)
@@ -308,14 +334,21 @@ def test_static_site_fallback_downloader_fetches_current_markets_for_date_compar
         for line in downloads_log.read_text(encoding="utf-8").splitlines()
     ]
     assert downloads == [
-        {"artifact": "static-market-TW"},
-        {"artifact": "static-market-US"},
+        {"run": "333", "artifact": "static-market-TW"},
+        {"run": "333", "artifact": "static-market-US"},
+        {"run": "222", "artifact": "static-market-US"},
+        {"run": "111", "artifact": "static-market-US"},
     ]
+    us_manifest = json.loads(
+        (fallback_dir / "static-market-US" / "manifest.market.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert not (fallback_dir / "static-market-diagnostics-CN").exists()
     assert not (fallback_dir / "static-market-status-CN").exists()
     assert not (fallback_dir / "static-market-HK").exists()
     assert (fallback_dir / "static-market-TW" / "manifest.market.json").exists()
-    assert (fallback_dir / "static-market-US" / "manifest.market.json").exists()
+    assert us_manifest["entry"]["as_of_date"] == "2026-08-03"
     assert "exit 7. Details: stderr: download denied for HK" in result.stdout
 
 
