@@ -165,6 +165,13 @@ def test_breadth_history_price_coverage_requires_every_usable_required_ohlc(
         "PARTIAL.NS",
         "NONE.NS",
     )
+    assert coverage.history_incomplete_symbols == (
+        "SHORT.NS",
+        "BAD.NS",
+        "PARTIAL.NS",
+        "NONE.NS",
+    )
+    assert coverage.missing_through_date_symbols == ()
     assert coverage.available_price_date_counts["SHORT.NS"] == len(required_dates) - 1
     assert coverage.available_price_date_counts["BAD.NS"] == len(required_dates) - 1
     assert coverage.available_price_date_counts["PARTIAL.NS"] == len(required_dates) - 1
@@ -213,6 +220,8 @@ def test_breadth_history_price_coverage_uses_observed_bars_not_every_session(
 
     assert coverage.complete_symbols == ("LATE.NS",)
     assert coverage.incomplete_symbols == ("NOASOF.NS", "SHORT.NS")
+    assert coverage.history_incomplete_symbols == ("SHORT.NS",)
+    assert coverage.missing_through_date_symbols == ("NOASOF.NS",)
     assert coverage.available_price_date_counts == {
         "LATE.NS": 3,
         "NOASOF.NS": 3,

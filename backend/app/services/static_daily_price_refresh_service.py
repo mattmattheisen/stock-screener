@@ -45,6 +45,18 @@ class _StaticHistoryCoverageOutcome:
     status: str
     error: str | None = None
     required_dates: int = 0
+    bootstrap_symbols: tuple[str, ...] | None = None
+    missing_through_date_symbols: tuple[str, ...] = ()
+
+
+def _history_bootstrap_symbols(
+    outcome: _StaticHistoryCoverageOutcome,
+) -> tuple[str, ...]:
+    return (
+        outcome.incomplete_symbols
+        if outcome.bootstrap_symbols is None
+        else outcome.bootstrap_symbols
+    )
 
 
 def static_daily_price_refresh_batch_size(market: str | None) -> int:
@@ -180,10 +192,16 @@ class StaticDailyPriceRefreshService:
         breadth_history_incomplete_symbols = list(
             breadth_history_coverage.incomplete_symbols
         )
+        breadth_history_bootstrap_symbols = list(
+            _history_bootstrap_symbols(breadth_history_coverage)
+        )
+        breadth_history_missing_through_date_symbols = list(
+            breadth_history_coverage.missing_through_date_symbols
+        )
         history_incomplete_symbols = _dedupe_symbols(
             [
                 *rrg_history_incomplete_symbols,
-                *breadth_history_incomplete_symbols,
+                *breadth_history_bootstrap_symbols,
             ]
         )
         db_fresh_symbols = list(coverage.fresh)
@@ -221,6 +239,12 @@ class StaticDailyPriceRefreshService:
                 "breadth_history_incomplete_symbols": len(
                     breadth_history_incomplete_symbols
                 ),
+                "breadth_history_bootstrap_symbols": len(
+                    breadth_history_bootstrap_symbols
+                ),
+                "breadth_history_missing_through_date_symbols": len(
+                    breadth_history_missing_through_date_symbols
+                ),
                 "rrg_history_coverage_status": rrg_history_coverage.status,
                 "rrg_history_coverage_error": rrg_history_coverage.error,
                 "breadth_history_coverage_status": breadth_history_coverage.status,
@@ -257,10 +281,17 @@ class StaticDailyPriceRefreshService:
                 f"{len(rrg_history_incomplete_symbols):,} symbols.",
                 flush=True,
             )
-        if breadth_history_incomplete_symbols:
+        if breadth_history_bootstrap_symbols:
             print(
                 f"[static-daily prices] Breadth/exposure history is short for "
-                f"{len(breadth_history_incomplete_symbols):,} symbols.",
+                f"{len(breadth_history_bootstrap_symbols):,} symbols.",
+                flush=True,
+            )
+        if breadth_history_missing_through_date_symbols:
+            print(
+                "[static-daily prices] Breadth/exposure current session is "
+                f"missing for {len(breadth_history_missing_through_date_symbols):,} "
+                "symbols; using stale top-up.",
                 flush=True,
             )
 
@@ -304,6 +335,12 @@ class StaticDailyPriceRefreshService:
             ),
             "breadth_history_incomplete_symbols": len(
                 breadth_history_incomplete_symbols
+            ),
+            "breadth_history_bootstrap_symbols": len(
+                breadth_history_bootstrap_symbols
+            ),
+            "breadth_history_missing_through_date_symbols": len(
+                breadth_history_missing_through_date_symbols
             ),
             "rrg_history_coverage_status": rrg_history_coverage.status,
             "rrg_history_coverage_error": rrg_history_coverage.error,
@@ -401,6 +438,16 @@ class StaticDailyPriceRefreshService:
             tuple(coverage.incomplete_symbols),
             "verified",
             required_dates=coverage.required_price_date_count,
+            bootstrap_symbols=tuple(
+                getattr(
+                    coverage,
+                    "history_incomplete_symbols",
+                    coverage.incomplete_symbols,
+                )
+            ),
+            missing_through_date_symbols=tuple(
+                getattr(coverage, "missing_through_date_symbols", ())
+            ),
         )
 
     def _fetch_and_store(

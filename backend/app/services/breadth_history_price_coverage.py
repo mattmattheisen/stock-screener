@@ -23,6 +23,8 @@ class BreadthHistoryPriceCoverage:
     incomplete_symbols: tuple[str, ...]
     required_price_date_count: int
     available_price_date_counts: Mapping[str, int]
+    history_incomplete_symbols: tuple[str, ...] = ()
+    missing_through_date_symbols: tuple[str, ...] = ()
     incomplete_samples: tuple[str, ...] = ()
 
 
@@ -174,20 +176,25 @@ class BreadthHistoryPriceCoverageService:
             symbol: coverage_by_symbol.get(symbol, default_coverage).valid_dates
             for symbol in normalized_symbols
         }
-        incomplete = tuple(
-            symbol
-            for symbol in normalized_symbols
-            if (
-                coverage_by_symbol.get(symbol, default_coverage).latest_date
-                != through_date
-                or not self._has_required_observations(
-                    coverage_by_symbol.get(symbol, default_coverage),
-                    minimum_observations=minimum_observations,
-                    warmup_start_date=warmup_start_date,
-                    oldest_target_date=oldest_target_date,
-                    ipo_date=ipo_dates.get(symbol),
-                )
+        history_incomplete = []
+        missing_through_date = []
+        for symbol in normalized_symbols:
+            coverage = coverage_by_symbol.get(symbol, default_coverage)
+            has_required_observations = self._has_required_observations(
+                coverage,
+                minimum_observations=minimum_observations,
+                warmup_start_date=warmup_start_date,
+                oldest_target_date=oldest_target_date,
+                ipo_date=ipo_dates.get(symbol),
             )
+            if not has_required_observations:
+                history_incomplete.append(symbol)
+            elif coverage.latest_date != through_date:
+                missing_through_date.append(symbol)
+
+        incomplete_symbol_set = {*history_incomplete, *missing_through_date}
+        incomplete = tuple(
+            symbol for symbol in normalized_symbols if symbol in incomplete_symbol_set
         )
         incomplete_set = set(incomplete)
         return BreadthHistoryPriceCoverage(
@@ -197,6 +204,8 @@ class BreadthHistoryPriceCoverageService:
             incomplete_symbols=incomplete,
             required_price_date_count=required_count,
             available_price_date_counts=available_counts,
+            history_incomplete_symbols=tuple(history_incomplete),
+            missing_through_date_symbols=tuple(missing_through_date),
             incomplete_samples=incomplete[: self._sample_limit],
         )
 
