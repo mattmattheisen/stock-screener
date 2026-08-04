@@ -162,6 +162,23 @@ def test_static_site_market_export_soft_skips_no_current_artifact_exit_code() ->
     assert "no current market artifact will be uploaded" in export_step
 
 
+def test_static_site_market_export_uses_status_price_bundle_signal_for_soft_skip() -> None:
+    build_market_job = _build_market_job()
+    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+        "\n      - name: Upload market status",
+        1,
+    )[0]
+    soft_skip_branch = export_step.split('if [ "$status" -eq 79 ]; then', 1)[1].split(
+        "exit 0",
+        1,
+    )[0]
+
+    assert 'STATUS_PATH="/tmp/static-data/status/${MARKET_LOWER}/status.json"' in export_step
+    assert ".has_price_bundle // false" in soft_skip_branch
+    assert 'echo "has_price_bundle=$has_price_bundle" >> "$GITHUB_OUTPUT"' in soft_skip_branch
+    assert 'echo "has_price_bundle=true" >> "$GITHUB_OUTPUT"' not in soft_skip_branch
+
+
 def test_static_site_uploads_canonical_market_status_after_export() -> None:
     build_market_job = _build_market_job()
     export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(

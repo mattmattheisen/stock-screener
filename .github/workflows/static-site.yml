@@ -242,6 +242,7 @@ jobs:
             --rrg-history-dir "$RRG_HISTORY_DIR" 2>&1 | tee "$EXPORT_LOG"
           status=${PIPESTATUS[0]}
           set -e
+          STATUS_PATH="/tmp/static-data/status/${MARKET_LOWER}/status.json"
           if [ "$status" -eq 78 ]; then
             echo "Market ${{ matrix.market }} is not a trading day; no current static artifact will be uploaded."
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
@@ -251,8 +252,9 @@ jobs:
           fi
           if [ "$status" -eq 79 ]; then
             echo "Market ${{ matrix.market }} produced diagnostics but no current market artifact will be uploaded; combine will use fallback artifacts if available."
+            has_price_bundle="$(jq -r '.has_price_bundle // false' "$STATUS_PATH" 2>/dev/null || echo false)"
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
-            echo "has_price_bundle=true" >> "$GITHUB_OUTPUT"
+            echo "has_price_bundle=$has_price_bundle" >> "$GITHUB_OUTPUT"
             echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
