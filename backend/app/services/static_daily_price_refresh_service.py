@@ -208,7 +208,12 @@ class StaticDailyPriceRefreshService:
         history_incomplete_symbol_set = set(history_incomplete_symbols)
         stale_symbols = [
             symbol
-            for symbol in coverage.stale
+            for symbol in _dedupe_symbols(
+                [
+                    *coverage.stale,
+                    *breadth_history_missing_through_date_symbols,
+                ]
+            )
             if symbol not in history_incomplete_symbol_set
         ]
         no_history_symbols = list(coverage.no_history)

@@ -365,6 +365,92 @@ def test_static_daily_price_refresh_keeps_breadth_current_gap_on_stale_top_up() 
     assert result["breadth_history_missing_through_date_symbols"] == 1
 
 
+def test_static_daily_price_refresh_top_up_breadth_only_current_gap() -> None:
+    session_factory = _sqlite_session_factory()
+
+    with session_factory() as db:
+        db.add(StockUniverse(symbol="SAP.DE", market="DE", is_active=True, market_cap=100.0))
+        db.add_all(
+            [
+                StockPrice(
+                    symbol="SAP.DE",
+                    date=date(2026, 6, 3),
+                    open=1.0,
+                    high=1.0,
+                    low=1.0,
+                    close=1.0,
+                    volume=1000,
+                ),
+                StockPrice(
+                    symbol="SAP.DE",
+                    date=date(2026, 6, 4),
+                    open=None,
+                    high=2.0,
+                    low=2.0,
+                    close=2.0,
+                    volume=1000,
+                ),
+            ]
+        )
+        db.commit()
+
+    fetch_calls: list[dict] = []
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(
+            self, symbols, period="2y", start_batch_size=None, market=None
+        ):
+            fetch_calls.append(
+                {
+                    "symbols": list(symbols),
+                    "period": period,
+                    "start_batch_size": start_batch_size,
+                    "market": market,
+                }
+            )
+            return {
+                symbol: {"price_data": SimpleNamespace(empty=False), "has_error": False}
+                for symbol in symbols
+            }
+
+    service = StaticDailyPriceRefreshService(
+        session_factory=session_factory,
+        price_cache=SimpleNamespace(store_batch_in_cache=lambda *_args, **_kwargs: None),
+        fetcher=_FakeFetcher(),
+        batch_size_for_market=lambda _market: 25,
+        group_history_price_coverage=_CompleteGroupHistoryCoverage(),
+        breadth_history_price_coverage=_CurrentSessionGapBreadthHistoryCoverage(),
+        sleep=lambda _seconds: None,
+    )
+
+    result = service.refresh(
+        as_of_date=date(2026, 6, 4),
+        market="DE",
+        ensure_static_history=True,
+    )
+
+    assert fetch_calls == [
+        {
+            "symbols": ["SAP.DE"],
+            "period": STATIC_DAILY_PRICE_REFRESH_PERIOD,
+            "start_batch_size": 25,
+            "market": "DE",
+        },
+        {
+            "symbols": DE_KEY_MARKET_PRICE_SYMBOLS,
+            "period": STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
+            "start_batch_size": 25,
+            "market": "DE",
+        },
+    ]
+    assert result["db_fresh_symbols"] == 1
+    assert result["stale_symbols"] == 1
+    assert result["no_history_symbols"] == len(DE_KEY_MARKET_PRICE_SYMBOLS)
+    assert result["history_incomplete_symbols"] == 0
+    assert result["breadth_history_incomplete_symbols"] == 1
+    assert result["breadth_history_missing_through_date_symbols"] == 1
+
+
 def test_static_daily_price_refresh_service_filters_to_selected_market() -> None:
     session_factory = _sqlite_session_factory()
 
