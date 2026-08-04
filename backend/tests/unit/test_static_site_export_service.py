@@ -1435,6 +1435,50 @@ def test_combine_market_artifacts_keeps_current_override_when_newer_fallback_use
     )
 
 
+def test_combine_market_artifacts_rejects_incompatible_fallback_when_current_missing(tmp_path):
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    output_dir = tmp_path / "combined"
+
+    fallback_us_dir = fallback_dir / "static-market-US" / "markets" / "us"
+    (fallback_us_dir / "scan").mkdir(parents=True)
+    (fallback_us_dir / "scan" / "manifest.json").write_text(
+        json.dumps({"rs_formula_version": BALANCED_RS_FORMULA_VERSION}),
+        encoding="utf-8",
+    )
+    fallback_us_entry = {
+        "market": "US",
+        "display_name": "United States",
+        "as_of_date": "2026-08-04",
+        "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+        "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
+    }
+    (fallback_us_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-08-04T22:00:00Z",
+                "market": "US",
+                "entry": fallback_us_entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(NoPublishedStaticMarketArtifact, match="US"):
+        StaticSiteExportService.combine_market_artifacts(
+            current_dir,
+            output_dir,
+            fallback_artifacts_dir=fallback_dir,
+            rs_formula_version_overrides={"US": LEGACY_RS_FORMULA_VERSION},
+        )
+
+    assert not output_dir.exists()
+
+
 def test_combine_market_artifacts_accepts_fallback_when_current_is_empty(tmp_path):
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"

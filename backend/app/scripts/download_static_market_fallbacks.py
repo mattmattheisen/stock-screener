@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Sequence
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 
+from app.services.static_artifact_combiner import (
+    StaticArtifactCombiner,
+    StaticArtifactFormulaError,
+)
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
     StaticMarketArtifactContractError,
@@ -175,6 +180,50 @@ def downloaded_market_is_compatible(
     return True
 
 
+def downloaded_market_matches_required_formula(
+    target_dir: Path,
+    *,
+    market: str,
+    artifact_name: str,
+    run_id: int,
+    required_formula_by_market: Mapping[str, str],
+) -> bool:
+    expected_formula = required_formula_by_market.get(market)
+    if expected_formula is None:
+        return True
+    metadata_paths = sorted(target_dir.rglob(STATIC_MARKET_METADATA_FILENAME))
+    if len(metadata_paths) != 1:
+        warn(
+            f"{artifact_name} from run {run_id} has no unique "
+            f"{STATIC_MARKET_METADATA_FILENAME} for formula validation."
+        )
+        return False
+    metadata_path = metadata_paths[0]
+    try:
+        metadata = read_static_market_manifest(metadata_path, expected_market=market)
+        StaticArtifactCombiner._validate_formula(
+            market=market,
+            source_label="fallback",
+            metadata=metadata,
+            market_dir=metadata_path.parent,
+            expected_formula=expected_formula,
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+        TypeError,
+        RuntimeError,
+        StaticMarketArtifactContractError,
+        StaticArtifactFormulaError,
+    ) as exc:
+        warn(
+            f"{artifact_name} from run {run_id} does not match the requested "
+            f"RS formula {expected_formula!r} for {market} ({exc})."
+        )
+        return False
+    return True
+
+
 def _coerce_manifest_date(value: object) -> date | None:
     if isinstance(value, datetime):
         return value.date()
@@ -234,7 +283,7 @@ def _run_cannot_beat_incumbent(
     return (
         run_upper_bound is not None
         and incumbent_date is not None
-        and run_upper_bound <= incumbent_date
+        and run_upper_bound + timedelta(days=1) <= incumbent_date
     )
 
 
@@ -270,8 +319,14 @@ def download_fallback_artifacts(
     branch_name: str,
     current_dir: Path,
     fallback_dir: Path,
+    required_formula_by_market: Mapping[str, str] | None = None,
 ) -> set[str]:
     fallback_dir.mkdir(parents=True, exist_ok=True)
+    formula_requirements = {
+        str(market).strip().upper(): str(formula).strip()
+        for market, formula in (required_formula_by_market or {}).items()
+        if str(market).strip() and str(formula).strip()
+    }
     query = urlencode(
         {
             "branch": branch_name,
@@ -401,6 +456,16 @@ def download_fallback_artifacts(
                 shutil.rmtree(candidate_dir, ignore_errors=True)
                 continue
 
+            if not downloaded_market_matches_required_formula(
+                candidate_dir,
+                market=market,
+                artifact_name=artifact_name,
+                run_id=int(run_id),
+                required_formula_by_market=formula_requirements,
+            ):
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+                continue
+
             candidate_date = downloaded_market_as_of_date(candidate_dir)
             if market in fallback_markets and not _candidate_is_newer(
                 candidate_date,
@@ -439,6 +504,20 @@ def download_fallback_artifacts(
     return fallback_markets
 
 
+def parse_formula_requirements(raw: str) -> dict[str, str]:
+    try:
+        payload = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise argparse.ArgumentTypeError("expected a JSON object keyed by market")
+    return {
+        str(market).strip().upper(): str(formula).strip()
+        for market, formula in payload.items()
+        if str(market).strip() and str(formula).strip()
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--current-dir", type=Path, required=True)
@@ -446,6 +525,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repo", default=os.environ.get("REPOSITORY", ""))
     parser.add_argument("--current-run-id", default=os.environ.get("CURRENT_RUN_ID", "0"))
     parser.add_argument("--branch", default=os.environ.get("BRANCH_NAME", "main"))
+    parser.add_argument(
+        "--fallback-rs-formula-overrides-json",
+        type=parse_formula_requirements,
+        default={},
+    )
     args = parser.parse_args(argv)
 
     if not args.repo:
@@ -457,6 +541,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         branch_name=args.branch,
         current_dir=args.current_dir,
         fallback_dir=args.fallback_dir,
+        required_formula_by_market=args.fallback_rs_formula_overrides_json,
     )
     return 0
 

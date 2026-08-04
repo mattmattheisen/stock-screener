@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
 import json
-from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
 
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
@@ -174,11 +175,6 @@ class StaticArtifactCombiner:
         selected = dict(current)
         fallback_reasons: dict[str, str] = {}
         for market, fallback_artifact in fallback.items():
-            current_artifact = selected.get(market)
-            if current_artifact is None:
-                selected[market] = fallback_artifact
-                fallback_reasons[market] = "missing"
-                continue
             expected_fallback_formula = fallback_required.get(market)
             if (
                 expected_fallback_formula is not None
@@ -188,6 +184,11 @@ class StaticArtifactCombiner:
                     expected_formula=expected_fallback_formula,
                 )
             ):
+                continue
+            current_artifact = selected.get(market)
+            if current_artifact is None:
+                selected[market] = fallback_artifact
+                fallback_reasons[market] = "missing"
                 continue
             if cls._artifact_is_newer(fallback_artifact, current_artifact):
                 selected[market] = fallback_artifact

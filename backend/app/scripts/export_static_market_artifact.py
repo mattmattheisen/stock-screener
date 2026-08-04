@@ -58,8 +58,11 @@ def _has_price_bundle(*, output_dir: Path, market: str, exit_code: int) -> bool:
     payload = _failure_diagnostic_payload(output_dir=output_dir, market=market)
     if payload is None:
         return False
-    if payload.get("reason") != "market_rs_not_ready":
+    reason = payload.get("reason")
+    if reason == "market_exposure_not_ready":
         return True
+    if reason != "market_rs_not_ready":
+        return False
     reason_code = _failure_diagnostic_reason_code(payload)
     return reason_code is not None and (
         reason_code != MARKET_RS_REASON_CURRENT_ADJUSTED_PRICE_COVERAGE_BELOW_THRESHOLD

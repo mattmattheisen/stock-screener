@@ -133,6 +133,53 @@ def test_export_static_market_artifact_allows_price_bundle_for_exposure_soft_ski
     ] is True
 
 
+@pytest.mark.parametrize("payload", [
+    {
+        "market": "DE",
+        "status": "skipped",
+        "failure_diagnostics": {"error": "missing reason"},
+    },
+    {
+        "market": "DE",
+        "status": "skipped",
+        "reason": "new_unclassified_soft_skip",
+        "failure_diagnostics": {"error": "unknown"},
+    },
+])
+def test_export_static_market_artifact_blocks_price_bundle_for_unknown_soft_skip(
+    monkeypatch,
+    tmp_path: Path,
+    payload: dict,
+) -> None:
+    from app.scripts import export_static_market_artifact
+
+    def fake_export_main(_argv):
+        diagnostics_dir = tmp_path / "diagnostics" / "de"
+        diagnostics_dir.mkdir(parents=True)
+        (diagnostics_dir / "snapshot-failure.json").write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+        return export_static_market_artifact.export_static_site.STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
+
+    monkeypatch.setattr(export_static_market_artifact.export_static_site, "main", fake_export_main)
+
+    result = export_static_market_artifact.main(
+        [
+            "--output-dir",
+            str(tmp_path),
+            "--refresh-daily",
+            "--market",
+            "DE",
+        ]
+    )
+
+    assert result == export_static_market_artifact.export_static_site.STATIC_EXPORT_NO_CURRENT_ARTIFACT_EXIT_CODE
+    assert json.loads((tmp_path / "status" / "de" / "status.json").read_text())[
+        "has_price_bundle"
+    ] is False
+
+
 def test_export_static_market_artifact_allows_price_bundle_for_benchmark_gap(
     monkeypatch,
     tmp_path: Path,

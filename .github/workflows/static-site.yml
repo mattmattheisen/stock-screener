@@ -240,8 +240,14 @@ jobs:
             --market "${{ matrix.market }}" \
             --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES" \
             --rrg-history-dir "$RRG_HISTORY_DIR" 2>&1 | tee "$EXPORT_LOG"
-          status=${PIPESTATUS[0]}
+          pipeline_status=("${PIPESTATUS[@]}")
+          status="${pipeline_status[0]}"
+          log_status="${pipeline_status[1]}"
           set -e
+          if [ "$log_status" -ne 0 ]; then
+            echo "Failed to persist the export log." >&2
+            exit "$log_status"
+          fi
           STATUS_PATH="/tmp/static-data/status/${MARKET_LOWER}/status.json"
           if [ "$status" -eq 78 ]; then
             echo "Market ${{ matrix.market }} is not a trading day; no current static artifact will be uploaded."
@@ -293,15 +299,36 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build daily price bundle
+        id: build-daily-price-bundle
         if: ${{ steps.export-market.outputs.has_price_bundle == 'true' }}
+        env:
+          MARKET: ${{ matrix.market }}
         run: |
           cd backend
+          MIN_SYMBOL_COVERAGE="$(python - <<'PY'
+          import os
+          from app.services.market_rs_inputs import MarketRsInputLoader
+
+          print(MarketRsInputLoader._minimum_current_price_coverage(os.environ["MARKET"]))
+          PY
+          )"
+          set +e
           python -m app.scripts.build_daily_price_bundle \
-            --market "${{ matrix.market }}" \
-            --output-dir /tmp/daily-price
+            --market "$MARKET" \
+            --output-dir /tmp/daily-price \
+            --require-complete \
+            --min-symbol-coverage "$MIN_SYMBOL_COVERAGE"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "Daily price bundle publication skipped for $MARKET because current-session coverage is below the static publish threshold."
+            echo "price_bundle_ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "price_bundle_ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload daily price assets
-        if: ${{ steps.export-market.outputs.has_price_bundle == 'true' }}
+        if: ${{ steps.export-market.outputs.has_price_bundle == 'true' && steps.build-daily-price-bundle.outputs.price_bundle_ready == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -396,11 +423,13 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
           BRANCH_NAME: ${{ github.ref_name }}
+          RS_FORMULA_OVERRIDES: ${{ github.event.inputs.rs_formula_overrides || '{}' }}
         run: |
           cd backend
           python -m app.scripts.download_static_market_fallbacks \
             --current-dir /tmp/static-market-artifacts-current \
-            --fallback-dir /tmp/static-market-artifacts-fallback
+            --fallback-dir /tmp/static-market-artifacts-fallback \
+            --fallback-rs-formula-overrides-json "$RS_FORMULA_OVERRIDES"
 
       - name: Validate market artifacts
         env:
