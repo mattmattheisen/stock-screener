@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
@@ -402,6 +402,8 @@ def _benchmark_resolution_candidates(resolution: Any) -> tuple[str, ...]:
 
 
 def _date_from_iso(value: object) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
     if isinstance(value, date):
         return value
     if not isinstance(value, str):
@@ -732,7 +734,7 @@ def _ensure_breadth_history(
         undercovered_dates = _static_breadth_undercovered_backfill_dates(
             db,
             market=normalized_market,
-            dates=recompute_dates,
+            dates=target_dates,
             as_of_date=as_of_date,
             minimum_validated_stocks=minimum_validated_stocks,
             stats=stats,
@@ -799,18 +801,23 @@ def _static_breadth_undercovered_backfill_dates(
         .all()
     )
     rows_by_date = {row.date: row for row in rows}
-    return [
-        calc_date
-        for calc_date in dates
-        if calc_date == as_of_date
-        and (
-            calc_date not in rows_by_date
-            or not _static_breadth_row_has_accepted_coverage(
-                rows_by_date[calc_date],
+    undercovered_dates: list[date] = []
+    has_seen_valid_history = False
+    for calc_date in sorted(set(dates)):
+        row = rows_by_date.get(calc_date)
+        has_accepted_coverage = (
+            row is not None
+            and _static_breadth_row_has_accepted_coverage(
+                row,
                 minimum_validated_stocks=minimum_validated_stocks,
             )
         )
-    ]
+        if has_accepted_coverage:
+            has_seen_valid_history = True
+            continue
+        if calc_date == as_of_date or has_seen_valid_history:
+            undercovered_dates.append(calc_date)
+    return undercovered_dates
 
 
 def _static_breadth_recompute_dates(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 import json
 from pathlib import Path
 import shutil
@@ -85,9 +85,10 @@ class StaticArtifactCombiner:
             if fallback_artifacts_dir is not None
             else {}
         )
-        selected = dict(current)
-        for market, artifact in fallback.items():
-            selected.setdefault(market, artifact)
+        selected, fallback_reasons = self._select_artifacts(
+            current=current,
+            fallback=fallback,
+        )
 
         if required:
             missing = sorted(
@@ -113,10 +114,16 @@ class StaticArtifactCombiner:
             entries[market] = artifact["entry"]
             warnings.extend(str(item) for item in artifact["metadata"].get("warnings", []))
             if artifact["source_label"] == "fallback":
-                warnings.append(
-                    f"{market} reused from a previous static-site market artifact "
-                    "because the current run produced no artifact."
-                )
+                if fallback_reasons.get(market) == "newer":
+                    warnings.append(
+                        f"{market} reused from a previous static-site market artifact "
+                        "because it is newer than the current artifact."
+                    )
+                else:
+                    warnings.append(
+                        f"{market} reused from a previous static-site market artifact "
+                        "because the current run produced no artifact."
+                    )
         optional_missing = sorted(market for market in optional if market not in entries)
         warnings.extend(
             f"Static export market {market} was omitted from the combined bundle "
@@ -149,6 +156,56 @@ class StaticArtifactCombiner:
             warnings=tuple(warnings),
             manifest=manifest,
         )
+
+    @classmethod
+    def _select_artifacts(
+        cls,
+        *,
+        current: dict[str, dict[str, Any]],
+        fallback: dict[str, dict[str, Any]],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        selected = dict(current)
+        fallback_reasons: dict[str, str] = {}
+        for market, fallback_artifact in fallback.items():
+            current_artifact = selected.get(market)
+            if current_artifact is None:
+                selected[market] = fallback_artifact
+                fallback_reasons[market] = "missing"
+                continue
+            if cls._artifact_is_newer(fallback_artifact, current_artifact):
+                selected[market] = fallback_artifact
+                fallback_reasons[market] = "newer"
+        return selected, fallback_reasons
+
+    @classmethod
+    def _artifact_is_newer(
+        cls,
+        candidate: dict[str, Any],
+        incumbent: dict[str, Any],
+    ) -> bool:
+        candidate_date = cls._artifact_as_of_date(candidate)
+        incumbent_date = cls._artifact_as_of_date(incumbent)
+        return candidate_date is not None and (
+            incumbent_date is None or candidate_date > incumbent_date
+        )
+
+    @staticmethod
+    def _artifact_as_of_date(artifact: dict[str, Any]) -> date | None:
+        entry = artifact.get("entry")
+        value = entry.get("as_of_date") if isinstance(entry, dict) else None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return date.fromisoformat(text.split("T", 1)[0])
+        except ValueError:
+            return None
 
     def _discover(
         self,

@@ -230,7 +230,7 @@ def test_static_site_validation_uses_python_module_not_inline_control_plane() ->
     assert "snapshot-failure.json" not in validation_step
 
 
-def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tmp_path) -> None:
+def test_static_site_fallback_downloader_fetches_current_markets_for_date_comparison(tmp_path) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
     current_us_dir = current_dir / "static-market-US" / "markets" / "us"
@@ -307,12 +307,15 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
         json.loads(line)
         for line in downloads_log.read_text(encoding="utf-8").splitlines()
     ]
-    assert downloads == [{"artifact": "static-market-TW"}]
+    assert downloads == [
+        {"artifact": "static-market-TW"},
+        {"artifact": "static-market-US"},
+    ]
     assert not (fallback_dir / "static-market-diagnostics-CN").exists()
     assert not (fallback_dir / "static-market-status-CN").exists()
-    assert not (fallback_dir / "static-market-US").exists()
     assert not (fallback_dir / "static-market-HK").exists()
     assert (fallback_dir / "static-market-TW" / "manifest.market.json").exists()
+    assert (fallback_dir / "static-market-US" / "manifest.market.json").exists()
     assert "exit 7. Details: stderr: download denied for HK" in result.stdout
 
 

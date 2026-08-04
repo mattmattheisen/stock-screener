@@ -258,7 +258,10 @@ def download_fallback_artifacts(
             market = market_from_static_market_artifact_name(artifact_name)
             if not market:
                 continue
-            if market in current_markets or market in fallback_markets:
+            # Download fallback artifacts for current markets too; the combiner
+            # compares dates and keeps a newer last-known-good artifact when a
+            # cache-only current run had to rewind.
+            if market in fallback_markets:
                 continue
 
             target_dir = fallback_dir / artifact_name
