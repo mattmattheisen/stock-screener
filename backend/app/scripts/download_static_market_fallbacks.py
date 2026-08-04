@@ -180,6 +180,45 @@ def downloaded_market_is_compatible(
     return True
 
 
+def downloaded_market_has_advertised_assets(
+    target_dir: Path,
+    *,
+    market: str,
+    artifact_name: str,
+    run_id: int,
+) -> bool:
+    metadata_paths = sorted(target_dir.rglob(STATIC_MARKET_METADATA_FILENAME))
+    if len(metadata_paths) != 1:
+        warn(
+            f"{artifact_name} from run {run_id} has no unique "
+            f"{STATIC_MARKET_METADATA_FILENAME} for asset validation."
+        )
+        return False
+
+    metadata_path = metadata_paths[0]
+    try:
+        metadata = read_static_market_manifest(metadata_path, expected_market=market)
+        entry = metadata.get("entry")
+        if not isinstance(entry, dict):
+            return True
+        StaticArtifactCombiner._validate_advertised_assets(
+            market=market,
+            source_label="fallback",
+            entry=entry,
+            market_dir=metadata_path.parent,
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+        TypeError,
+        StaticMarketArtifactContractError,
+        StaticArtifactFormulaError,
+    ) as exc:
+        warn(f"{artifact_name} from run {run_id} has invalid advertised assets ({exc}).")
+        return False
+    return True
+
+
 def downloaded_market_matches_required_formula(
     target_dir: Path,
     *,
@@ -448,6 +487,15 @@ def download_fallback_artifacts(
                 continue
 
             if not downloaded_market_is_compatible(
+                candidate_dir,
+                market=market,
+                artifact_name=artifact_name,
+                run_id=int(run_id),
+            ):
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+                continue
+
+            if not downloaded_market_has_advertised_assets(
                 candidate_dir,
                 market=market,
                 artifact_name=artifact_name,

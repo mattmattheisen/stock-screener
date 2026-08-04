@@ -587,6 +587,82 @@ def test_static_site_fallback_downloader_keeps_formula_compatible_candidate(tmp_
     assert manifest["entry"]["rs_formula_version"] == "legacy-linear-v1"
 
 
+def test_static_site_fallback_downloader_skips_damaged_advertised_assets(tmp_path) -> None:
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    current_us_dir = current_dir / "static-market-US" / "markets" / "us"
+    current_us_dir.mkdir(parents=True)
+    (current_us_dir / "manifest.market.json").write_text(
+        json.dumps(
+            {
+                "market": "US",
+                "schema_version": "static-site-v3",
+                "entry": {"as_of_date": "2026-08-04"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    _write_fake_gh(
+        fake_gh,
+        """\
+        import json
+        import pathlib
+        import sys
+
+        args = sys.argv[1:]
+        if args[:3] == ["api", "--paginate", "--slurp"] and "actions/workflows/static-site.yml/runs" in args[3]:
+            print(json.dumps([{"workflow_runs": [
+                {"id": 999, "created_at": "2026-08-05T00:00:00Z"},
+                {"id": 333, "created_at": "2026-08-04T00:00:00Z"}
+            ]}]))
+        elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/333/artifacts" in args[3]:
+            print(json.dumps([{"artifacts": [
+                {"name": "static-market-US", "expired": False}
+            ]}]))
+        elif args[:2] == ["run", "download"]:
+            target_dir = pathlib.Path(args[args.index("--dir") + 1])
+            market_dir = target_dir / "markets" / "us"
+            market_dir.mkdir(parents=True, exist_ok=True)
+            (market_dir / "manifest.market.json").write_text(json.dumps({
+                "market": "US",
+                "schema_version": "static-site-v3",
+                "entry": {
+                    "market": "US",
+                    "as_of_date": "2026-08-04",
+                    "features": {"groups": True},
+                },
+            }))
+        else:
+            print(f"unexpected gh args: {args}", file=sys.stderr)
+            sys.exit(2)
+        """,
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.scripts.download_static_market_fallbacks",
+            "--current-dir",
+            str(current_dir),
+            "--fallback-dir",
+            str(fallback_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_fallback_downloader_env(fake_bin),
+        cwd=ROOT / "backend",
+    )
+
+    assert not (fallback_dir / "static-market-US").exists()
+    assert "advertises GROUPS but groups.json is absent" in result.stdout
+
+
 def test_static_site_fallback_downloader_skips_incompatible_schema_and_keeps_searching(tmp_path) -> None:
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
