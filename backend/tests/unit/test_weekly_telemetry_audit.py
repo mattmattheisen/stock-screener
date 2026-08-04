@@ -41,6 +41,7 @@ from app.services.telemetry.weekly_audit import (
     AUDIT_WINDOW_DAYS,
     REPORT_SCHEMA_VERSION,
     _content_hash,
+    _float_or_none,
     render_json,
     render_markdown,
     run_weekly_audit,
@@ -84,6 +85,14 @@ def _alert(**kwargs):
 
 
 _NOW = datetime(2026, 4, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestMetricValueNormalization:
+    def test_non_finite_rollup_values_are_treated_as_missing(self):
+        assert _float_or_none("nan") is None
+        assert _float_or_none(float("inf")) is None
+        assert _float_or_none("-inf") is None
+        assert _float_or_none("1.25") == pytest.approx(1.25)
 
 
 class TestRollupFreshnessLag:
@@ -325,7 +334,7 @@ class TestAlertRollup:
             AlertSeverity.CRITICAL: 1,
         }
 
-    def test_breached_rollups_are_evaluated_before_alert_counts(
+    def test_breached_rollups_are_reported_without_mutating_live_alerts(
         self,
         telemetry_session,
         monkeypatch,
@@ -352,61 +361,21 @@ class TestAlertRollup:
         )
         telemetry_session.commit()
 
-        evaluated_values: list[dict] = []
-
-        def _fake_evaluate_metric_values(db, values, *, observed_at=None):
-            assert observed_at == _NOW
-            evaluated_values.extend(values)
-            db.add_all(
-                [
-                    _alert(
-                        market="US",
-                        metric_key=MetricKey.FRESHNESS_LAG,
-                        severity=AlertSeverity.WARNING,
-                        state=AlertState.OPEN,
-                        title="opened by audit",
-                        opened_at=_NOW,
-                    ),
-                    _alert(
-                        market="HK",
-                        metric_key=MetricKey.UNIVERSE_DRIFT,
-                        severity=AlertSeverity.CRITICAL,
-                        state=AlertState.OPEN,
-                        title="opened by audit",
-                        opened_at=_NOW,
-                    ),
-                ]
+        def _unexpected_evaluate_metric_values(*_args, **_kwargs):
+            raise AssertionError(
+                "weekly audit must not mutate live alert rows from rollups"
             )
-            db.commit()
-            return []
 
         monkeypatch.setattr(
             weekly_audit,
             "evaluate_metric_values",
-            _fake_evaluate_metric_values,
+            _unexpected_evaluate_metric_values,
             raising=False,
         )
 
         report = run_weekly_audit(telemetry_session, now=_NOW)
 
-        us_freshness_value = next(
-            value
-            for value in evaluated_values
-            if (
-                value["market"] == "US"
-                and value["metric_key"] == MetricKey.FRESHNESS_LAG
-            )
-        )
-        hk_drift_value = next(
-            value
-            for value in evaluated_values
-            if (
-                value["market"] == "HK"
-                and value["metric_key"] == MetricKey.UNIVERSE_DRIFT
-            )
-        )
-        assert us_freshness_value["value"] == pytest.approx(10800.0)
-        assert hk_drift_value["value"] == pytest.approx(1.0)
+        assert telemetry_session.query(MarketTelemetryAlert).count() == 0
 
         us_alerts = next(a for a in report.alerts if a.market == "US")
         hk_alerts = next(a for a in report.alerts if a.market == "HK")

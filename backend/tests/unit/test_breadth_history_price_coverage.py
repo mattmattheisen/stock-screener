@@ -4,7 +4,7 @@ from datetime import date
 
 from sqlalchemy import event
 
-from app.models.stock import StockPrice
+from app.models.stock import StockFundamental, StockPrice
 
 
 class _Calendar:
@@ -33,6 +33,32 @@ class _Calendar:
         return {
             0: as_of_date,
             69: date(2026, 2, 2),
+        }
+
+
+class _WarmupCalendar:
+    def trading_days(self, market, start, end):
+        assert market == "IN"
+        return [
+            session
+            for session in (
+                date(2026, 1, 2),
+                date(2026, 1, 5),
+                date(2026, 1, 6),
+                date(2026, 1, 7),
+                date(2026, 1, 8),
+            )
+            if start <= session <= end
+        ]
+
+    @staticmethod
+    def session_anchors(market, as_of_date, *, offsets):
+        assert market == "IN"
+        assert as_of_date == date(2026, 1, 6)
+        assert tuple(offsets) == (2,)
+        return {
+            0: as_of_date,
+            2: date(2026, 1, 2),
         }
 
 
@@ -169,6 +195,7 @@ def test_breadth_history_price_coverage_uses_observed_bars_not_every_session(
 
     universe_session.add_all(
         [
+            StockFundamental(symbol="LATE.NS", ipo_date=required_dates[-3]),
             *[_price("LATE.NS", day, 100.0) for day in required_dates[-3:]],
             *[_price("NOASOF.NS", day, 50.0) for day in required_dates[:3]],
             *[_price("SHORT.NS", day, 25.0) for day in required_dates[-2:]],
@@ -190,6 +217,58 @@ def test_breadth_history_price_coverage_uses_observed_bars_not_every_session(
         "LATE.NS": 3,
         "NOASOF.NS": 3,
         "SHORT.NS": 2,
+    }
+
+
+def test_breadth_history_price_coverage_requires_warmup_by_oldest_target_session(
+    universe_session,
+) -> None:
+    from app.services.breadth_history_price_coverage import (
+        BreadthHistoryPriceCoverageService,
+    )
+
+    service = BreadthHistoryPriceCoverageService(
+        calendar_service=_WarmupCalendar(),
+        lookback_days=2,
+        warmup_sessions=2,
+    )
+    as_of_date = date(2026, 1, 8)
+
+    universe_session.add_all(
+        [
+            *[
+                _price("READY.NS", day, 100.0)
+                for day in (
+                    date(2026, 1, 2),
+                    date(2026, 1, 5),
+                    date(2026, 1, 6),
+                    date(2026, 1, 8),
+                )
+            ],
+            *[
+                _price("RECENT.NS", day, 50.0)
+                for day in (
+                    date(2026, 1, 6),
+                    date(2026, 1, 7),
+                    date(2026, 1, 8),
+                )
+            ],
+        ]
+    )
+    universe_session.commit()
+
+    coverage = service.classify(
+        universe_session,
+        market="IN",
+        through_date=as_of_date,
+        symbols=("READY.NS", "RECENT.NS"),
+    )
+
+    assert coverage.complete_symbols == ("READY.NS",)
+    assert coverage.incomplete_symbols == ("RECENT.NS",)
+    assert coverage.available_price_date_counts == {
+        "READY.NS": 4,
+        "RECENT.NS": 3,
     }
 
 

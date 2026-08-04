@@ -6,10 +6,10 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.models.stock import StockPrice
+from app.models.stock import StockFundamental, StockPrice
 from app.services.market_calendar_service import MarketCalendarService
 
 
@@ -29,7 +29,15 @@ class BreadthHistoryPriceCoverage:
 @dataclass(frozen=True)
 class _SymbolPriceCoverage:
     valid_dates: int
+    valid_dates_through_oldest_target: int
     latest_date: date | None
+
+
+@dataclass(frozen=True)
+class _RequiredPriceDateWindow:
+    price_dates: frozenset[date]
+    warmup_start_date: date | None
+    oldest_target_date: date | None
 
 
 class BreadthHistoryPriceCoverageService:
@@ -54,6 +62,17 @@ class BreadthHistoryPriceCoverageService:
         market: str,
         through_date: date,
     ) -> frozenset[date]:
+        return self._required_price_date_window(
+            market=market,
+            through_date=through_date,
+        ).price_dates
+
+    def _required_price_date_window(
+        self,
+        *,
+        market: str,
+        through_date: date,
+    ) -> _RequiredPriceDateWindow:
         normalized_market = str(market or "").strip().upper()
         target_start = through_date - timedelta(days=self._lookback_days)
         target_dates = self._calendar_service.trading_days(
@@ -62,24 +81,33 @@ class BreadthHistoryPriceCoverageService:
             through_date,
         )
         if not target_dates:
-            return frozenset()
+            return _RequiredPriceDateWindow(
+                price_dates=frozenset(),
+                warmup_start_date=None,
+                oldest_target_date=None,
+            )
 
+        oldest_target_date = target_dates[0]
         if self._warmup_sessions <= 0:
-            warmup_start = target_dates[0]
+            warmup_start = oldest_target_date
         else:
             anchors = self._calendar_service.session_anchors(
                 normalized_market,
-                target_dates[0],
+                oldest_target_date,
                 offsets=(self._warmup_sessions,),
             )
             warmup_start = anchors[self._warmup_sessions]
 
-        return frozenset(
-            self._calendar_service.trading_days(
-                normalized_market,
-                warmup_start,
-                through_date,
-            )
+        return _RequiredPriceDateWindow(
+            price_dates=frozenset(
+                self._calendar_service.trading_days(
+                    normalized_market,
+                    warmup_start,
+                    through_date,
+                )
+            ),
+            warmup_start_date=warmup_start,
+            oldest_target_date=oldest_target_date,
         )
 
     def classify(
@@ -95,14 +123,19 @@ class BreadthHistoryPriceCoverageService:
             dict.fromkeys(str(symbol or "").strip().upper() for symbol in symbols)
         )
         normalized_symbols = tuple(symbol for symbol in normalized_symbols if symbol)
-        price_dates = frozenset(
-            required_price_dates
-            if required_price_dates is not None
-            else self.required_price_dates(
+        if required_price_dates is None:
+            price_date_window = self._required_price_date_window(
                 market=market,
                 through_date=through_date,
             )
-        )
+            price_dates = price_date_window.price_dates
+            warmup_start_date = price_date_window.warmup_start_date
+            oldest_target_date = price_date_window.oldest_target_date
+        else:
+            price_dates = frozenset(required_price_dates)
+            warmup_start_date = None
+            oldest_target_date = None
+
         if not price_dates:
             return BreadthHistoryPriceCoverage(
                 complete_symbols=normalized_symbols,
@@ -115,29 +148,45 @@ class BreadthHistoryPriceCoverageService:
             db,
             symbols=normalized_symbols,
             required_price_dates=price_dates,
+            oldest_target_date=oldest_target_date,
         )
         required_count = len(price_dates)
+        required_count_through_oldest_target = (
+            sum(1 for day in price_dates if day <= oldest_target_date)
+            if oldest_target_date is not None
+            else required_count
+        )
         minimum_observations = min(
-            required_count,
+            required_count_through_oldest_target,
             max(1, self._warmup_sessions + 1),
         )
+        default_coverage = _SymbolPriceCoverage(
+            valid_dates=0,
+            valid_dates_through_oldest_target=0,
+            latest_date=None,
+        )
+        ipo_dates = (
+            self._ipo_dates(db, normalized_symbols)
+            if warmup_start_date is not None and oldest_target_date is not None
+            else {}
+        )
         available_counts = {
-            symbol: coverage_by_symbol.get(
-                symbol,
-                _SymbolPriceCoverage(valid_dates=0, latest_date=None),
-            ).valid_dates
+            symbol: coverage_by_symbol.get(symbol, default_coverage).valid_dates
             for symbol in normalized_symbols
         }
         incomplete = tuple(
             symbol
             for symbol in normalized_symbols
             if (
-                available_counts[symbol] < minimum_observations
-                or coverage_by_symbol.get(
-                    symbol,
-                    _SymbolPriceCoverage(valid_dates=0, latest_date=None),
-                ).latest_date
+                coverage_by_symbol.get(symbol, default_coverage).latest_date
                 != through_date
+                or not self._has_required_observations(
+                    coverage_by_symbol.get(symbol, default_coverage),
+                    minimum_observations=minimum_observations,
+                    warmup_start_date=warmup_start_date,
+                    oldest_target_date=oldest_target_date,
+                    ipo_date=ipo_dates.get(symbol),
+                )
             )
         )
         incomplete_set = set(incomplete)
@@ -177,14 +226,21 @@ class BreadthHistoryPriceCoverageService:
         *,
         symbols: Sequence[str],
         required_price_dates: Collection[date],
+        oldest_target_date: date | None,
     ) -> dict[str, _SymbolPriceCoverage]:
         coverage_by_symbol: dict[str, _SymbolPriceCoverage] = {}
+        valid_dates_through_oldest_target = (
+            func.sum(case((StockPrice.date <= oldest_target_date, 1), else_=0))
+            if oldest_target_date is not None
+            else func.count(StockPrice.date)
+        )
         for chunk_start in range(0, len(symbols), 500):
             chunk_symbols = symbols[chunk_start : chunk_start + 500]
             rows = (
                 db.query(
                     StockPrice.symbol,
                     func.count(StockPrice.date),
+                    valid_dates_through_oldest_target,
                     func.max(StockPrice.date),
                 )
                 .filter(
@@ -195,12 +251,54 @@ class BreadthHistoryPriceCoverageService:
                 .group_by(StockPrice.symbol)
                 .all()
             )
-            for symbol, valid_dates, latest_date in rows:
+            for (
+                symbol,
+                valid_dates,
+                warmup_valid_dates,
+                latest_date,
+            ) in rows:
                 coverage_by_symbol[str(symbol).upper()] = _SymbolPriceCoverage(
                     valid_dates=int(valid_dates or 0),
+                    valid_dates_through_oldest_target=int(warmup_valid_dates or 0),
                     latest_date=latest_date,
                 )
         return coverage_by_symbol
+
+    @staticmethod
+    def _has_required_observations(
+        coverage: _SymbolPriceCoverage,
+        *,
+        minimum_observations: int,
+        warmup_start_date: date | None,
+        oldest_target_date: date | None,
+        ipo_date: date | None,
+    ) -> bool:
+        if oldest_target_date is None:
+            return coverage.valid_dates >= minimum_observations
+        if coverage.valid_dates_through_oldest_target >= minimum_observations:
+            return True
+        if ipo_date is None or warmup_start_date is None:
+            return False
+        if ipo_date <= warmup_start_date:
+            return False
+        return coverage.valid_dates >= minimum_observations
+
+    @staticmethod
+    def _ipo_dates(db: Session, symbols: Sequence[str]) -> dict[str, date]:
+        ipo_dates: dict[str, date] = {}
+        for chunk_start in range(0, len(symbols), 500):
+            chunk_symbols = symbols[chunk_start : chunk_start + 500]
+            rows = (
+                db.query(StockFundamental.symbol, StockFundamental.ipo_date)
+                .filter(
+                    StockFundamental.symbol.in_(chunk_symbols),
+                    StockFundamental.ipo_date.isnot(None),
+                )
+                .all()
+            )
+            for symbol, ipo_date in rows:
+                ipo_dates[str(symbol).upper()] = ipo_date
+        return ipo_dates
 
 
 __all__ = [

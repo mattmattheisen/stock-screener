@@ -74,6 +74,14 @@ _METRIC_RULES: Dict[str, Tuple[Callable[[Dict[str, Any]], Optional[float]], str]
 }
 
 
+def _direction_for_metric(metric_key: str) -> Optional[str]:
+    if metric_key in _METRIC_RULES:
+        return _METRIC_RULES[metric_key][1]
+    if metric_key == MetricKey.EXTRACTION_SUCCESS:
+        return "lo"
+    return None
+
+
 def _classify(value: float, levels: Levels, direction: str) -> Optional[str]:
     """Return ``critical``, ``warning``, or None based on direction + thresholds."""
     crit = levels.get("critical")
@@ -89,6 +97,19 @@ def _classify(value: float, levels: Levels, direction: str) -> Optional[str]:
         if warn is not None and value <= warn:
             return AlertSeverity.WARNING
     return None
+
+
+def classify_metric_value(
+    metric_key: str,
+    market: str,
+    value: float,
+) -> Optional[str]:
+    """Classify a scalar metric gauge without mutating alert lifecycle rows."""
+    levels = thresholds_for(metric_key, market)
+    direction = _direction_for_metric(metric_key)
+    if not levels or direction is None:
+        return None
+    return _classify(value, levels, direction)
 
 
 def _format_alert(
@@ -123,14 +144,8 @@ def _evaluate_one(
     INSERT/UPDATE on the session.
     """
     levels = thresholds_for(metric_key, market)
-    if not levels:
-        return None
-
-    if metric_key in _METRIC_RULES:
-        direction = _METRIC_RULES[metric_key][1]
-    elif metric_key == MetricKey.EXTRACTION_SUCCESS:
-        direction = "lo"
-    else:
+    direction = _direction_for_metric(metric_key)
+    if not levels or direction is None:
         return None
 
     if value is None:

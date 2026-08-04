@@ -5,9 +5,10 @@ and produces a tamper-evident governance report (JSON + Markdown + SHA-256) for
 historical traceability.
 
 Design:
-- **Database-scoped evaluation**: reads telemetry events, promotes threshold
-  breaches into alert rows, then summarizes the alert lifecycle from the same
-  session. The Celery task wrapper handles filesystem + scheduling.
+- **Read-only database scope**: reads telemetry events + existing live alert
+  lifecycle rows, then derives report-only rollup breach counts without
+  opening/closing live alerts. Current-summary evaluation owns alert hysteresis.
+  The Celery task wrapper handles filesystem + scheduling.
 - **Self-contained snapshot per run**: the raw event log has 15d retention,
   so each weekly report must stand alone — no reliance on prior reports.
 - **Signed artifact = SHA-256 over canonical JSON**: cryptographic signing with
@@ -21,6 +22,7 @@ Design:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -30,9 +32,9 @@ from sqlalchemy.orm import Session
 from ...services.governance.signed_artifact import compute_content_hash
 from ...utils.datetime_utils import as_aware_utc
 from ...models.market_telemetry import MarketTelemetryEvent
-from ...models.market_telemetry_alert import MarketTelemetryAlert, AlertState
+from ...models.market_telemetry_alert import AlertState, MarketTelemetryAlert
 from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS
-from .alert_evaluator import evaluate_metric_values
+from .alert_evaluator import classify_metric_value
 from .alert_thresholds import OWNERS, THRESHOLDS
 from .schema import (
     MetricKey,
@@ -96,7 +98,6 @@ def run_weekly_audit(
 ) -> GovernanceReport:
     """Produce a ``GovernanceReport`` for the 7 days ending at ``now``.
 
-    The function may commit alert lifecycle changes on the passed session.
     ``now`` is injectable so tests can pin the window deterministically.
     """
     generated_at = as_aware_utc(now) or datetime.now(timezone.utc)
@@ -111,12 +112,14 @@ def run_weekly_audit(
                 _summarize_metric(db, market, metric_key, window_start, generated_at)
             )
 
-    evaluate_metric_values(
-        db,
-        _metric_values_from_rollups(metrics),
-        observed_at=generated_at,
-    )
-    alerts = [_summarize_alerts(db, m, window_start, generated_at) for m in markets]
+    rollup_breach_counts = _rollup_breach_counts(metrics)
+    alerts = [
+        _with_report_only_rollup_breaches(
+            _summarize_alerts(db, m, window_start, generated_at),
+            rollup_breach_counts.get(m, {}),
+        )
+        for m in markets
+    ]
 
     report = GovernanceReport(
         report_schema_version=REPORT_SCHEMA_VERSION,
@@ -148,9 +151,10 @@ def _float_or_none(value: Any) -> Optional[float]:
     if value is None:
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _metric_values_from_rollups(
@@ -188,6 +192,52 @@ def _alert_value_from_rollup(metric: MarketMetricSummary) -> Optional[float]:
     if metric.metric_key == MetricKey.FIELD_COVERAGE:
         return _float_or_none(rollup.get("worst_unsupported_ratio"))
     return None
+
+
+def _rollup_breach_counts(
+    metrics: List[MarketMetricSummary],
+) -> Dict[str, Dict[str, int]]:
+    """Return report-only severity counts for rollups crossing thresholds.
+
+    Weekly rollups are aggregates over a seven-day window, not point-in-time
+    gauge observations. They belong in the governance artifact, but replaying
+    them into live alert hysteresis would close or open alerts using synthetic
+    timestamps and aggregate values.
+    """
+    counts: Dict[str, Dict[str, int]] = {}
+    for metric_value in _metric_values_from_rollups(metrics):
+        market = str(metric_value.get("market") or SHARED_SENTINEL)
+        metric_key = str(metric_value.get("metric_key") or "")
+        value = metric_value.get("value")
+        if value is None:
+            continue
+        severity = classify_metric_value(metric_key, market, value)
+        if severity is None:
+            continue
+        by_severity = counts.setdefault(market, {})
+        by_severity[severity] = by_severity.get(severity, 0) + 1
+    return counts
+
+
+def _with_report_only_rollup_breaches(
+    persisted: AlertRollup,
+    rollup_breaches_by_severity: Dict[str, int],
+) -> AlertRollup:
+    if not rollup_breaches_by_severity:
+        return persisted
+
+    breach_count = sum(rollup_breaches_by_severity.values())
+    by_severity = dict(persisted.by_severity)
+    for severity, count in rollup_breaches_by_severity.items():
+        by_severity[severity] = by_severity.get(severity, 0) + count
+
+    return AlertRollup(
+        market=persisted.market,
+        opened=persisted.opened + breach_count,
+        closed=persisted.closed,
+        still_active=persisted.still_active + breach_count,
+        by_severity=by_severity,
+    )
 
 
 def _summarize_metric(
