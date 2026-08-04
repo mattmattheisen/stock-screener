@@ -1,24 +1,18 @@
 {
   "alerts": [
     {
-      "by_severity": {
-        "critical": 1,
-        "warning": 1
-      },
+      "by_severity": {},
       "closed": 0,
       "market": "US",
-      "opened": 2,
-      "still_active": 2
+      "opened": 0,
+      "still_active": 0
     },
     {
-      "by_severity": {
-        "critical": 1,
-        "warning": 1
-      },
+      "by_severity": {},
       "closed": 0,
       "market": "HK",
-      "opened": 2,
-      "still_active": 2
+      "opened": 0,
+      "still_active": 0
     },
     {
       "by_severity": {},
@@ -98,7 +92,7 @@
       "still_active": 0
     }
   ],
-  "content_hash": "f466a06e587306b4d19447725ec86ccb786a1de9500b7d1099e074b7eec53863",
+  "content_hash": "b645efd962fba9b0a1602883e6ef48d0f25ed61ecff18cec7507e21741ab620a",
   "generated_at": "2026-08-02T09:00:00.685182+00:00",
   "markets": [
     "US",
@@ -862,6 +856,32 @@
   },
   "payload_schema_version": 1,
   "report_schema_version": 1,
+  "rollup_breaches": [
+    {
+      "market": "US",
+      "metric_key": "freshness_lag",
+      "severity": "warning",
+      "value": 8704.132586240768
+    },
+    {
+      "market": "US",
+      "metric_key": "universe_drift",
+      "severity": "critical",
+      "value": 1.0
+    },
+    {
+      "market": "HK",
+      "metric_key": "universe_drift",
+      "severity": "critical",
+      "value": 1.0
+    },
+    {
+      "market": "HK",
+      "metric_key": "field_coverage",
+      "severity": "warning",
+      "value": 0.18181818181818182
+    }
+  ],
   "thresholds_snapshot": {
     "benchmark_age": {
       "AU": {

@@ -379,12 +379,62 @@ class TestAlertRollup:
 
         us_alerts = next(a for a in report.alerts if a.market == "US")
         hk_alerts = next(a for a in report.alerts if a.market == "HK")
+        assert us_alerts.opened == 0
+        assert us_alerts.still_active == 0
+        assert us_alerts.by_severity == {}
+        assert hk_alerts.opened == 0
+        assert hk_alerts.still_active == 0
+        assert hk_alerts.by_severity == {}
+
+        rollup_breaches = {
+            (breach.market, breach.metric_key): breach
+            for breach in report.rollup_breaches
+        }
+        us_freshness = rollup_breaches[("US", MetricKey.FRESHNESS_LAG)]
+        hk_drift = rollup_breaches[("HK", MetricKey.UNIVERSE_DRIFT)]
+        assert us_freshness.severity == AlertSeverity.WARNING
+        assert us_freshness.value == pytest.approx(10800.0)
+        assert hk_drift.severity == AlertSeverity.CRITICAL
+        assert hk_drift.value == pytest.approx(1.0)
+
+    def test_rollup_breaches_do_not_double_count_existing_live_alerts(
+        self,
+        telemetry_session,
+    ):
+        telemetry_session.add_all(
+            [
+                _event(
+                    "US",
+                    MetricKey.FRESHNESS_LAG,
+                    freshness_lag_payload(
+                        last_refresh_at_epoch=(_NOW - timedelta(hours=3)).timestamp(),
+                        source="prices",
+                        symbols_refreshed=100,
+                    ),
+                    _NOW - timedelta(hours=1),
+                ),
+                _alert(
+                    market="US",
+                    metric_key=MetricKey.FRESHNESS_LAG,
+                    severity=AlertSeverity.WARNING,
+                    state=AlertState.OPEN,
+                    title="existing live alert",
+                    opened_at=_NOW - timedelta(hours=2),
+                ),
+            ]
+        )
+        telemetry_session.commit()
+
+        report = run_weekly_audit(telemetry_session, now=_NOW)
+
+        us_alerts = next(a for a in report.alerts if a.market == "US")
         assert us_alerts.opened == 1
         assert us_alerts.still_active == 1
         assert us_alerts.by_severity == {AlertSeverity.WARNING: 1}
-        assert hk_alerts.opened == 1
-        assert hk_alerts.still_active == 1
-        assert hk_alerts.by_severity == {AlertSeverity.CRITICAL: 1}
+        assert [
+            (breach.market, breach.metric_key, breach.severity)
+            for breach in report.rollup_breaches
+        ] == [("US", MetricKey.FRESHNESS_LAG, AlertSeverity.WARNING)]
 
 
 class TestContentHash:

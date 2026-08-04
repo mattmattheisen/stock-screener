@@ -77,6 +77,15 @@ class AlertRollup:
 
 
 @dataclass
+class RollupBreach:
+    """Report-only threshold breach detected from a weekly metric rollup."""
+    market: str
+    metric_key: str
+    severity: str
+    value: float
+
+
+@dataclass
 class GovernanceReport:
     report_schema_version: int
     payload_schema_version: int
@@ -86,6 +95,7 @@ class GovernanceReport:
     markets: List[str]
     metrics: List[MarketMetricSummary]
     alerts: List[AlertRollup]
+    rollup_breaches: List[RollupBreach]
     thresholds_snapshot: Dict[str, Dict[str, Dict[str, float]]]
     owners_snapshot: Dict[str, str]
     content_hash: Optional[str] = None
@@ -112,14 +122,8 @@ def run_weekly_audit(
                 _summarize_metric(db, market, metric_key, window_start, generated_at)
             )
 
-    rollup_breach_counts = _rollup_breach_counts(metrics)
-    alerts = [
-        _with_report_only_rollup_breaches(
-            _summarize_alerts(db, m, window_start, generated_at),
-            rollup_breach_counts.get(m, {}),
-        )
-        for m in markets
-    ]
+    rollup_breaches = _rollup_breaches(metrics)
+    alerts = [_summarize_alerts(db, m, window_start, generated_at) for m in markets]
 
     report = GovernanceReport(
         report_schema_version=REPORT_SCHEMA_VERSION,
@@ -130,6 +134,7 @@ def run_weekly_audit(
         markets=list(markets),
         metrics=metrics,
         alerts=alerts,
+        rollup_breaches=rollup_breaches,
         thresholds_snapshot=_serialize_thresholds(),
         owners_snapshot=dict(OWNERS),
     )
@@ -194,17 +199,17 @@ def _alert_value_from_rollup(metric: MarketMetricSummary) -> Optional[float]:
     return None
 
 
-def _rollup_breach_counts(
+def _rollup_breaches(
     metrics: List[MarketMetricSummary],
-) -> Dict[str, Dict[str, int]]:
-    """Return report-only severity counts for rollups crossing thresholds.
+) -> List[RollupBreach]:
+    """Return report-only rollups crossing thresholds.
 
     Weekly rollups are aggregates over a seven-day window, not point-in-time
     gauge observations. They belong in the governance artifact, but replaying
     them into live alert hysteresis would close or open alerts using synthetic
     timestamps and aggregate values.
     """
-    counts: Dict[str, Dict[str, int]] = {}
+    breaches: List[RollupBreach] = []
     for metric_value in _metric_values_from_rollups(metrics):
         market = str(metric_value.get("market") or SHARED_SENTINEL)
         metric_key = str(metric_value.get("metric_key") or "")
@@ -214,30 +219,15 @@ def _rollup_breach_counts(
         severity = classify_metric_value(metric_key, market, value)
         if severity is None:
             continue
-        by_severity = counts.setdefault(market, {})
-        by_severity[severity] = by_severity.get(severity, 0) + 1
-    return counts
-
-
-def _with_report_only_rollup_breaches(
-    persisted: AlertRollup,
-    rollup_breaches_by_severity: Dict[str, int],
-) -> AlertRollup:
-    if not rollup_breaches_by_severity:
-        return persisted
-
-    breach_count = sum(rollup_breaches_by_severity.values())
-    by_severity = dict(persisted.by_severity)
-    for severity, count in rollup_breaches_by_severity.items():
-        by_severity[severity] = by_severity.get(severity, 0) + count
-
-    return AlertRollup(
-        market=persisted.market,
-        opened=persisted.opened + breach_count,
-        closed=persisted.closed,
-        still_active=persisted.still_active + breach_count,
-        by_severity=by_severity,
-    )
+        breaches.append(
+            RollupBreach(
+                market=market,
+                metric_key=metric_key,
+                severity=severity,
+                value=value,
+            )
+        )
+    return breaches
 
 
 def _summarize_metric(
@@ -509,6 +499,20 @@ def render_markdown(report: GovernanceReport) -> str:
     lines.append(f"- Payload schema version: {report.payload_schema_version}")
     lines.append(f"- Window: {report.window_start} → {report.window_end}")
     lines.append(f"- Content hash (SHA-256): `{report.content_hash}`")
+    lines.append("")
+
+    lines.append("## Rollup Breaches")
+    lines.append("")
+    lines.append("| Market | Metric | Severity | Value |")
+    lines.append("|---|---|---|---:|")
+    if report.rollup_breaches:
+        for breach in report.rollup_breaches:
+            lines.append(
+                f"| {breach.market} | {breach.metric_key} | "
+                f"{breach.severity} | {breach.value:.4f} |"
+            )
+    else:
+        lines.append("| — | — | — | — |")
     lines.append("")
 
     lines.append("## Alerts")
