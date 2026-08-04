@@ -230,6 +230,7 @@ jobs:
         run: |
           cd backend
           set +e
+          EXPORT_LOG="$(mktemp)"
           python -m app.scripts.export_static_market_artifact \
             --output-dir /tmp/static-data \
             --refresh-daily \
@@ -238,28 +239,37 @@ jobs:
             --skip-fundamentals-refresh \
             --market "${{ matrix.market }}" \
             --rs-formula-overrides-json "$RS_FORMULA_OVERRIDES" \
-            --rrg-history-dir "$RRG_HISTORY_DIR"
-          status=$?
+            --rrg-history-dir "$RRG_HISTORY_DIR" 2>&1 | tee "$EXPORT_LOG"
+          status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -eq 78 ]; then
             echo "Market ${{ matrix.market }} is not a trading day; no current static artifact will be uploaded."
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             echo "has_price_bundle=false" >> "$GITHUB_OUTPUT"
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -eq 79 ]; then
             echo "Market ${{ matrix.market }} produced diagnostics but no current market artifact will be uploaded; combine will use fallback artifacts if available."
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
             echo "has_price_bundle=true" >> "$GITHUB_OUTPUT"
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
           echo "has_price_bundle=true" >> "$GITHUB_OUTPUT"
+          if grep -q "using benchmark-backed as-of date" "$EXPORT_LOG"; then
+            echo "Rolling RRG history publication disabled for ${{ matrix.market }} because the market export rewound to an older benchmark-backed date."
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rrg_history_publishable=true" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$RRG_HISTORY_ENABLED" = "true" ] && [ "$RRG_RESTORE_STATUS" = "failed" ]; then
             echo "Rolling RRG history restore failed for ${{ matrix.market }}; current output will not replace the last good market artifact."
             echo "has_artifact=false" >> "$GITHUB_OUTPUT"
+            echo "rrg_history_publishable=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "has_artifact=true" >> "$GITHUB_OUTPUT"
@@ -314,7 +324,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish rolling RRG history
-        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.rrg-history.outputs.enabled == 'true' && steps.restore-rrg-history.outputs.safe_to_publish == 'true' }}
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.export-market.outputs.rrg_history_publishable == 'true' && steps.rrg-history.outputs.enabled == 'true' && steps.restore-rrg-history.outputs.safe_to_publish == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

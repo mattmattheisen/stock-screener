@@ -138,7 +138,7 @@ def test_static_site_market_export_preserves_price_bundle_after_soft_skip() -> N
     )[0]
 
     assert "id: export-market" in export_step
-    assert "status=$?" in export_step
+    assert "status=${PIPESTATUS[0]}" in export_step
     assert 'if [ "$status" -eq 78 ]; then' in export_step
     assert "has_artifact=false" in export_step
     assert "has_artifact=true" in export_step
@@ -196,6 +196,26 @@ def test_static_site_uploads_market_diagnostics_after_export() -> None:
     assert "name: static-market-diagnostics-${{ matrix.market }}" in diagnostics_step
     assert "path: /tmp/static-data/diagnostics/${{ env.MARKET_LOWER }}" in diagnostics_step
     assert "if-no-files-found: ignore" in diagnostics_step
+
+
+def test_static_site_rrg_history_publish_skips_rewound_market_exports() -> None:
+    build_market_job = _build_market_job()
+    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+        "\n      - name: Upload market status",
+        1,
+    )[0]
+    publish_rrg_step = build_market_job.split("      - name: Publish rolling RRG history\n", 1)[1].split(
+        "\n\n  combine-and-build:",
+        1,
+    )[0]
+
+    assert 'EXPORT_LOG="$(mktemp)"' in export_step
+    assert '| tee "$EXPORT_LOG"' in export_step
+    assert "status=${PIPESTATUS[0]}" in export_step
+    assert "using benchmark-backed as-of date" in export_step
+    assert "rrg_history_publishable=false" in export_step
+    assert "rrg_history_publishable=true" in export_step
+    assert "steps.export-market.outputs.rrg_history_publishable == 'true'" in publish_rrg_step
 
 
 def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> None:

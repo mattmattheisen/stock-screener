@@ -88,6 +88,7 @@ class StaticArtifactCombiner:
         selected, fallback_reasons = self._select_artifacts(
             current=current,
             fallback=fallback,
+            fallback_required=fallback_required,
         )
 
         if required:
@@ -168,6 +169,7 @@ class StaticArtifactCombiner:
         *,
         current: dict[str, dict[str, Any]],
         fallback: dict[str, dict[str, Any]],
+        fallback_required: Mapping[str, str],
     ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
         selected = dict(current)
         fallback_reasons: dict[str, str] = {}
@@ -176,6 +178,16 @@ class StaticArtifactCombiner:
             if current_artifact is None:
                 selected[market] = fallback_artifact
                 fallback_reasons[market] = "missing"
+                continue
+            expected_fallback_formula = fallback_required.get(market)
+            if (
+                expected_fallback_formula is not None
+                and not cls._artifact_matches_formula(
+                    market=market,
+                    artifact=fallback_artifact,
+                    expected_formula=expected_fallback_formula,
+                )
+            ):
                 continue
             if cls._artifact_is_newer(fallback_artifact, current_artifact):
                 selected[market] = fallback_artifact
@@ -211,6 +223,26 @@ class StaticArtifactCombiner:
             return date.fromisoformat(text.split("T", 1)[0])
         except ValueError:
             return None
+
+    @classmethod
+    def _artifact_matches_formula(
+        cls,
+        *,
+        market: str,
+        artifact: dict[str, Any],
+        expected_formula: str,
+    ) -> bool:
+        try:
+            cls._validate_formula(
+                market=market,
+                source_label=artifact["source_label"],
+                metadata=artifact["metadata"],
+                market_dir=artifact["market_dir"],
+                expected_formula=expected_formula,
+            )
+        except StaticArtifactFormulaError:
+            return False
+        return True
 
     @classmethod
     def _validate_selected_formulas(

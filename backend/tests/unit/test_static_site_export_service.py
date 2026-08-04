@@ -1363,7 +1363,7 @@ def test_combine_market_artifacts_uses_newer_fallback_for_rewound_current_market
     ) in manifest["warnings"]
 
 
-def test_combine_market_artifacts_ignores_incompatible_fallback_when_current_override_selected(tmp_path):
+def test_combine_market_artifacts_keeps_current_override_when_newer_fallback_uses_other_formula(tmp_path):
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
     output_dir = tmp_path / "combined"
@@ -1392,7 +1392,7 @@ def test_combine_market_artifacts_ignores_incompatible_fallback_when_current_ove
     fallback_us_entry = {
         "market": "US",
         "display_name": "United States",
-        "as_of_date": "2026-07-31",
+        "as_of_date": "2026-08-04",
         "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
         "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
