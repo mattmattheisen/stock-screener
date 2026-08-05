@@ -6,6 +6,8 @@ import pytest
 
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.relative_strength import MarketRsRun, StockRsSnapshot
@@ -32,7 +34,10 @@ def _seed_run(db, rows):
         expected_symbol_count=len(rows),
         eligible_symbol_count=len(rows),
         excluded_symbol_count=0,
-        diagnostics_json={},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     db.add(run)
     db.flush()
@@ -136,6 +141,29 @@ def test_canonical_group_means_share_one_eligible_constituent_set(db_session):
     assert stored.avg_rs_rating_1m == pytest.approx(leaders["avg_rs_rating_1m"])
     assert stored.avg_rs_rating_3m == pytest.approx(leaders["avg_rs_rating_3m"])
     assert stored.avg_rs_rating_6m == pytest.approx(leaders["avg_rs_rating_6m"])
+
+
+def test_canonical_group_rejects_old_balanced_run_without_short_horizon_contract(
+    db_session,
+):
+    run = _seed_run(
+        db_session,
+        [
+            ("AAA", 99, 50, 50, 10, 20, 40, 100.0),
+            ("BBB", 80, 50, 50, 20, 40, 60, 200.0),
+            ("CCC", 50, 50, 50, 30, 60, 80, 300.0),
+        ],
+    )
+    run.diagnostics_json = {"price_basis": BALANCED_RS_PRICE_BASIS}
+    _map(db_session, "Leaders", "AAA", "BBB", "CCC")
+
+    with pytest.raises(CanonicalGroupRankingUnavailable, match="incompatible"):
+        CanonicalGroupRankingService().calculate_and_store(
+            db_session,
+            market="US",
+            as_of_date=AS_OF,
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
 
 
 def test_canonical_main_rank_uses_only_unrounded_equal_weight_overall_rs(db_session):

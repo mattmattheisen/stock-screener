@@ -12,7 +12,7 @@ from app.domain.relative_strength import (
     LEGACY_RS_FORMULA_VERSION,
     SCANNER_RS_FIELD_BY_HORIZON,
     STOCK_RS_RATING_ATTR_BY_HORIZON,
-    balanced_run_has_required_price_basis,
+    balanced_run_has_current_snapshot_contract,
 )
 from app.domain.scanning.ports import MarketRsResolution
 from app.infra.db.models.relative_strength import MarketRsRun, StockRsSnapshot
@@ -110,9 +110,10 @@ class SqlMarketRsReader:
                     f"Canonical Market RS is unavailable for {normalized_market} "
                     f"at {requested_date} ({resolved_formula})"
                 )
-            if not balanced_run_has_required_price_basis(run):
+            if not balanced_run_has_current_snapshot_contract(run):
                 raise CanonicalMarketRsUnavailable(
-                    f"Canonical Market RS run {run.id} has an incompatible price basis"
+                    f"Canonical Market RS run {run.id} has an incompatible "
+                    "balanced snapshot contract"
                 )
 
             rows = []

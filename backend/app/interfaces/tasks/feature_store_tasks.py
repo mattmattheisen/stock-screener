@@ -689,7 +689,7 @@ def build_daily_snapshot(
                 from app.domain.relative_strength import (
                     BALANCED_RS_FORMULA_VERSION,
                     GroupSnapshotIdentity,
-                    balanced_run_has_required_price_basis,
+                    balanced_run_has_current_snapshot_contract,
                 )
                 from app.infra.db.repositories.market_rs_repo import (
                     MarketRsRunRepository,
@@ -717,7 +717,7 @@ def build_daily_snapshot(
                     )
                     source_compatible = bool(
                         exact_run is not None
-                        and balanced_run_has_required_price_basis(exact_run)
+                        and balanced_run_has_current_snapshot_contract(exact_run)
                     )
                     market_rs_run_id = getattr(exact_run, "id", None)
                     market_rs_universe_size = getattr(

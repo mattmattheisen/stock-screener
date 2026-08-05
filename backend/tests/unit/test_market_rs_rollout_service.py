@@ -7,11 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+
 from app.config import settings
 from app.domain.feature_store.models import RunStatus
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     HORIZON_SESSIONS,
 )
 from app.models.stock import StockPrice
@@ -28,8 +32,6 @@ from app.services.market_rs_rollout_service import (
 from app.services.market_rs_static_artifact_validator import (
     MarketRsStaticArtifactValidator,
 )
-from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 
 def _service(
@@ -392,7 +394,10 @@ def test_backfill_reuses_completed_strict_run_without_fallback_rebuild(monkeypat
     run = SimpleNamespace(
         id=42,
         eligible_symbol_count=2,
-        diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     repository = MagicMock()
     repository.get_completed_exact.return_value = run
@@ -436,7 +441,10 @@ def test_backfill_rebuilds_completed_incompatible_price_basis(monkeypatch):
     rebuilt_run = SimpleNamespace(
         id=43,
         eligible_symbol_count=3,
-        diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     repository = MagicMock()
     repository.get_completed_exact.return_value = incompatible_run
@@ -754,7 +762,7 @@ def test_activation_validation_skips_groups_when_market_lacks_capability(
     service = _service(repository=repository)
     monkeypatch.setattr(
         "app.services.market_rs_activation_validator."
-        "balanced_run_has_required_price_basis",
+        "balanced_run_has_current_snapshot_contract",
         lambda _run: True,
     )
     monkeypatch.setattr(

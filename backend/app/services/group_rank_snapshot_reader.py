@@ -11,7 +11,7 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
     RsPublicationIdentity,
-    balanced_run_has_required_price_basis,
+    balanced_run_has_current_snapshot_contract,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
 from app.models.industry import IBDGroupRank
@@ -303,7 +303,8 @@ class GroupRankSnapshotReader:
             raise GroupSnapshotIntegrityError(
                 "Group rows reference the wrong Market RS run"
             )
-        if not balanced_run_has_required_price_basis(run):
+        if not balanced_run_has_current_snapshot_contract(run):
             raise GroupSnapshotIntegrityError(
-                "Group rows reference a Market RS run with an incompatible price basis"
+                "Group rows reference a Market RS run with an incompatible "
+                "balanced snapshot contract"
             )

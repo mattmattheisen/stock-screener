@@ -10,6 +10,8 @@ import pytest
 from app.database import get_db
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     HORIZON_SESSIONS,
     LEGACY_RS_FORMULA_VERSION,
 )
@@ -88,7 +90,10 @@ def _store_balanced_snapshot(db, snapshot_date: date) -> None:
         expected_symbol_count=20,
         eligible_symbol_count=20,
         excluded_symbol_count=0,
-        diagnostics_json={"price_basis": "adj_close_only"},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     db.add(run)
     db.flush()

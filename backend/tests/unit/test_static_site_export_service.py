@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from inspect import Parameter, getsource, signature
-import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -17,6 +17,8 @@ import app.services.static_site_export_service as export_module
 from app.database import Base
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.domain.scanning.filter_expression_model import FilterExpression
@@ -28,21 +30,21 @@ from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.services.group_ranking_history import select_market_run_series
 from app.services.key_market_history import build_key_market_entries
-from app.services.static_groups_rrg_export import (
-    StaticGroupsRRGUnavailableError,
-    StaticGroupsRRGPayloadBuilder,
-)
 from app.services.static_artifact_combiner import StaticArtifactFormulaError
 from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
 from app.services.static_chart_bundle_exporter import StaticChartBundleConfig
+from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGPayloadBuilder,
+    StaticGroupsRRGUnavailableError,
+)
 from app.services.static_site_export_service import (
-    NoPublishedStaticMarketArtifact,
     STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET,
     STATIC_DEFAULT_SCAN_FILTERS_FALLBACK,
     STATIC_MARKET_METADATA_FILENAME,
     STATIC_SITE_SCHEMA_VERSION,
-    StaticSiteSectionUnavailableError,
+    NoPublishedStaticMarketArtifact,
     StaticSiteExportService,
+    StaticSiteSectionUnavailableError,
 )
 
 
@@ -3137,7 +3139,10 @@ def _market_rs_run(*, run_id: int, as_of_date: date) -> MarketRsRun:
         expected_symbol_count=5000,
         eligible_symbol_count=5000,
         excluded_symbol_count=0,
-        diagnostics_json={"price_basis": "adj_close_only"},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
 
 

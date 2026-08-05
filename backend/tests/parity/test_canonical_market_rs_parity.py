@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     HORIZON_WEIGHTS,
     calculate_balanced_rs,
 )
@@ -109,7 +111,10 @@ def _seed_canonical_snapshot(db_session):
     repository.mark_completed(
         run,
         excluded_symbol_count=0,
-        diagnostics={"price_basis": "adj_close_only"},
+        diagnostics={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     db_session.commit()
 

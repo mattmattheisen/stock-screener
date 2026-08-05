@@ -19,17 +19,19 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.stock_universe import StockUniverse
+from app.services.group_rank_snapshot_reader import GroupSnapshotWindowResult
 from app.services.rrg_history_provider import (
     StoredGroupRankHistoryProvider,
     USGroupRankHistoryProvider,
 )
-from app.services.group_rank_snapshot_reader import GroupSnapshotWindowResult
 from app.services.rrg_service import RRGService
 from app.services.static_rrg_history_bundle import (
     StaticRRGHistoryBundleService,
@@ -83,7 +85,10 @@ def _seed_group(
                     expected_symbol_count=10,
                     eligible_symbol_count=10,
                     excluded_symbol_count=0,
-                    diagnostics_json={"price_basis": "adj_close_only"},
+                    diagnostics_json={
+                        "price_basis": BALANCED_RS_PRICE_BASIS,
+                        "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+                    },
                 )
                 session.add(run)
                 session.flush()

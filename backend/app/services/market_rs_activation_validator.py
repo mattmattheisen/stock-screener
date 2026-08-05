@@ -18,7 +18,7 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
     RsPublicationIdentity,
-    balanced_run_has_required_price_basis,
+    balanced_run_has_current_snapshot_contract,
 )
 from app.infra.db.repositories.feature_run_repo import SqlFeatureRunRepository
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
@@ -82,9 +82,10 @@ class MarketRsActivationValidator:
                 f"Missing completed stock RS snapshot for {calculation_date}."
             )
             return None
-        if not balanced_run_has_required_price_basis(run):
+        if not balanced_run_has_current_snapshot_contract(run):
             errors.append(
-                f"Market RS run for {calculation_date} has an incompatible price basis."
+                f"Market RS run for {calculation_date} has an incompatible "
+                "balanced snapshot contract."
             )
         row_count = 0
         eligible_symbols: set[str] = set()

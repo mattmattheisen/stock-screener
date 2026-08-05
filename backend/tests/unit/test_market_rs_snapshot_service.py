@@ -5,6 +5,7 @@ import pytest
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
@@ -180,3 +181,41 @@ def test_explicit_rebuild_replaces_incompatible_completed_run(db_session):
     )
     assert rebuilt.id != old_id
     assert rebuilt.diagnostics_json["price_basis"] == BALANCED_RS_PRICE_BASIS
+
+
+def test_completed_run_without_current_snapshot_schema_is_incompatible(db_session):
+    old = MarketRsRun(
+        market="US",
+        as_of_date=AS_OF,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        status="completed",
+        benchmark_symbol="SPY",
+        benchmark_as_of_date=AS_OF,
+        universe_hash="old",
+        expected_symbol_count=0,
+        eligible_symbol_count=0,
+        excluded_symbol_count=0,
+        diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
+    )
+    db_session.add(old)
+    db_session.commit()
+    old_id = old.id
+    service = MarketRsSnapshotService(
+        input_loader=_FakeInputLoader(_complete_inputs()),
+        repository=MarketRsRunRepository(),
+    )
+
+    with pytest.raises(MarketRsSnapshotIncompatible):
+        service.calculate(db_session, market="US", as_of_date=AS_OF)
+
+    rebuilt = service.calculate(
+        db_session,
+        market="US",
+        as_of_date=AS_OF,
+        rebuild_incompatible=True,
+    )
+    assert rebuilt.id != old_id
+    assert (
+        rebuilt.diagnostics_json["rs_snapshot_schema_version"]
+        == BALANCED_RS_SNAPSHOT_SCHEMA_VERSION
+    )

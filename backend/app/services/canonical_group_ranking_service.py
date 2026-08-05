@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.domain.relative_strength import (
     GROUP_AVG_RS_FIELD_BY_HORIZON,
     STOCK_RS_RATING_ATTR_BY_HORIZON,
+    balanced_run_has_current_snapshot_contract,
 )
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.industry import IBDGroupRank
@@ -72,6 +73,11 @@ class CanonicalGroupRankingService:
             raise CanonicalGroupRankingUnavailable(
                 f"Completed Market RS run is unavailable for {normalized_market} "
                 f"on {as_of_date.isoformat()} ({formula_version})"
+            )
+        if not balanced_run_has_current_snapshot_contract(run):
+            raise CanonicalGroupRankingUnavailable(
+                f"Completed Market RS run {run.id} has an incompatible "
+                "balanced snapshot contract"
             )
 
         stock_rows = {

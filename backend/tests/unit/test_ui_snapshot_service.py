@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
 import json
 import sqlite3
+from datetime import date, datetime
 from unittest.mock import Mock
 
 from sqlalchemy import create_engine, func, text
@@ -14,6 +14,8 @@ from app.database import Base
 from app.domain.markets import market_registry
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.feature_store import FeatureRun
@@ -22,7 +24,13 @@ from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock_universe import StockUniverse
-from app.models.theme import ThemeAlert, ThemeCluster, ThemeMergeSuggestion, ThemeMetrics, ThemePipelineRun
+from app.models.theme import (
+    ThemeAlert,
+    ThemeCluster,
+    ThemeMergeSuggestion,
+    ThemeMetrics,
+    ThemePipelineRun,
+)
 from app.models.ui_view_snapshot import UIViewSnapshot
 from app.services.ui_snapshot_service import (
     GROUPS_VIEW_KEY,
@@ -481,7 +489,10 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
             expected_symbol_count=5000,
             eligible_symbol_count=5000,
             excluded_symbol_count=0,
-            diagnostics_json={"price_basis": "adj_close_only"},
+            diagnostics_json={
+                "price_basis": BALANCED_RS_PRICE_BASIS,
+                "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+            },
         )
         db.add_all(
             [
