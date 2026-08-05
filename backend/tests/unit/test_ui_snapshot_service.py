@@ -511,8 +511,11 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
                 date=date(2026, 3, 28),
                 rank=1,
                 avg_rs_rating=95.5,
+                avg_rs_rating_1d=31.5,
+                avg_rs_rating_1w=37.5,
                 avg_rs_rating_1m=41.5,
                 avg_rs_rating_3m=63.2,
+                avg_rs_rating_6m=72.5,
                 median_rs_rating=95.0,
                 weighted_avg_rs_rating=95.2,
                 rs_std_dev=1.0,
@@ -536,8 +539,11 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
     assert rankings_payload["rs_as_of_date"] == "2026-03-28"
     assert rankings_payload["rs_universe_size"] == 5000
     assert rankings_payload["rankings"][0]["industry_group"] == "Software"
+    assert rankings_payload["rankings"][0]["avg_rs_rating_1d"] == 31.5
+    assert rankings_payload["rankings"][0]["avg_rs_rating_1w"] == 37.5
     assert rankings_payload["rankings"][0]["avg_rs_rating_1m"] == 41.5
     assert rankings_payload["rankings"][0]["avg_rs_rating_3m"] == 63.2
+    assert rankings_payload["rankings"][0]["avg_rs_rating_6m"] == 72.5
 
     assert (
         service.publish_groups_bootstrap(
