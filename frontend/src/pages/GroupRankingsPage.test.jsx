@@ -92,8 +92,11 @@ const rankingRowFor = (market) => ({
   date: '2026-04-18',
   rank: 3,
   avg_rs_rating: 82.1,
+  avg_rs_rating_1d: 72.75,
+  avg_rs_rating_1w: 74.5,
   avg_rs_rating_1m: 38.25,
   avg_rs_rating_3m: 61.75,
+  avg_rs_rating_6m: 86.25,
   median_rs_rating: 81.5,
   weighted_avg_rs_rating: 84.0,
   rs_std_dev: 3.2,
@@ -210,7 +213,7 @@ describe('GroupRankingsPage', () => {
     expect(screen.getByText('US | 1 groups | 2026-04-18')).toBeInTheDocument();
   });
 
-  it('shows sortable 1M and 3M RS columns separately from rank changes', async () => {
+  it('shows sortable short-horizon RS columns separately from rank changes', async () => {
     getCurrentRankings.mockResolvedValue({
       date: '2026-04-18',
       total_groups: 2,
@@ -221,24 +224,33 @@ describe('GroupRankingsPage', () => {
           ...rankingRowFor('HK'),
           industry_group: 'HK Semiconductors',
           rank: 1,
+          avg_rs_rating_1d: 83.5,
+          avg_rs_rating_1w: 84.25,
           avg_rs_rating_1m: 88.5,
           avg_rs_rating_3m: 90.25,
+          avg_rs_rating_6m: 91.5,
         },
       ],
     });
 
     renderGroupRankingsPage();
 
-    expect(await screen.findByText('38.3')).toBeInTheDocument();
+    expect(await screen.findByText('72.8')).toBeInTheDocument();
+    expect(screen.getByText('74.5')).toBeInTheDocument();
+    expect(screen.getByText('38.3')).toBeInTheDocument();
     expect(screen.getByText('61.8')).toBeInTheDocument();
+    expect(screen.getByText('86.3')).toBeInTheDocument();
     const table = screen.getByRole('columnheader', { name: '1M RS' }).closest('table');
     const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent.trim());
-    expect(headers.slice(0, 7)).toEqual([
+    expect(headers.slice(0, 10)).toEqual([
       'Rank',
       'Industry Group',
       'RS',
+      '1D RS',
+      '1W RS',
       '1M RS',
       '3M RS',
+      '6M RS',
       'Med RS',
       'Wtd RS',
     ]);
@@ -252,6 +264,10 @@ describe('GroupRankingsPage', () => {
 
     await user.click(within(table).getByRole('button', { name: '3M RS' }));
     expect(within(table).getAllByRole('row')[1]).toHaveTextContent('HK Internet Services');
+
+    await user.click(within(table).getByRole('button', { name: '6M RS' }));
+    await user.click(within(table).getByRole('button', { name: '6M RS' }));
+    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('HK Semiconductors');
   });
 
   it('sorts live group rankings by top stock', async () => {

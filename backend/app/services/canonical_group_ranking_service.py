@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import date
 import statistics
+from datetime import date
 from typing import Any
 
 from sqlalchemy import and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.domain.relative_strength import (
+    GROUP_AVG_RS_FIELD_BY_HORIZON,
+    STOCK_RS_RATING_ATTR_BY_HORIZON,
+    balanced_run_has_current_snapshot_contract,
+)
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
@@ -69,6 +74,11 @@ class CanonicalGroupRankingService:
                 f"Completed Market RS run is unavailable for {normalized_market} "
                 f"on {as_of_date.isoformat()} ({formula_version})"
             )
+        if not balanced_run_has_current_snapshot_contract(run):
+            raise CanonicalGroupRankingUnavailable(
+                f"Completed Market RS run {run.id} has an incompatible "
+                "balanced snapshot contract"
+            )
 
         stock_rows = {
             row.symbol: row
@@ -98,19 +108,17 @@ class CanonicalGroupRankingService:
                 continue
 
             overall = [float(row.overall_rs) for row in eligible_rows]
-            one_month = [float(row.rs_1m) for row in eligible_rows]
-            three_month = [float(row.rs_3m) for row in eligible_rows]
-            caps = [
-                float(market_caps.get(row.symbol) or 0.0)
-                for row in eligible_rows
-            ]
+            horizon_averages = {
+                field: statistics.fmean(
+                    float(getattr(row, STOCK_RS_RATING_ATTR_BY_HORIZON[horizon]))
+                    for row in eligible_rows
+                )
+                for horizon, field in GROUP_AVG_RS_FIELD_BY_HORIZON.items()
+            }
+            caps = [float(market_caps.get(row.symbol) or 0.0) for row in eligible_rows]
             positive_cap_total = sum(cap for cap in caps if cap > 0)
             weighted_avg = (
-                sum(
-                    value * cap
-                    for value, cap in zip(overall, caps)
-                    if cap > 0
-                )
+                sum(value * cap for value, cap in zip(overall, caps) if cap > 0)
                 / positive_cap_total
                 if positive_cap_total > 0
                 else None
@@ -133,8 +141,7 @@ class CanonicalGroupRankingService:
                     "date": as_of_date,
                     "rank": 0,
                     "avg_rs_rating": avg_rs,
-                    "avg_rs_rating_1m": statistics.fmean(one_month),
-                    "avg_rs_rating_3m": statistics.fmean(three_month),
+                    **horizon_averages,
                     "median_rs_rating": statistics.median(overall),
                     "weighted_avg_rs_rating": weighted_avg,
                     "rs_std_dev": statistics.pstdev(overall),

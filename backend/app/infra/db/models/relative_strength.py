@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     Column,
     Date,
@@ -7,7 +8,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     SmallInteger,
     String,
     UniqueConstraint,
@@ -72,12 +72,16 @@ class StockRsSnapshot(Base):
     )
     symbol = Column(String(20), primary_key=True)
     overall_rs = Column(SmallInteger, nullable=False)
+    rs_1d = Column(SmallInteger, nullable=False, default=50, server_default="50")
+    rs_1w = Column(SmallInteger, nullable=False, default=50, server_default="50")
     rs_1m = Column(SmallInteger, nullable=False)
     rs_3m = Column(SmallInteger, nullable=False)
     rs_6m = Column(SmallInteger, nullable=False)
     rs_9m = Column(SmallInteger, nullable=False)
     rs_12m = Column(SmallInteger, nullable=False)
     weighted_composite = Column(Float, nullable=False)
+    excess_return_1d = Column(Float, nullable=False, default=0.0, server_default="0")
+    excess_return_1w = Column(Float, nullable=False, default=0.0, server_default="0")
     excess_return_1m = Column(Float, nullable=False)
     excess_return_3m = Column(Float, nullable=False)
     excess_return_6m = Column(Float, nullable=False)
@@ -88,7 +92,8 @@ class StockRsSnapshot(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "overall_rs BETWEEN 1 AND 99 AND rs_1m BETWEEN 1 AND 99 "
+            "overall_rs BETWEEN 1 AND 99 AND rs_1d BETWEEN 1 AND 99 "
+            "AND rs_1w BETWEEN 1 AND 99 AND rs_1m BETWEEN 1 AND 99 "
             "AND rs_3m BETWEEN 1 AND 99 AND rs_6m BETWEEN 1 AND 99 "
             "AND rs_9m BETWEEN 1 AND 99 AND rs_12m BETWEEN 1 AND 99",
             name="ck_stock_rs_rating_range",

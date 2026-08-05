@@ -10,6 +10,9 @@ import pytest
 from app.database import get_db
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+    HORIZON_SESSIONS,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.relative_strength import (
@@ -30,10 +33,10 @@ from app.services.group_history_bootstrap_service import (
 from app.services.group_history_readiness_service import (
     GroupHistoryReadinessService,
 )
+from app.services.group_history_reconciliation import GroupHistoryTarget
 from app.services.group_history_snapshot_coordinator import (
     build_group_history_snapshot_coordinator,
 )
-from app.services.group_history_reconciliation import GroupHistoryTarget
 from app.services.group_history_universe import GroupHistoryUniverseResolver
 from app.services.group_rank_history_policy import (
     DEFAULT_CALENDAR_DAY_GROUP_RANK_HISTORY_LOOKBACK_DAYS,
@@ -61,6 +64,8 @@ class _WeekdayCalendar:
     def session_anchors(_market: str, as_of_date: date, *, offsets) -> dict:
         days_by_offset = {
             0: 0,
+            1: 1,
+            5: 7,
             21: 30,
             63: 90,
             126: 180,
@@ -85,7 +90,10 @@ def _store_balanced_snapshot(db, snapshot_date: date) -> None:
         expected_symbol_count=20,
         eligible_symbol_count=20,
         excluded_symbol_count=0,
-        diagnostics_json={"price_basis": "adj_close_only"},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     db.add(run)
     db.flush()
@@ -158,7 +166,7 @@ def _seed_production_repair_inputs(
     anchors = calendar.session_anchors(
         "US",
         repair_date,
-        offsets=(21, 63, 126, 189, 252),
+        offsets=tuple(HORIZON_SESSIONS.values()),
     )
     for offset, anchor_date in anchors.items():
         db.add(

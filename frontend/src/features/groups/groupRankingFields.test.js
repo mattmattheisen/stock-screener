@@ -11,7 +11,7 @@ import {
 } from './groupRankingFields';
 
 describe('groupRankingFields', () => {
-  it('keeps live and static overall/1M/3M fields identical', () => {
+  it('keeps live and static overall/short-horizon RS fields identical', () => {
     expect(
       GROUP_RS_FIELDS.map(({ field, label, staticLabel }) => ({
         field,
@@ -20,8 +20,11 @@ describe('groupRankingFields', () => {
       })),
     ).toEqual([
       { field: 'avg_rs_rating', label: 'RS', staticLabel: 'Avg RS' },
+      { field: 'avg_rs_rating_1d', label: '1D RS', staticLabel: '1D RS' },
+      { field: 'avg_rs_rating_1w', label: '1W RS', staticLabel: '1W RS' },
       { field: 'avg_rs_rating_1m', label: '1M RS', staticLabel: '1M RS' },
       { field: 'avg_rs_rating_3m', label: '3M RS', staticLabel: '3M RS' },
+      { field: 'avg_rs_rating_6m', label: '6M RS', staticLabel: '6M RS' },
     ]);
   });
 

@@ -5,6 +5,7 @@ import pytest
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
@@ -14,7 +15,6 @@ from app.services.market_rs_snapshot_service import (
     MarketRsSnapshotIncompatible,
     MarketRsSnapshotService,
 )
-
 
 AS_OF = date(2026, 4, 10)
 
@@ -28,9 +28,33 @@ def _complete_inputs():
         universe_hash="u" * 64,
         expected_symbols=("AAA", "BBB", "CCC"),
         excess_returns_by_symbol={
-            "AAA": {"1m": 0.3, "3m": 0.3, "6m": 0.3, "9m": 0.3, "12m": 0.3},
-            "BBB": {"1m": 0.2, "3m": 0.2, "6m": 0.2, "9m": 0.2, "12m": 0.2},
-            "CCC": {"1m": 0.1, "3m": 0.1, "6m": 0.1, "9m": 0.1, "12m": 0.1},
+            "AAA": {
+                "1d": 0.3,
+                "1w": 0.3,
+                "1m": 0.3,
+                "3m": 0.3,
+                "6m": 0.3,
+                "9m": 0.3,
+                "12m": 0.3,
+            },
+            "BBB": {
+                "1d": 0.2,
+                "1w": 0.2,
+                "1m": 0.2,
+                "3m": 0.2,
+                "6m": 0.2,
+                "9m": 0.2,
+                "12m": 0.2,
+            },
+            "CCC": {
+                "1d": 0.1,
+                "1w": 0.1,
+                "1m": 0.1,
+                "3m": 0.1,
+                "6m": 0.1,
+                "9m": 0.1,
+                "12m": 0.1,
+            },
         },
         exclusions={},
         current_price_coverage=1.0,
@@ -64,9 +88,7 @@ def test_snapshot_service_publishes_all_rows_and_run_atomically(db_session):
     assert run.diagnostics_json["price_basis"] == BALANCED_RS_PRICE_BASIS
     assert all(1 <= row.overall_rs <= 99 for row in run.rows)
     assert (
-        db_session.query(MarketRsRun)
-        .filter(MarketRsRun.status == "completed")
-        .count()
+        db_session.query(MarketRsRun).filter(MarketRsRun.status == "completed").count()
         == 1
     )
 
@@ -102,11 +124,7 @@ def test_snapshot_input_failure_keeps_previous_completed_date_readable(db_sessio
         formula_version=BALANCED_RS_FORMULA_VERSION,
     )
     assert latest.id == previous.id
-    failed = (
-        db_session.query(MarketRsRun)
-        .filter(MarketRsRun.as_of_date == AS_OF)
-        .one()
-    )
+    failed = db_session.query(MarketRsRun).filter(MarketRsRun.as_of_date == AS_OF).one()
     assert failed.status == "failed"
     assert failed.diagnostics_json["reason_code"] == "benchmark_anchor_missing"
 
@@ -163,3 +181,41 @@ def test_explicit_rebuild_replaces_incompatible_completed_run(db_session):
     )
     assert rebuilt.id != old_id
     assert rebuilt.diagnostics_json["price_basis"] == BALANCED_RS_PRICE_BASIS
+
+
+def test_completed_run_without_current_snapshot_schema_is_incompatible(db_session):
+    old = MarketRsRun(
+        market="US",
+        as_of_date=AS_OF,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        status="completed",
+        benchmark_symbol="SPY",
+        benchmark_as_of_date=AS_OF,
+        universe_hash="old",
+        expected_symbol_count=0,
+        eligible_symbol_count=0,
+        excluded_symbol_count=0,
+        diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
+    )
+    db_session.add(old)
+    db_session.commit()
+    old_id = old.id
+    service = MarketRsSnapshotService(
+        input_loader=_FakeInputLoader(_complete_inputs()),
+        repository=MarketRsRunRepository(),
+    )
+
+    with pytest.raises(MarketRsSnapshotIncompatible):
+        service.calculate(db_session, market="US", as_of_date=AS_OF)
+
+    rebuilt = service.calculate(
+        db_session,
+        market="US",
+        as_of_date=AS_OF,
+        rebuild_incompatible=True,
+    )
+    assert rebuilt.id != old_id
+    assert (
+        rebuilt.diagnostics_json["rs_snapshot_schema_version"]
+        == BALANCED_RS_SNAPSHOT_SCHEMA_VERSION
+    )

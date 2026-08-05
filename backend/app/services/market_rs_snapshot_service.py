@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     BALANCED_RS_PRICE_BASIS,
-    balanced_run_has_required_price_basis,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+    balanced_run_has_current_snapshot_contract,
     calculate_balanced_rs,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
@@ -89,11 +90,14 @@ class MarketRsSnapshotService:
             formula_version=formula_version,
             load_rows=False,
         )
-        if existing is not None and balanced_run_has_required_price_basis(existing):
+        if existing is not None and balanced_run_has_current_snapshot_contract(
+            existing
+        ):
             return existing
         if existing is not None and not rebuild_incompatible:
             raise MarketRsSnapshotIncompatible(
-                f"Completed Market RS run {existing.id} has an incompatible price basis"
+                f"Completed Market RS run {existing.id} has an incompatible "
+                "balanced snapshot contract"
             )
 
         try:
@@ -150,6 +154,9 @@ class MarketRsSnapshotService:
                     "current_price_coverage": inputs.current_price_coverage,
                     "exclusions": inputs.exclusions,
                     "price_basis": BALANCED_RS_PRICE_BASIS,
+                    "rs_snapshot_schema_version": (
+                        BALANCED_RS_SNAPSHOT_SCHEMA_VERSION
+                    ),
                 },
             )
             if commit:

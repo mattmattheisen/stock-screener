@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
 import json
 import sqlite3
+from datetime import date, datetime
 from unittest.mock import Mock
 
 from sqlalchemy import create_engine, func, text
@@ -14,6 +14,8 @@ from app.database import Base
 from app.domain.markets import market_registry
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.feature_store import FeatureRun
@@ -22,7 +24,13 @@ from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock_universe import StockUniverse
-from app.models.theme import ThemeAlert, ThemeCluster, ThemeMergeSuggestion, ThemeMetrics, ThemePipelineRun
+from app.models.theme import (
+    ThemeAlert,
+    ThemeCluster,
+    ThemeMergeSuggestion,
+    ThemeMetrics,
+    ThemePipelineRun,
+)
 from app.models.ui_view_snapshot import UIViewSnapshot
 from app.services.ui_snapshot_service import (
     GROUPS_VIEW_KEY,
@@ -481,7 +489,10 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
             expected_symbol_count=5000,
             eligible_symbol_count=5000,
             excluded_symbol_count=0,
-            diagnostics_json={"price_basis": "adj_close_only"},
+            diagnostics_json={
+                "price_basis": BALANCED_RS_PRICE_BASIS,
+                "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+            },
         )
         db.add_all(
             [
@@ -500,8 +511,11 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
                 date=date(2026, 3, 28),
                 rank=1,
                 avg_rs_rating=95.5,
+                avg_rs_rating_1d=31.5,
+                avg_rs_rating_1w=37.5,
                 avg_rs_rating_1m=41.5,
                 avg_rs_rating_3m=63.2,
+                avg_rs_rating_6m=72.5,
                 median_rs_rating=95.0,
                 weighted_avg_rs_rating=95.2,
                 rs_std_dev=1.0,
@@ -525,8 +539,11 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
     assert rankings_payload["rs_as_of_date"] == "2026-03-28"
     assert rankings_payload["rs_universe_size"] == 5000
     assert rankings_payload["rankings"][0]["industry_group"] == "Software"
+    assert rankings_payload["rankings"][0]["avg_rs_rating_1d"] == 31.5
+    assert rankings_payload["rankings"][0]["avg_rs_rating_1w"] == 37.5
     assert rankings_payload["rankings"][0]["avg_rs_rating_1m"] == 41.5
     assert rankings_payload["rankings"][0]["avg_rs_rating_3m"] == 63.2
+    assert rankings_payload["rankings"][0]["avg_rs_rating_6m"] == 72.5
 
     assert (
         service.publish_groups_bootstrap(

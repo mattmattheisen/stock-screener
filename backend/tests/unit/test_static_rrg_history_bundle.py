@@ -13,22 +13,27 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
-from app.models.industry import IBDGroupRank
 from app.infra.db.models.relative_strength import MarketRsRun
-from app.services.group_rank_snapshot_coordinator import GroupRankSnapshotCoordinator
-from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
-from app.services.group_rank_history_backfill_service import (
-    GroupRankHistoryBackfillService,
+from app.models.industry import IBDGroupRank
+from app.scanners.criteria.relative_strength import (
+    RelativeStrengthCalculator,
 )
 from app.services.group_rank_historical_calculator import (
     GroupRankHistoricalCalculator,
+)
+from app.services.group_rank_history_backfill_service import (
+    GroupRankHistoryBackfillService,
 )
 from app.services.group_rank_input_loader import GroupRankInputLoader
 from app.services.group_rank_legacy_adapter import (
     LegacyGroupRankPrefetchAdapter,
 )
+from app.services.group_rank_snapshot_coordinator import GroupRankSnapshotCoordinator
+from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
 from app.services.group_ranking_calculator import (
     GroupRankingCalculator,
 )
@@ -48,9 +53,6 @@ from app.services.static_rrg_history_contract import (
     StaticRRGHistoryBundleError,
     StaticRRGHistoryState,
     StaticRRGWeek,
-)
-from app.scanners.criteria.relative_strength import (
-    RelativeStrengthCalculator,
 )
 
 
@@ -525,7 +527,12 @@ def test_prepare_rebuilds_when_prior_bundle_uses_another_formula(tmp_path):
                         expected_symbol_count=12,
                         eligible_symbol_count=12,
                         excluded_symbol_count=0,
-                        diagnostics_json={"price_basis": "adj_close_only"},
+                        diagnostics_json={
+                            "price_basis": BALANCED_RS_PRICE_BASIS,
+                            "rs_snapshot_schema_version": (
+                                BALANCED_RS_SNAPSHOT_SCHEMA_VERSION
+                            ),
+                        },
                     )
                 )
                 db.add(

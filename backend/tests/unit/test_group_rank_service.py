@@ -1,8 +1,9 @@
-from datetime import date
 import inspect
+from datetime import date
 from pathlib import Path
-from uuid import uuid4
+from types import SimpleNamespace
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pandas as pd
 import pytest
@@ -13,6 +14,10 @@ from app.database import Base
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
+from app.scanners.criteria.relative_strength import (
+    RelativeStrengthCalculator,
+)
+from app.services import ibd_group_rank_service as group_rank_module
 from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
@@ -26,13 +31,13 @@ from app.services.group_rank_input_sources import (
     SqlGroupRankMarketCapSource,
     StockUniverseGroupRankSource,
 )
-from app.services.group_rank_models import (
-    GroupRankPrefetchData,
-    GroupRankPrefetchStats,
-    GroupRanking,
-)
 from app.services.group_rank_legacy_adapter import (
     LegacyGroupRankPrefetchAdapter,
+)
+from app.services.group_rank_models import (
+    GroupRanking,
+    GroupRankPrefetchData,
+    GroupRankPrefetchStats,
 )
 from app.services.group_ranking_calculator import (
     GroupRankingCalculator,
@@ -40,17 +45,13 @@ from app.services.group_ranking_calculator import (
 from app.services.group_ranking_repository import (
     GroupRankingRepository,
 )
-from app.services.stock_universe_service import StockUniverseService
-from app.services.market_calendar_service import MarketCalendarService
-from app.scanners.criteria.relative_strength import (
-    RelativeStrengthCalculator,
-)
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
 )
-from app.services import ibd_group_rank_service as group_rank_module
+from app.services.market_calendar_service import MarketCalendarService
+from app.services.stock_universe_service import StockUniverseService
 
 
 def _add_rank(session, group, rank_date, rank):
@@ -446,6 +447,48 @@ def test_get_current_rankings_uses_calendar_rank_change_offsets(monkeypatch):
     finally:
         db_session.rollback()
         db_session.close()
+
+
+def test_canonical_group_calculation_rebuilds_incompatible_market_rs_run():
+    service = _make_group_rank_service()
+    service.market_rs_repository.active_formula.return_value = (
+        BALANCED_RS_FORMULA_VERSION
+    )
+    run = SimpleNamespace(
+        expected_symbol_count=3,
+        eligible_symbol_count=3,
+        excluded_symbol_count=0,
+        benchmark_symbol="SPY",
+    )
+    service.market_rs_snapshot_service.calculate.return_value = run
+    service.canonical_group_service.calculate_and_store.return_value = [
+        {
+            "industry_group": "Software",
+            "date": date(2026, 4, 10),
+            "rank": 1,
+            "avg_rs_rating": 90.0,
+            "num_stocks": 3,
+            "num_stocks_rs_above_80": 2,
+            "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 42,
+        }
+    ]
+    db = Mock()
+
+    result = service.calculate_group_rankings(
+        db,
+        date(2026, 4, 10),
+        market="US",
+    )
+
+    assert len(result.rankings) == 1
+    service.market_rs_snapshot_service.calculate.assert_called_once_with(
+        db,
+        market="US",
+        as_of_date=date(2026, 4, 10),
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        rebuild_incompatible=True,
+    )
 
 
 def test_get_group_history_propagates_constituent_source_failures(monkeypatch):

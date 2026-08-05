@@ -6,24 +6,26 @@ import pytest
 
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
-from app.models.industry import IBDGroupRank
+from app.models.industry import IBDGroupRank, IBDIndustryGroup
+from app.models.stock_universe import StockUniverse
 from app.services.canonical_group_ranking_service import (
     CanonicalGroupRankingService,
     CanonicalGroupRankingUnavailable,
 )
-from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
 from app.services.group_rank_snapshot_coordinator import (
     GroupRankSnapshotCoordinator,
     GroupSnapshotStatus,
 )
+from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
 from app.services.market_rs_inputs import MarketRsInputs
 from app.services.market_rs_snapshot_service import MarketRsSnapshotService
-
 
 AS_OF = date(2026, 4, 10)
 
@@ -40,6 +42,8 @@ class _CompleteMarketRsInputLoader:
             expected_symbols=("AAA", "BBB", "CCC"),
             excess_returns_by_symbol={
                 "AAA": {
+                    "1d": 0.3,
+                    "1w": 0.3,
                     "1m": 0.3,
                     "3m": 0.3,
                     "6m": 0.3,
@@ -47,6 +51,8 @@ class _CompleteMarketRsInputLoader:
                     "12m": 0.3,
                 },
                 "BBB": {
+                    "1d": 0.2,
+                    "1w": 0.2,
                     "1m": 0.2,
                     "3m": 0.2,
                     "6m": 0.2,
@@ -54,6 +60,8 @@ class _CompleteMarketRsInputLoader:
                     "12m": 0.2,
                 },
                 "CCC": {
+                    "1d": 0.1,
+                    "1w": 0.1,
                     "1m": 0.1,
                     "3m": 0.1,
                     "6m": 0.1,
@@ -94,9 +102,81 @@ def test_balanced_snapshot_never_calls_legacy(db_session):
         market="US",
         as_of_date=AS_OF,
         formula_version=BALANCED_RS_FORMULA_VERSION,
+        rebuild_incompatible=True,
     )
     canonical.calculate_and_store.assert_called_once()
     legacy.calculate_group_rankings.assert_not_called()
+
+
+def test_balanced_snapshot_rebuilds_legacy_completed_stock_run(db_session):
+    old_run = MarketRsRun(
+        market="US",
+        as_of_date=AS_OF,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        status="completed",
+        benchmark_symbol="SPY",
+        benchmark_as_of_date=AS_OF,
+        universe_hash="legacy-upgrade-run",
+        expected_symbol_count=3,
+        eligible_symbol_count=3,
+        excluded_symbol_count=0,
+        diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
+    )
+    db_session.add(old_run)
+    db_session.flush()
+    old_run_id = old_run.id
+    for symbol in ("AAA", "BBB", "CCC"):
+        db_session.add(
+            StockUniverse(
+                symbol=symbol,
+                name=f"{symbol} Inc.",
+                market="US",
+                exchange="NASDAQ",
+                market_cap=100.0,
+                is_active=True,
+                status="active",
+            )
+        )
+        db_session.add(
+            IBDIndustryGroup(
+                symbol=symbol,
+                industry_group="Software",
+                market="US",
+                source="manual",
+            )
+        )
+    db_session.commit()
+
+    repository = MarketRsRunRepository()
+    coordinator = GroupRankSnapshotCoordinator(
+        reader=GroupRankSnapshotReader(),
+        market_rs_snapshot_service=MarketRsSnapshotService(
+            input_loader=_CompleteMarketRsInputLoader(),
+            repository=repository,
+        ),
+        canonical_group_service=CanonicalGroupRankingService(repository=repository),
+        legacy_group_service=Mock(),
+    )
+    identity = GroupSnapshotIdentity("US", AS_OF, BALANCED_RS_FORMULA_VERSION)
+
+    result = coordinator.ensure_snapshot(db_session, identity=identity)
+
+    assert result.status is GroupSnapshotStatus.PROCESSED
+    assert result.row_count == 1
+    assert result.market_rs_run_id != old_run_id
+    assert result.market_rs_run_id is not None
+    rebuilt = repository.get_completed_exact(
+        db_session,
+        market="US",
+        as_of_date=AS_OF,
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+    )
+    assert rebuilt is not None
+    assert rebuilt.id == result.market_rs_run_id
+    assert (
+        rebuilt.diagnostics_json["rs_snapshot_schema_version"]
+        == BALANCED_RS_SNAPSHOT_SCHEMA_VERSION
+    )
 
 
 def test_legacy_snapshot_never_calls_canonical_stock_or_group(db_session):
@@ -144,9 +224,7 @@ def test_legacy_snapshot_passes_historical_universe_to_calculation(db_session):
 
 def test_backfill_rolls_back_failed_date_before_processing_next(db_session):
     coordinator = _coordinator(Mock(), Mock(), Mock(), Mock())
-    first = GroupSnapshotIdentity(
-        "US", date(2026, 4, 9), BALANCED_RS_FORMULA_VERSION
-    )
+    first = GroupSnapshotIdentity("US", date(2026, 4, 9), BALANCED_RS_FORMULA_VERSION)
     second = GroupSnapshotIdentity("US", AS_OF, BALANCED_RS_FORMULA_VERSION)
     coordinator.ensure_snapshot = Mock(
         side_effect=[
@@ -308,9 +386,7 @@ def test_failed_balanced_repair_preserves_previous_run_and_group_rows(db_session
             input_loader=_CompleteMarketRsInputLoader(),
             repository=repository,
         ),
-        canonical_group_service=CanonicalGroupRankingService(
-            repository=repository
-        ),
+        canonical_group_service=CanonicalGroupRankingService(repository=repository),
         legacy_group_service=Mock(),
     )
     identity = GroupSnapshotIdentity(

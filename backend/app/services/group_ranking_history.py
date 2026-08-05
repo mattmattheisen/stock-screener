@@ -9,13 +9,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
 from app.domain.feature_store.run_metadata import (
     feature_run_market as _feature_run_market,
 )
+from app.domain.relative_strength import GROUP_AVG_RS_FIELDS, LEGACY_RS_FORMULA_VERSION
 from app.infra.db.models.feature_store import FeatureRun
 from app.schemas.groups import GroupDetailResponse, HistoricalDataPoint
-from app.services.group_detail_payloads import constituent_stock_payloads_from_group_rows
+from app.services.group_detail_payloads import (
+    constituent_stock_payloads_from_group_rows,
+)
 
 GROUP_RANK_CHANGE_OFFSETS = {
     "1w": 5,
@@ -25,11 +27,22 @@ GROUP_RANK_CHANGE_OFFSETS = {
 }
 
 
-def group_rank_map(rankings: Iterable[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+def _group_avg_fields(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {field: row.get(field) for field in GROUP_AVG_RS_FIELDS}
+
+
+def _current_group_avg_fields(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        str(row["industry_group"]): row
-        for row in rankings
-        if row.get("industry_group")
+        f"current_avg_rs_{field.removeprefix('avg_rs_rating_')}": row.get(field)
+        for field in GROUP_AVG_RS_FIELDS
+    }
+
+
+def group_rank_map(
+    rankings: Iterable[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(row["industry_group"]): row for row in rankings if row.get("industry_group")
     }
 
 
@@ -67,7 +80,9 @@ def select_market_run_series(
         if cutoff_date is None:
             should_include = min_runs <= 0 or len(market_runs) < min_runs
         else:
-            should_include = len(market_runs) < min_runs or run.as_of_date >= cutoff_date
+            should_include = (
+                len(market_runs) < min_runs or run.as_of_date >= cutoff_date
+            )
         if not should_include:
             break
         market_runs.append(run)
@@ -83,9 +98,7 @@ def select_group_history_runs(
 ) -> list[FeatureRun]:
     selected_indexes = set(range(min(history_runs, len(market_runs))))
     selected_indexes.update(
-        offset
-        for offset in offsets.values()
-        if offset < len(market_runs)
+        offset for offset in offsets.values() if offset < len(market_runs)
     )
     return [market_runs[index] for index in sorted(selected_indexes)]
 
@@ -108,9 +121,7 @@ def apply_group_rank_changes(
         for ranking in rankings:
             historical = reference_map.get(str(ranking["industry_group"]))
             ranking[key] = (
-                historical["rank"] - ranking["rank"]
-                if historical is not None
-                else None
+                historical["rank"] - ranking["rank"] if historical is not None else None
             )
 
 
@@ -151,9 +162,8 @@ def _group_history_points_from_maps(
                 date=historical["date"],
                 rank=historical["rank"],
                 avg_rs_rating=historical["avg_rs_rating"],
-                avg_rs_rating_1m=historical.get("avg_rs_rating_1m"),
-                avg_rs_rating_3m=historical.get("avg_rs_rating_3m"),
                 num_stocks=historical["num_stocks"],
+                **_group_avg_fields(historical),
             ).model_dump(mode="json", exclude_none=True)
         )
     return history
@@ -168,8 +178,7 @@ def group_history_points(
 ) -> list[dict[str, Any]]:
     runs = list(market_runs)
     ranking_maps = {
-        run.id: group_rank_map(historical_rankings.get(run.id, []))
-        for run in runs
+        run.id: group_rank_map(historical_rankings.get(run.id, [])) for run in runs
     }
     return _group_history_points_from_maps(
         industry_group,
@@ -214,8 +223,6 @@ def build_group_detail_payload_from_parts(
         industry_group=industry_group,
         current_rank=ranking["rank"],
         current_avg_rs=ranking["avg_rs_rating"],
-        current_avg_rs_1m=ranking.get("avg_rs_rating_1m"),
-        current_avg_rs_3m=ranking.get("avg_rs_rating_3m"),
         current_median_rs=ranking.get("median_rs_rating"),
         current_weighted_avg_rs=ranking.get("weighted_avg_rs_rating"),
         current_rs_std_dev=ranking.get("rs_std_dev"),
@@ -224,9 +231,7 @@ def build_group_detail_payload_from_parts(
         top_symbol=ranking.get("top_symbol"),
         top_symbol_name=ranking.get("top_symbol_name"),
         top_rs_rating=ranking.get("top_rs_rating"),
-        rs_formula_version=ranking.get(
-            "rs_formula_version", LEGACY_RS_FORMULA_VERSION
-        ),
+        rs_formula_version=ranking.get("rs_formula_version", LEGACY_RS_FORMULA_VERSION),
         market_rs_run_id=ranking.get("market_rs_run_id"),
         rank_change_1w=ranking.get("rank_change_1w"),
         rank_change_1m=ranking.get("rank_change_1m"),
@@ -237,6 +242,7 @@ def build_group_detail_payload_from_parts(
             for point in history
         ],
         stocks=list(stocks),
+        **_current_group_avg_fields(ranking),
     )
     payload = response.model_dump(mode="json", exclude_none=True)
     # Rank-change keys are part of the stable detail contract even when the

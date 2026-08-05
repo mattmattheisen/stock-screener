@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.domain.markets import get_market_catalog
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
-    balanced_run_has_required_price_basis,
+    balanced_run_has_current_snapshot_contract,
 )
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.stock import StockPrice
@@ -242,7 +242,7 @@ class MarketRsBackfillService:
                 continue
             stage = "stock_calculation"
             try:
-                if run is None or not balanced_run_has_required_price_basis(run):
+                if run is None or not balanced_run_has_current_snapshot_contract(run):
                     run = self.snapshot_service.calculate(
                         db,
                         market=normalized,

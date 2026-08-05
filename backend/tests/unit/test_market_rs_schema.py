@@ -14,8 +14,17 @@ def test_market_rs_models_expose_versioned_snapshot_contract():
     assert StockRsSnapshot.__table__.primary_key.columns.keys() == ["run_id", "symbol"]
     assert MarketRsFormulaPointer.__table__.primary_key.columns.keys() == ["market"]
     assert {
+        "rs_1d",
+        "rs_1w",
+        "excess_return_1d",
+        "excess_return_1w",
+    }.issubset(StockRsSnapshot.__table__.columns.keys())
+    assert {
+        "avg_rs_rating_1d",
+        "avg_rs_rating_1w",
         "avg_rs_rating_1m",
         "avg_rs_rating_3m",
+        "avg_rs_rating_6m",
         "rs_formula_version",
         "market_rs_run_id",
     }.issubset(IBDGroupRank.__table__.columns.keys())
@@ -44,3 +53,19 @@ def test_canonical_market_rs_migration_extends_current_head():
 
     assert migration.revision == "20260718_0025"
     assert migration.down_revision == "20260701_0024"
+
+
+def test_short_horizon_group_rs_migration_extends_canonical_rs_revision():
+    migration_path = (
+        Path(__file__).resolve().parents[2]
+        / "alembic"
+        / "versions"
+        / "20260805_0026_add_short_horizon_group_rs.py"
+    )
+    spec = spec_from_file_location("short_horizon_group_rs_migration", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert migration.revision == "20260805_0026"
+    assert migration.down_revision == "20260718_0025"

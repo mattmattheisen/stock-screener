@@ -9,6 +9,7 @@ import pytest
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.models.app_settings import AppSetting
@@ -229,7 +230,10 @@ def test_group_history_target_uses_balanced_publication_date(monkeypatch):
         SimpleNamespace(
             id=42,
             as_of_date=date(2026, 6, 29),
-            diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
+            diagnostics_json={
+                "price_basis": BALANCED_RS_PRICE_BASIS,
+                "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+            },
         ),
     )
     monkeypatch.setattr(

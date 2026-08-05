@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     HORIZON_WEIGHTS,
     calculate_balanced_rs,
 )
@@ -29,7 +31,6 @@ from .golden_fixtures import (
     CANONICAL_STOCK_RS_FIELDS,
 )
 
-
 AS_OF = date(2026, 4, 10)
 SYMBOLS = ("OLD", "A1", "A2", "B1", "B2", "B3")
 
@@ -37,17 +38,59 @@ SYMBOLS = ("OLD", "A1", "A2", "B1", "B2", "B3")
 def _returns(*, old_twelve_month: float = 10.0):
     return {
         "OLD": {
+            "1d": 0.01,
+            "1w": 0.02,
             "1m": -0.50,
             "3m": -0.40,
             "6m": 2.0,
             "9m": 5.0,
             "12m": old_twelve_month,
         },
-        "A1": {"1m": 0.30, "3m": 0.35, "6m": 0.40, "9m": 0.45, "12m": 0.50},
-        "A2": {"1m": 0.20, "3m": 0.25, "6m": 0.30, "9m": 0.35, "12m": 0.40},
-        "B1": {"1m": 0.10, "3m": 0.15, "6m": 0.20, "9m": 0.25, "12m": 0.30},
-        "B2": {"1m": 0.05, "3m": 0.10, "6m": 0.15, "9m": 0.20, "12m": 0.25},
-        "B3": {"1m": 0.00, "3m": 0.05, "6m": 0.10, "9m": 0.15, "12m": 0.20},
+        "A1": {
+            "1d": 0.30,
+            "1w": 0.32,
+            "1m": 0.30,
+            "3m": 0.35,
+            "6m": 0.40,
+            "9m": 0.45,
+            "12m": 0.50,
+        },
+        "A2": {
+            "1d": 0.20,
+            "1w": 0.22,
+            "1m": 0.20,
+            "3m": 0.25,
+            "6m": 0.30,
+            "9m": 0.35,
+            "12m": 0.40,
+        },
+        "B1": {
+            "1d": 0.10,
+            "1w": 0.12,
+            "1m": 0.10,
+            "3m": 0.15,
+            "6m": 0.20,
+            "9m": 0.25,
+            "12m": 0.30,
+        },
+        "B2": {
+            "1d": 0.05,
+            "1w": 0.07,
+            "1m": 0.05,
+            "3m": 0.10,
+            "6m": 0.15,
+            "9m": 0.20,
+            "12m": 0.25,
+        },
+        "B3": {
+            "1d": 0.00,
+            "1w": 0.02,
+            "1m": 0.00,
+            "3m": 0.05,
+            "6m": 0.10,
+            "9m": 0.15,
+            "12m": 0.20,
+        },
     }
 
 
@@ -68,7 +111,10 @@ def _seed_canonical_snapshot(db_session):
     repository.mark_completed(
         run,
         excluded_symbol_count=0,
-        diagnostics={"price_basis": "adj_close_only"},
+        diagnostics={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     db_session.commit()
 
@@ -117,7 +163,9 @@ def test_stock_subset_consumers_and_static_projection_use_identical_market_perce
     run = _seed_canonical_snapshot(db_session)
     reader = SqlMarketRsReader(sessionmaker(bind=db_session.get_bind()))
     full_market = reader.get(market="US", symbols=SYMBOLS, as_of_date=AS_OF)
-    index_subset = reader.get(market="US", symbols=("OLD", "A1", "B1"), as_of_date=AS_OF)
+    index_subset = reader.get(
+        market="US", symbols=("OLD", "A1", "B1"), as_of_date=AS_OF
+    )
     watchlist = reader.get(market="US", symbols=("OLD", "B3"), as_of_date=AS_OF)
 
     for symbol in ("OLD", "A1", "B1", "B3"):
@@ -189,7 +237,9 @@ def test_group_live_and_static_payloads_match_and_main_rank_uses_overall_only(
 
 def test_extreme_raw_twelve_month_magnitude_is_bounded_by_horizon_percentiles():
     thousand_percent = calculate_balanced_rs(_returns(old_twelve_month=10.0))["OLD"]
-    ten_thousand_percent = calculate_balanced_rs(_returns(old_twelve_month=100.0))["OLD"]
+    ten_thousand_percent = calculate_balanced_rs(_returns(old_twelve_month=100.0))[
+        "OLD"
+    ]
 
     assert ten_thousand_percent.rs_12m == thousand_percent.rs_12m
     assert ten_thousand_percent.weighted_composite == pytest.approx(

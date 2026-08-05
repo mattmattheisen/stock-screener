@@ -23,21 +23,23 @@ from app.infra.db.models.relative_strength import (
 )
 from app.models.industry import IBDGroupRank
 
-SUPPORTED_FORMULAS = frozenset(
-    {BALANCED_RS_FORMULA_VERSION, LEGACY_RS_FORMULA_VERSION}
-)
+SUPPORTED_FORMULAS = frozenset({BALANCED_RS_FORMULA_VERSION, LEGACY_RS_FORMULA_VERSION})
 
 
 @dataclass(frozen=True)
 class StockRsSnapshotRecord:
     symbol: str
     overall_rs: int
+    rs_1d: int
+    rs_1w: int
     rs_1m: int
     rs_3m: int
     rs_6m: int
     rs_9m: int
     rs_12m: int
     weighted_composite: float
+    excess_return_1d: float
+    excess_return_1w: float
     excess_return_1m: float
     excess_return_3m: float
     excess_return_6m: float
@@ -219,12 +221,16 @@ class MarketRsRunRepository:
             StockRsSnapshot(
                 symbol=symbol,
                 overall_rs=score.overall_rs,
+                rs_1d=score.rs_1d,
+                rs_1w=score.rs_1w,
                 rs_1m=score.rs_1m,
                 rs_3m=score.rs_3m,
                 rs_6m=score.rs_6m,
                 rs_9m=score.rs_9m,
                 rs_12m=score.rs_12m,
                 weighted_composite=score.weighted_composite,
+                excess_return_1d=score.excess_return_1d,
+                excess_return_1w=score.excess_return_1w,
                 excess_return_1m=score.excess_return_1m,
                 excess_return_3m=score.excess_return_3m,
                 excess_return_6m=score.excess_return_6m,
@@ -259,6 +265,8 @@ class MarketRsRunRepository:
         for row in run.rows:
             ratings = (
                 row.overall_rs,
+                row.rs_1d,
+                row.rs_1w,
                 row.rs_1m,
                 row.rs_3m,
                 row.rs_6m,
@@ -320,12 +328,16 @@ class MarketRsRunRepository:
             db.query(
                 StockRsSnapshot.symbol,
                 StockRsSnapshot.overall_rs,
+                StockRsSnapshot.rs_1d,
+                StockRsSnapshot.rs_1w,
                 StockRsSnapshot.rs_1m,
                 StockRsSnapshot.rs_3m,
                 StockRsSnapshot.rs_6m,
                 StockRsSnapshot.rs_9m,
                 StockRsSnapshot.rs_12m,
                 StockRsSnapshot.weighted_composite,
+                StockRsSnapshot.excess_return_1d,
+                StockRsSnapshot.excess_return_1w,
                 StockRsSnapshot.excess_return_1m,
                 StockRsSnapshot.excess_return_3m,
                 StockRsSnapshot.excess_return_6m,
@@ -340,12 +352,16 @@ class MarketRsRunRepository:
             yield StockRsSnapshotRecord(
                 symbol=row.symbol,
                 overall_rs=int(row.overall_rs),
+                rs_1d=int(row.rs_1d),
+                rs_1w=int(row.rs_1w),
                 rs_1m=int(row.rs_1m),
                 rs_3m=int(row.rs_3m),
                 rs_6m=int(row.rs_6m),
                 rs_9m=int(row.rs_9m),
                 rs_12m=int(row.rs_12m),
                 weighted_composite=float(row.weighted_composite),
+                excess_return_1d=float(row.excess_return_1d),
+                excess_return_1w=float(row.excess_return_1w),
                 excess_return_1m=float(row.excess_return_1m),
                 excess_return_3m=float(row.excess_return_3m),
                 excess_return_6m=float(row.excess_return_6m),

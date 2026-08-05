@@ -1,7 +1,8 @@
 """Market Scan schemas"""
-from pydantic import BaseModel, ConfigDict, Field
-from typing import Dict, Literal, Optional, List
 from datetime import datetime
+from typing import Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from .scanning import ScanResultItem
 
@@ -128,8 +129,11 @@ class DailySnapshotTopGroup(BaseModel):
     industry_group: str
     rank: Optional[float] = None
     avg_rs_rating: Optional[float] = None
+    avg_rs_rating_1d: Optional[float] = None
+    avg_rs_rating_1w: Optional[float] = None
     avg_rs_rating_1m: Optional[float] = None
     avg_rs_rating_3m: Optional[float] = None
+    avg_rs_rating_6m: Optional[float] = None
     rank_change_1w: Optional[float] = None
     rank_change_1m: Optional[float] = None
     top_symbol: Optional[str] = None

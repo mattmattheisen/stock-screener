@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
+from app.domain.relative_strength import HORIZON_SESSIONS
 from app.models.stock import StockPrice
 
 
@@ -15,9 +16,11 @@ class _Calendar:
     @staticmethod
     def session_anchors(market, as_of_date, *, offsets):
         assert market == "US"
-        assert tuple(offsets) == (21, 63, 126, 189, 252)
+        assert tuple(offsets) == tuple(HORIZON_SESSIONS.values())
         return {
             0: as_of_date,
+            1: as_of_date - timedelta(days=1),
+            5: as_of_date - timedelta(days=7),
             21: date(2026, 1, 30),
             63: date(2025, 12, 1),
             126: date(2025, 9, 1),

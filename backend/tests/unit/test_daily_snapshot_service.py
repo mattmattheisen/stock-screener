@@ -7,10 +7,11 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.api.v1.market_scan import _if_none_match_matches
-from app.schemas.market_scan import DailySnapshotResponse
 import app.services.daily_snapshot_service as daily_snapshot_service
 import app.services.key_market_history as key_market_history
+import app.services.snapshot_date_coherence as snapshot_date_coherence
+from app.api.v1.market_scan import _if_none_match_matches
+from app.schemas.market_scan import DailySnapshotResponse
 from app.services.daily_snapshot_service import (
     DAILY_SNAPSHOT_CACHE_TTL_SECONDS,
     DAILY_SNAPSHOT_MEMORY_CACHE_MAX_ENTRIES,
@@ -19,12 +20,11 @@ from app.services.daily_snapshot_service import (
     _scan_freshness,
     daily_snapshot_cache_key,
     daily_snapshot_etag,
-    get_or_build_daily_snapshot_payload,
     get_daily_snapshot_memory_cache,
+    get_or_build_daily_snapshot_payload,
     set_daily_snapshot_memory_cache,
 )
 from app.services.price_refresh_plan_builder import _key_market_refresh_symbols
-import app.services.snapshot_date_coherence as snapshot_date_coherence
 from app.services.snapshot_date_coherence import coherence_status
 
 
@@ -761,6 +761,21 @@ class TestDailySnapshotResponseSchema:
 
     def test_accepts_the_documented_payload_shape(self):
         DailySnapshotResponse.model_validate(self._payload())
+
+    def test_accepts_short_horizon_group_rs_fields(self):
+        payload = self._payload()
+        payload["top_groups"][0].update(
+            {
+                "avg_rs_rating": 88.0,
+                "avg_rs_rating_1d": 82.0,
+                "avg_rs_rating_1w": 84.0,
+                "avg_rs_rating_1m": 86.0,
+                "avg_rs_rating_3m": 87.0,
+                "avg_rs_rating_6m": 89.0,
+            }
+        )
+
+        DailySnapshotResponse.model_validate(payload)
 
     def test_rejects_payload_drift(self):
         # extra="forbid" keeps the schema in lockstep with the builder: an

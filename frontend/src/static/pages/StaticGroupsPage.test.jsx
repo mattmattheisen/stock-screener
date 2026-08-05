@@ -58,8 +58,11 @@ describe('StaticGroupsPage', () => {
                     industry_group: 'Semiconductors',
                     rank: 1,
                     avg_rs_rating: 92.5,
+                    avg_rs_rating_1d: 82.25,
+                    avg_rs_rating_1w: 78.5,
                     avg_rs_rating_1m: 38.25,
                     avg_rs_rating_3m: 61.75,
+                    avg_rs_rating_6m: 88.5,
                     num_stocks: 14,
                     rank_change_1w: 2,
                     rank_change_1m: 4,
@@ -69,8 +72,11 @@ describe('StaticGroupsPage', () => {
                     industry_group: 'Retail',
                     rank: 2,
                     avg_rs_rating: 0,
+                    avg_rs_rating_1d: 0,
+                    avg_rs_rating_1w: null,
                     avg_rs_rating_1m: 0,
                     avg_rs_rating_3m: null,
+                    avg_rs_rating_6m: 10,
                     num_stocks: 4,
                     rank_change_1w: 0,
                     rank_change_1m: 0,
@@ -112,7 +118,7 @@ describe('StaticGroupsPage', () => {
     expect(screen.getByText('+3')).toBeInTheDocument();
   });
 
-  it('renders 1M and 3M RS columns with finite-value formatting', async () => {
+  it('renders short-horizon RS columns with finite-value formatting', async () => {
     renderPage();
 
     expect(await screen.findByRole('heading', { name: 'US Group Rankings' })).toBeInTheDocument();
@@ -122,8 +128,11 @@ describe('StaticGroupsPage', () => {
       'Rank',
       'Group',
       'Avg RS',
+      '1D RS',
+      '1W RS',
       '1M RS',
       '3M RS',
+      '6M RS',
       'Stocks',
       '1W',
       '1M',
@@ -132,11 +141,15 @@ describe('StaticGroupsPage', () => {
       'Top Stock',
     ]);
     const rows = within(table).getAllByRole('row');
-    expect(within(rows[1]).getAllByRole('cell')[3]).toHaveTextContent('38.3');
-    expect(within(rows[1]).getAllByRole('cell')[4]).toHaveTextContent('61.8');
+    expect(within(rows[1]).getAllByRole('cell')[3]).toHaveTextContent('82.3');
+    expect(within(rows[1]).getAllByRole('cell')[4]).toHaveTextContent('78.5');
+    expect(within(rows[1]).getAllByRole('cell')[5]).toHaveTextContent('38.3');
+    expect(within(rows[1]).getAllByRole('cell')[6]).toHaveTextContent('61.8');
+    expect(within(rows[1]).getAllByRole('cell')[7]).toHaveTextContent('88.5');
     expect(within(rows[2]).getAllByRole('cell')[2]).toHaveTextContent('0.0');
     expect(within(rows[2]).getAllByRole('cell')[3]).toHaveTextContent('0.0');
     expect(within(rows[2]).getAllByRole('cell')[4]).toHaveTextContent('-');
+    expect(within(rows[2]).getAllByRole('cell')[7]).toHaveTextContent('10.0');
   });
 
   it('sorts static group rankings by RS columns', async () => {

@@ -3,14 +3,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+)
+from app.models.industry import IBDGroupRank
+from app.models.stock_universe import StockUniverse
 from app.services.group_ranking_payloads import (
     annotate_top_symbol_names,
     group_snapshot_metadata,
     rank_record_payload,
 )
-from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
-from app.models.industry import IBDGroupRank
-from app.models.stock_universe import StockUniverse
 
 
 class _MetadataDb:
@@ -79,6 +83,12 @@ def test_group_snapshot_metadata_requires_the_referenced_completed_run():
                 as_of_date=date(2026, 4, 10),
                 status="completed",
                 eligible_symbol_count=5000,
+                diagnostics_json={
+                    "price_basis": BALANCED_RS_PRICE_BASIS,
+                    "rs_snapshot_schema_version": (
+                        BALANCED_RS_SNAPSHOT_SCHEMA_VERSION
+                    ),
+                },
             )
         ),
         market="us",
@@ -89,6 +99,28 @@ def test_group_snapshot_metadata_requires_the_referenced_completed_run():
         "rs_as_of_date": "2026-04-10",
         "rs_universe_size": 5000,
     }
+
+
+def test_group_snapshot_metadata_rejects_incompatible_balanced_run():
+    rows = [
+        {
+            "industry_group": "Software",
+            "date": "2026-04-10",
+            "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
+            "market_rs_run_id": 42,
+        }
+    ]
+    run = SimpleNamespace(
+        market="US",
+        formula_version=BALANCED_RS_FORMULA_VERSION,
+        as_of_date=date(2026, 4, 10),
+        status="completed",
+        eligible_symbol_count=5000,
+        diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
+    )
+
+    with pytest.raises(RuntimeError, match="incompatible balanced snapshot"):
+        group_snapshot_metadata(_MetadataDb(run), market="US", rankings=rows)
 
 
 def test_rank_record_payload_includes_canonical_components_and_audit_fields():

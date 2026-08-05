@@ -160,7 +160,7 @@ function GroupsTableView({ movers, moversPeriod, rankings, onSelectGroup }) {
           Current Rankings
         </Typography>
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 860 }}>
+          <Table size="small" sx={{ minWidth: 1040 }}>
             <TableHead>
               <TableRow>
                 {STATIC_GROUP_RANKING_COLUMNS.map((column) => (

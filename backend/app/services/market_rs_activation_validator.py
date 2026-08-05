@@ -18,7 +18,7 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
     RsPublicationIdentity,
-    balanced_run_has_required_price_basis,
+    balanced_run_has_current_snapshot_contract,
 )
 from app.infra.db.repositories.feature_run_repo import SqlFeatureRunRepository
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
@@ -82,9 +82,10 @@ class MarketRsActivationValidator:
                 f"Missing completed stock RS snapshot for {calculation_date}."
             )
             return None
-        if not balanced_run_has_required_price_basis(run):
+        if not balanced_run_has_current_snapshot_contract(run):
             errors.append(
-                f"Market RS run for {calculation_date} has an incompatible price basis."
+                f"Market RS run for {calculation_date} has an incompatible "
+                "balanced snapshot contract."
             )
         row_count = 0
         eligible_symbols: set[str] = set()
@@ -93,6 +94,8 @@ class MarketRsActivationValidator:
             eligible_symbols.add(row.symbol)
             ratings = (
                 row.overall_rs,
+                row.rs_1d,
+                row.rs_1w,
                 row.rs_1m,
                 row.rs_3m,
                 row.rs_6m,
@@ -227,7 +230,9 @@ class MarketRsActivationValidator:
         normalized = normalize_rollout_market(coverage.market)
         through_date = coverage.through_date
         errors: list[str] = []
-        staging_path = Path(static_staging_dir) if static_staging_dir is not None else None
+        staging_path = (
+            Path(static_staging_dir) if static_staging_dir is not None else None
+        )
         candidates = coverage.required_dates
         first_valid = coverage.start_date if candidates else None
         if not candidates:
@@ -267,7 +272,9 @@ class MarketRsActivationValidator:
         rrg_status = None
         if artifact_policy.requires_static_artifacts:
             if staging_path is None:
-                errors.append("Missing static staging directory for artifact validation.")
+                errors.append(
+                    "Missing static staging directory for artifact validation."
+                )
             elif latest_run is not None:
                 try:
                     static_result = self.static_validator.validate(

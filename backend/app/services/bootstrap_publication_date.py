@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
-    balanced_run_has_required_price_basis,
+    balanced_run_has_current_snapshot_contract,
 )
 from app.infra.db.repositories.market_rs_repo import (
     MarketRsFormulaNotConfigured,
@@ -122,7 +122,7 @@ def resolve_bootstrap_publication_date(
         (
             candidate
             for candidate in completed_runs
-            if balanced_run_has_required_price_basis(candidate)
+            if balanced_run_has_current_snapshot_contract(candidate)
         ),
         None,
     )
@@ -148,6 +148,23 @@ def resolve_bootstrap_publication_date(
             formula_version=active_formula,
             through_date=requested_date,
         )
+        if latest_run is not None and not balanced_run_has_current_snapshot_contract(
+            latest_run
+        ):
+            return _resolution(
+                market=normalized_market,
+                requested_date=requested_date,
+                selected_date=requested_date,
+                formula_version=active_formula,
+                market_rs_run_id=getattr(latest_run, "id", None),
+                lag_days=market_session_lag(
+                    calendar,
+                    market=normalized_market,
+                    start_date=latest_run.as_of_date,
+                    end_date=requested_date,
+                ),
+                reason_code="balanced_run_incompatible",
+            )
     if run is None and latest_run is None:
         return _resolution(
             market=normalized_market,

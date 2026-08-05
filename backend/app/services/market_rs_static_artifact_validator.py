@@ -13,7 +13,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.domain.markets import get_market_catalog
-from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    GROUP_AVG_RS_FIELDS,
+)
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.industry import IBDGroupRank
 from app.services.static_groups_rrg_export import (
@@ -157,9 +160,7 @@ class MarketRsStaticArtifactValidator:
                 )
 
         market_dir = static_staging_dir / "markets" / market.lower()
-        groups_applicable = (
-            get_market_catalog().get(market).capabilities.group_rankings
-        )
+        groups_applicable = get_market_catalog().get(market).capabilities.group_rankings
         groups_path = market_dir / "groups.json"
         scan_path = market_dir / "scan" / "manifest.json"
         groups_payload: dict[str, Any] = {}
@@ -171,9 +172,7 @@ class MarketRsStaticArtifactValidator:
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 errors.append(f"Invalid staged Groups artifact: {exc}")
             if groups_payload.get("schema_version") != STATIC_SITE_SCHEMA_VERSION:
-                errors.append(
-                    "Staged Groups artifact has mismatched schema metadata."
-                )
+                errors.append("Staged Groups artifact has mismatched schema metadata.")
             if groups_payload.get("available", True):
                 self._validate_identity(
                     groups_payload,
@@ -337,9 +336,7 @@ class MarketRsStaticArtifactValidator:
             if path.is_file()
         }
         if discovered_paths != referenced_paths:
-            errors.append(
-                "Staged Scan chunk files do not exactly match the manifest."
-            )
+            errors.append("Staged Scan chunk files do not exactly match the manifest.")
         if scan_payload.get("rows_total") != row_count:
             errors.append("Staged Scan rows_total does not match its chunks.")
         return StaticScanRows(
@@ -367,17 +364,15 @@ class MarketRsStaticArtifactValidator:
             .all()
         )
         static_groups = (
-            (((documents.groups.get("payload") or {}).get("rankings") or {}).get(
+            ((documents.groups.get("payload") or {}).get("rankings") or {}).get(
                 "rankings"
-            ))
-            or []
-        )
+            )
+        ) or []
         static_by_name = {row.get("industry_group"): row for row in static_groups}
         parity_fields = (
             "rank",
             "avg_rs_rating",
-            "avg_rs_rating_1m",
-            "avg_rs_rating_3m",
+            *GROUP_AVG_RS_FIELDS,
             "num_stocks",
             "top_symbol",
             "rs_formula_version",
@@ -386,9 +381,7 @@ class MarketRsStaticArtifactValidator:
         for live in live_groups:
             static = static_by_name.get(live.industry_group)
             if static is None:
-                errors.append(
-                    f"Static Groups artifact omits {live.industry_group}."
-                )
+                errors.append(f"Static Groups artifact omits {live.industry_group}.")
                 continue
             for field in parity_fields:
                 live_value = getattr(live, field)
@@ -408,8 +401,7 @@ class MarketRsStaticArtifactValidator:
                     equal = live_value == static_value
                 if not equal:
                     errors.append(
-                        "Live/static Group mismatch for "
-                        f"{live.industry_group}.{field}."
+                        f"Live/static Group mismatch for {live.industry_group}.{field}."
                     )
 
     def _validate_stock_parity(
@@ -436,9 +428,7 @@ class MarketRsStaticArtifactValidator:
                     )
                 }
         else:
-            stock_by_symbol = {
-                row.symbol: row for row in latest_run.rows
-            }
+            stock_by_symbol = {row.symbol: row for row in latest_run.rows}
         stock_fields = {
             "rs_rating": "overall_rs",
             "rs_rating_1m": "rs_1m",
@@ -471,13 +461,10 @@ class MarketRsStaticArtifactValidator:
             for static_field, stock_field in stock_fields.items():
                 if static_row.get(static_field) != getattr(stock, stock_field):
                     errors.append(
-                        f"Live/static stock mismatch for "
-                        f"{stock.symbol}.{static_field}."
+                        f"Live/static stock mismatch for {stock.symbol}.{static_field}."
                     )
         if stock_by_symbol and compared == 0:
-            errors.append(
-                "No staged Scan rows overlap the canonical Market RS run."
-            )
+            errors.append("No staged Scan rows overlap the canonical Market RS run.")
 
     def _validate_rrg(
         self,
@@ -509,10 +496,7 @@ class MarketRsStaticArtifactValidator:
                             "being enabled for this market."
                         )
                 return "not_enabled"
-            if (
-                exc.reason_code
-                is StaticGroupsRRGUnavailableReason.INSUFFICIENT_HISTORY
-            ):
+            if exc.reason_code is StaticGroupsRRGUnavailableReason.INSUFFICIENT_HISTORY:
                 errors.append(
                     "Balanced RRG history is insufficient for guarded activation: "
                     f"{exc.reason}"
@@ -534,10 +518,7 @@ class MarketRsStaticArtifactValidator:
             errors.append("Missing staged balanced RRG artifact.")
         else:
             actual_rrg = self._json_file(rrg_path)
-            if (
-                actual_rrg.get("rs_formula_version")
-                != BALANCED_RS_FORMULA_VERSION
-            ):
+            if actual_rrg.get("rs_formula_version") != BALANCED_RS_FORMULA_VERSION:
                 errors.append("Staged RRG artifact uses a mixed RS formula.")
             if actual_rrg.get("payload") != expected_rrg.get("payload"):
                 errors.append("Live/static RRG coordinates diverge.")

@@ -12,6 +12,8 @@ import app.services.market_rs_activator as activation_module
 from app.domain.feature_store.models import RunStatus
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
 )
@@ -52,7 +54,10 @@ def _seed_activation_candidates(db_session):
         expected_symbol_count=1,
         eligible_symbol_count=1,
         excluded_symbol_count=0,
-        diagnostics_json={"price_basis": "adj_close_only"},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
         completed_at=datetime.now(timezone.utc),
     )
     db_session.add(rs_run)

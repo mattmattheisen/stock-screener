@@ -5,6 +5,8 @@ from sqlalchemy import event
 
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
     RsPublicationIdentity,
@@ -15,7 +17,6 @@ from app.services.group_rank_snapshot_reader import (
     GroupRankSnapshotReader,
     GroupSnapshotIntegrityError,
 )
-
 
 AS_OF = date(2026, 4, 10)
 
@@ -33,7 +34,10 @@ def _run(db_session, *, run_id=41, as_of_date=AS_OF):
         expected_symbol_count=3,
         eligible_symbol_count=3,
         excluded_symbol_count=0,
-        diagnostics_json={"price_basis": "adj_close_only"},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     db_session.add(row)
     db_session.flush()
