@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
+
 from sqlalchemy.orm import Session
 
-from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.relative_strength import (
+    BALANCED_RS_FORMULA_VERSION,
+    GROUP_AVG_RS_FIELDS,
+)
 from app.infra.db.models.relative_strength import MarketRsRun
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
@@ -41,13 +45,11 @@ def rank_record_payload(
     top_symbol_name: str | None = None,
 ) -> dict[str, Any]:
     """Serialize one persisted Group row for every live/static reader."""
-    return {
+    payload = {
         "industry_group": ranking.industry_group,
         "date": ranking.date.isoformat(),
         "rank": ranking.rank,
         "avg_rs_rating": ranking.avg_rs_rating,
-        "avg_rs_rating_1m": ranking.avg_rs_rating_1m,
-        "avg_rs_rating_3m": ranking.avg_rs_rating_3m,
         "median_rs_rating": ranking.median_rs_rating,
         "weighted_avg_rs_rating": ranking.weighted_avg_rs_rating,
         "rs_std_dev": ranking.rs_std_dev,
@@ -64,6 +66,9 @@ def rank_record_payload(
         "rank_change_3m": None,
         "rank_change_6m": None,
     }
+    payload.update({field: getattr(ranking, field) for field in GROUP_AVG_RS_FIELDS})
+    return payload
+
 
 def group_snapshot_metadata(
     db: Session,

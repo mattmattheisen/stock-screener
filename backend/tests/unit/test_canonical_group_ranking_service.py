@@ -17,7 +17,6 @@ from app.services.canonical_group_ranking_service import (
 )
 from app.services.ibd_industry_service import IBDIndustryService
 
-
 AS_OF = date(2026, 4, 10)
 
 
@@ -37,18 +36,31 @@ def _seed_run(db, rows):
     )
     db.add(run)
     db.flush()
-    for symbol, overall, one_month, three_month, cap in rows:
+    for (
+        symbol,
+        overall,
+        one_day,
+        one_week,
+        one_month,
+        three_month,
+        six_month,
+        cap,
+    ) in rows:
         db.add(
             StockRsSnapshot(
                 run_id=run.id,
                 symbol=symbol,
                 overall_rs=overall,
+                rs_1d=one_day,
+                rs_1w=one_week,
                 rs_1m=one_month,
                 rs_3m=three_month,
-                rs_6m=50,
+                rs_6m=six_month,
                 rs_9m=50,
                 rs_12m=50,
                 weighted_composite=float(overall),
+                excess_return_1d=0.1,
+                excess_return_1w=0.1,
                 excess_return_1m=0.1,
                 excess_return_3m=0.1,
                 excess_return_6m=0.1,
@@ -88,11 +100,11 @@ def test_canonical_group_means_share_one_eligible_constituent_set(db_session):
     run = _seed_run(
         db_session,
         [
-            ("AAA", 99, 10, 20, 100.0),
-            ("BBB", 80, 20, 40, 200.0),
-            ("CCC", 50, 30, 60, 300.0),
-            ("DDD", 70, 90, 90, 400.0),
-            ("EEE", 60, 80, 80, 500.0),
+            ("AAA", 99, 11, 12, 10, 20, 40, 100.0),
+            ("BBB", 80, 21, 22, 20, 40, 60, 200.0),
+            ("CCC", 50, 31, 32, 30, 60, 80, 300.0),
+            ("DDD", 70, 90, 90, 90, 90, 90, 400.0),
+            ("EEE", 60, 80, 80, 80, 80, 80, 500.0),
         ],
     )
     _map(db_session, "Leaders", "AAA", "BBB", "CCC", "ABSENT")
@@ -108,31 +120,37 @@ def test_canonical_group_means_share_one_eligible_constituent_set(db_session):
     assert [row["industry_group"] for row in rankings] == ["Leaders"]
     leaders = rankings[0]
     assert leaders["avg_rs_rating"] == pytest.approx((99 + 80 + 50) / 3)
+    assert leaders["avg_rs_rating_1d"] == pytest.approx((11 + 21 + 31) / 3)
+    assert leaders["avg_rs_rating_1w"] == pytest.approx((12 + 22 + 32) / 3)
     assert leaders["avg_rs_rating_1m"] == pytest.approx((10 + 20 + 30) / 3)
     assert leaders["avg_rs_rating_3m"] == pytest.approx((20 + 40 + 60) / 3)
+    assert leaders["avg_rs_rating_6m"] == pytest.approx((40 + 60 + 80) / 3)
     assert leaders["num_stocks"] == 3
     assert leaders["market_rs_run_id"] == run.id
     assert leaders["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
 
     stored = db_session.query(IBDGroupRank).one()
     assert stored.avg_rs_rating == pytest.approx(leaders["avg_rs_rating"])
+    assert stored.avg_rs_rating_1d == pytest.approx(leaders["avg_rs_rating_1d"])
+    assert stored.avg_rs_rating_1w == pytest.approx(leaders["avg_rs_rating_1w"])
     assert stored.avg_rs_rating_1m == pytest.approx(leaders["avg_rs_rating_1m"])
     assert stored.avg_rs_rating_3m == pytest.approx(leaders["avg_rs_rating_3m"])
+    assert stored.avg_rs_rating_6m == pytest.approx(leaders["avg_rs_rating_6m"])
 
 
 def test_canonical_main_rank_uses_only_unrounded_equal_weight_overall_rs(db_session):
     _seed_run(
         db_session,
         [
-            ("A1", 90, 10, 10, 1.0),
-            ("A2", 80, 10, 10, 1.0),
-            ("A3", 70, 10, 10, 10_000.0),
-            ("B1", 79, 99, 99, 10_000.0),
-            ("B2", 79, 99, 99, 10_000.0),
-            ("B3", 79, 99, 99, 10_000.0),
-            ("C1", 80, 50, 50, 100.0),
-            ("C2", 80, 50, 50, 100.0),
-            ("C3", 80, 50, 50, 100.0),
+            ("A1", 90, 10, 10, 10, 10, 10, 1.0),
+            ("A2", 80, 10, 10, 10, 10, 10, 1.0),
+            ("A3", 70, 10, 10, 10, 10, 10, 10_000.0),
+            ("B1", 79, 99, 99, 99, 99, 99, 10_000.0),
+            ("B2", 79, 99, 99, 99, 99, 99, 10_000.0),
+            ("B3", 79, 99, 99, 99, 99, 99, 10_000.0),
+            ("C1", 80, 50, 50, 50, 50, 50, 100.0),
+            ("C2", 80, 50, 50, 50, 50, 50, 100.0),
+            ("C3", 80, 50, 50, 50, 50, 50, 100.0),
         ],
     )
     _map(db_session, "Alpha", "A1", "A2", "A3")
@@ -159,9 +177,9 @@ def test_canonical_top_stock_ties_use_1m_then_cap_then_symbol(db_session):
     _seed_run(
         db_session,
         [
-            ("ZZZ", 90, 50, 50, 1_000.0),
-            ("BBB", 90, 60, 50, 10.0),
-            ("AAA", 90, 60, 50, 10.0),
+            ("ZZZ", 90, 50, 50, 50, 50, 50, 1_000.0),
+            ("BBB", 90, 60, 60, 60, 50, 50, 10.0),
+            ("AAA", 90, 60, 60, 60, 50, 50, 10.0),
         ],
     )
     _map(db_session, "Tie Group", "ZZZ", "BBB", "AAA")
@@ -183,9 +201,9 @@ def test_canonical_group_aggregation_does_not_query_membership_per_group(
     _seed_run(
         db_session,
         [
-            ("AAA", 90, 50, 50, 100.0),
-            ("BBB", 80, 50, 50, 100.0),
-            ("CCC", 70, 50, 50, 100.0),
+            ("AAA", 90, 50, 50, 50, 50, 50, 100.0),
+            ("BBB", 80, 50, 50, 50, 50, 50, 100.0),
+            ("CCC", 70, 50, 50, 50, 50, 50, 100.0),
         ],
     )
     _map(db_session, "Bulk", "AAA", "BBB", "CCC")
@@ -213,9 +231,9 @@ def test_canonical_and_legacy_group_rows_coexist(db_session):
     _seed_run(
         db_session,
         [
-            ("AAA", 90, 50, 50, 100.0),
-            ("BBB", 80, 50, 50, 100.0),
-            ("CCC", 70, 50, 50, 100.0),
+            ("AAA", 90, 50, 50, 50, 50, 50, 100.0),
+            ("BBB", 80, 50, 50, 50, 50, 50, 100.0),
+            ("CCC", 70, 50, 50, 50, 50, 50, 100.0),
         ],
     )
     _map(db_session, "Coexist", "AAA", "BBB", "CCC")
@@ -242,7 +260,9 @@ def test_canonical_and_legacy_group_rows_coexist(db_session):
         formula_version=BALANCED_RS_FORMULA_VERSION,
     )
 
-    rows = db_session.query(IBDGroupRank).order_by(IBDGroupRank.rs_formula_version).all()
+    rows = (
+        db_session.query(IBDGroupRank).order_by(IBDGroupRank.rs_formula_version).all()
+    )
     assert {row.rs_formula_version for row in rows} == {
         LEGACY_RS_FORMULA_VERSION,
         BALANCED_RS_FORMULA_VERSION,
@@ -253,8 +273,8 @@ def test_empty_canonical_calculation_preserves_existing_snapshot(db_session):
     run = _seed_run(
         db_session,
         [
-            ("AAA", 90, 50, 50, 100.0),
-            ("BBB", 80, 50, 50, 100.0),
+            ("AAA", 90, 50, 50, 50, 50, 50, 100.0),
+            ("BBB", 80, 50, 50, 50, 50, 50, 100.0),
         ],
     )
     _map(db_session, "Too Small", "AAA", "BBB")

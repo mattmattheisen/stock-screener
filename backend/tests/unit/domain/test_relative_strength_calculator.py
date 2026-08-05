@@ -36,16 +36,87 @@ def test_balanced_weights_are_exactly_one():
     }
 
 
-def test_raw_magnitude_cannot_change_a_symbol_after_horizon_rank_is_fixed():
+def test_short_horizon_ratings_are_display_only_and_do_not_change_overall_rs():
     returns = {
-        "A": {"1m": -0.40, "3m": -0.20, "6m": 0.10, "9m": 0.40, "12m": 10.0},
-        "B": {"1m": 0.10, "3m": 0.15, "6m": 0.20, "9m": 0.30, "12m": 1.0},
-        "C": {"1m": 0.20, "3m": 0.25, "6m": 0.30, "9m": 0.20, "12m": 0.5},
+        "A": {
+            "1d": 1.00,
+            "1w": 1.00,
+            "1m": -0.40,
+            "3m": -0.20,
+            "6m": 0.10,
+            "9m": 0.40,
+            "12m": 10.0,
+        },
+        "B": {
+            "1d": 0.10,
+            "1w": 0.10,
+            "1m": 0.10,
+            "3m": 0.15,
+            "6m": 0.20,
+            "9m": 0.30,
+            "12m": 1.0,
+        },
+        "C": {
+            "1d": -0.10,
+            "1w": -0.10,
+            "1m": 0.20,
+            "3m": 0.25,
+            "6m": 0.30,
+            "9m": 0.20,
+            "12m": 0.5,
+        },
     }
     baseline = calculate_balanced_rs(returns)
-    extreme = calculate_balanced_rs(
-        {**returns, "A": {**returns["A"], "12m": 10_000.0}}
+    flipped_short_term = calculate_balanced_rs(
+        {
+            **returns,
+            "A": {**returns["A"], "1d": -10.0, "1w": -10.0},
+            "C": {**returns["C"], "1d": 10.0, "1w": 10.0},
+        }
     )
+
+    assert baseline["A"].rs_1d == 99
+    assert baseline["A"].rs_1w == 99
+    assert flipped_short_term["A"].rs_1d == 1
+    assert flipped_short_term["A"].rs_1w == 1
+    assert (
+        flipped_short_term["A"].weighted_composite == baseline["A"].weighted_composite
+    )
+    assert flipped_short_term["A"].overall_rs == baseline["A"].overall_rs
+
+
+def test_raw_magnitude_cannot_change_a_symbol_after_horizon_rank_is_fixed():
+    returns = {
+        "A": {
+            "1d": 0.0,
+            "1w": 0.0,
+            "1m": -0.40,
+            "3m": -0.20,
+            "6m": 0.10,
+            "9m": 0.40,
+            "12m": 10.0,
+        },
+        "B": {
+            "1d": 0.0,
+            "1w": 0.0,
+            "1m": 0.10,
+            "3m": 0.15,
+            "6m": 0.20,
+            "9m": 0.30,
+            "12m": 1.0,
+        },
+        "C": {
+            "1d": 0.0,
+            "1w": 0.0,
+            "1m": 0.20,
+            "3m": 0.25,
+            "6m": 0.30,
+            "9m": 0.20,
+            "12m": 0.5,
+        },
+    }
+    baseline = calculate_balanced_rs(returns)
+    extreme = calculate_balanced_rs({**returns, "A": {**returns["A"], "12m": 10_000.0}})
 
     assert baseline["A"].rs_12m == 99
     assert extreme["A"].rs_12m == 99
@@ -56,9 +127,33 @@ def test_raw_magnitude_cannot_change_a_symbol_after_horizon_rank_is_fixed():
 def test_recent_relative_weakness_controls_half_of_the_composite():
     scores = calculate_balanced_rs(
         {
-            "FORMER": {"1m": -0.50, "3m": -0.35, "6m": 0.10, "9m": 1.0, "12m": 10.0},
-            "STEADY": {"1m": 0.12, "3m": 0.18, "6m": 0.20, "9m": 0.25, "12m": 0.30},
-            "MIDDLE": {"1m": 0.02, "3m": 0.04, "6m": 0.08, "9m": 0.12, "12m": 0.15},
+            "FORMER": {
+                "1d": 0.0,
+                "1w": 0.0,
+                "1m": -0.50,
+                "3m": -0.35,
+                "6m": 0.10,
+                "9m": 1.0,
+                "12m": 10.0,
+            },
+            "STEADY": {
+                "1d": 0.0,
+                "1w": 0.0,
+                "1m": 0.12,
+                "3m": 0.18,
+                "6m": 0.20,
+                "9m": 0.25,
+                "12m": 0.30,
+            },
+            "MIDDLE": {
+                "1d": 0.0,
+                "1w": 0.0,
+                "1m": 0.02,
+                "3m": 0.04,
+                "6m": 0.08,
+                "9m": 0.12,
+                "12m": 0.15,
+            },
         }
     )
 
@@ -71,7 +166,15 @@ def test_calculator_requires_one_common_complete_eligible_set():
     with pytest.raises(ValueError, match="missing horizons"):
         calculate_balanced_rs(
             {
-                "A": {"1m": 0.1, "3m": 0.2, "6m": 0.3, "9m": 0.4, "12m": 0.5},
+                "A": {
+                    "1d": 0.0,
+                    "1w": 0.0,
+                    "1m": 0.1,
+                    "3m": 0.2,
+                    "6m": 0.3,
+                    "9m": 0.4,
+                    "12m": 0.5,
+                },
                 "B": {"1m": 0.1, "3m": 0.2},
             }
         )

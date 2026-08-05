@@ -15,6 +15,8 @@ from app.services.point_in_time_universe_service import (
 
 ANCHORS = {
     0: date(2026, 4, 10),
+    1: date(2026, 4, 9),
+    5: date(2026, 4, 3),
     21: date(2026, 3, 10),
     63: date(2026, 1, 9),
     126: date(2025, 10, 10),
@@ -39,7 +41,7 @@ class _UniverseStub:
 class _CalendarStub:
     @staticmethod
     def session_anchors(_market, _as_of_date, *, offsets):
-        assert set(offsets) == {21, 63, 126, 189, 252}
+        assert set(offsets) == {1, 5, 21, 63, 126, 189, 252}
         return dict(ANCHORS)
 
     @staticmethod
@@ -112,12 +114,30 @@ def test_load_uses_adjusted_prices_and_excludes_only_insufficient_history(db_ses
         [
             *_complete_rows(
                 "AAA",
-                {0: 120.0, 21: 100.0, 63: 90.0, 126: 80.0, 189: 70.0, 252: 60.0},
+                {
+                    0: 120.0,
+                    1: 115.0,
+                    5: 112.0,
+                    21: 100.0,
+                    63: 90.0,
+                    126: 80.0,
+                    189: 70.0,
+                    252: 60.0,
+                },
                 close_multiplier=10.0,
             ),
             *_complete_rows(
                 "BBB",
-                {0: 90.0, 21: 80.0, 63: 75.0, 126: 70.0, 189: 65.0, 252: 60.0},
+                {
+                    0: 90.0,
+                    1: 88.0,
+                    5: 85.0,
+                    21: 80.0,
+                    63: 75.0,
+                    126: 70.0,
+                    189: 65.0,
+                    252: 60.0,
+                },
             ),
             *[
                 _price("YOUNG", offset, adjusted=50.0)
@@ -126,7 +146,16 @@ def test_load_uses_adjusted_prices_and_excludes_only_insufficient_history(db_ses
             ],
             *_complete_rows(
                 "SPY",
-                {0: 110.0, 21: 100.0, 63: 100.0, 126: 100.0, 189: 100.0, 252: 100.0},
+                {
+                    0: 110.0,
+                    1: 108.0,
+                    5: 105.0,
+                    21: 100.0,
+                    63: 100.0,
+                    126: 100.0,
+                    189: 100.0,
+                    252: 100.0,
+                },
             ),
         ]
     )
@@ -139,10 +168,14 @@ def test_load_uses_adjusted_prices_and_excludes_only_insufficient_history(db_ses
     assert inputs.benchmark_symbol == "SPY"
     assert inputs.expected_symbols == ("AAA", "BBB", "YOUNG")
     assert set(inputs.excess_returns_by_symbol) == {"AAA", "BBB"}
-    assert inputs.exclusions == {
-        "YOUNG": "missing_adjusted_252_session_anchor"
-    }
+    assert inputs.exclusions == {"YOUNG": "missing_adjusted_252_session_anchor"}
     assert inputs.current_price_coverage == pytest.approx(1.0)
+    assert inputs.excess_returns_by_symbol["AAA"]["1d"] == pytest.approx(
+        (120.0 / 115.0 - 1.0) - (110.0 / 108.0 - 1.0)
+    )
+    assert inputs.excess_returns_by_symbol["AAA"]["1w"] == pytest.approx(
+        (120.0 / 112.0 - 1.0) - (110.0 / 105.0 - 1.0)
+    )
     assert inputs.excess_returns_by_symbol["AAA"]["1m"] == pytest.approx(
         (120.0 / 100.0 - 1.0) - (110.0 / 100.0 - 1.0)
     )
@@ -183,9 +216,7 @@ def test_load_fails_when_no_benchmark_has_every_exact_anchor(db_session):
     db_session.commit()
 
     with pytest.raises(MarketRsInputUnavailable) as exc_info:
-        _loader(("AAA",)).load(
-            db_session, market="US", as_of_date=ANCHORS[0]
-        )
+        _loader(("AAA",)).load(db_session, market="US", as_of_date=ANCHORS[0])
 
     assert exc_info.value.reason_code == "benchmark_adjusted_anchor_missing"
     assert exc_info.value.benchmark_symbol == "SPY"
@@ -222,11 +253,9 @@ def test_missing_benchmark_anchor_reports_price_backed_calendar_diagnostics(
         loader.load(db_session, market="JP", as_of_date=ANCHORS[0])
 
     diagnostics = exc_info.value.diagnostics
-    assert diagnostics["missing_anchor_dates"] == {
-        "^N225": [ANCHORS[21].isoformat()]
-    }
+    assert diagnostics["missing_anchor_dates"] == {"^N225": [ANCHORS[21].isoformat()]}
     assert diagnostics["benchmark_anchor_price_coverage"]["^N225"] == pytest.approx(
-        5 / 6
+        7 / 8
     )
     assert diagnostics["calendar_metadata"] == {
         "market": "JP",
@@ -240,23 +269,17 @@ def test_load_fails_when_current_price_coverage_is_below_ninety_percent(db_sessi
     symbols = tuple(f"S{index}" for index in range(10))
     db_session.add_all(
         [
-            *[
-                _price(symbol, 0, adjusted=100.0)
-                for symbol in symbols[:8]
-            ],
+            *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:8]],
             *_complete_rows("SPY", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
     db_session.commit()
 
     with pytest.raises(MarketRsInputUnavailable) as exc_info:
-        _loader(symbols).load(
-            db_session, market="US", as_of_date=ANCHORS[0]
-        )
+        _loader(symbols).load(db_session, market="US", as_of_date=ANCHORS[0])
 
     assert (
-        exc_info.value.reason_code
-        == "current_adjusted_price_coverage_below_threshold"
+        exc_info.value.reason_code == "current_adjusted_price_coverage_below_threshold"
     )
     assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.8)
 
@@ -269,10 +292,7 @@ def test_load_allows_ca_current_price_coverage_matching_configured_policy(
     symbols = tuple(f"S{index}" for index in range(20))
     db_session.add_all(
         [
-            *[
-                _price(symbol, 0, adjusted=100.0)
-                for symbol in symbols[:15]
-            ],
+            *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:15]],
             *_complete_rows("^GSPTSE", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -307,10 +327,7 @@ def test_load_allows_static_asia_current_price_coverage_actuals(
     symbols = tuple(f"S{index}" for index in range(symbol_count))
     db_session.add_all(
         [
-            *[
-                _price(symbol, 0, adjusted=100.0)
-                for symbol in symbols[:covered_count]
-            ],
+            *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:covered_count]],
             *_complete_rows(benchmark, {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -328,10 +345,7 @@ def test_load_allows_de_static_current_price_coverage_actual(db_session):
     symbols = tuple(f"S{index}" for index in range(101))
     db_session.add_all(
         [
-            *[
-                _price(symbol, 0, adjusted=100.0)
-                for symbol in symbols[:90]
-            ],
+            *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:90]],
             *_complete_rows("^GDAXI", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -353,10 +367,7 @@ def test_load_uses_configured_market_specific_current_price_threshold(
     symbols = tuple(f"S{index}" for index in range(20))
     db_session.add_all(
         [
-            *[
-                _price(symbol, 0, adjusted=100.0)
-                for symbol in symbols[:15]
-            ],
+            *[_price(symbol, 0, adjusted=100.0) for symbol in symbols[:15]],
             *_complete_rows("^GSPTSE", {offset: 100.0 for offset in ANCHORS}),
         ]
     )
@@ -368,11 +379,12 @@ def test_load_uses_configured_market_specific_current_price_threshold(
         )
 
     assert (
-        exc_info.value.reason_code
-        == "current_adjusted_price_coverage_below_threshold"
+        exc_info.value.reason_code == "current_adjusted_price_coverage_below_threshold"
     )
     assert exc_info.value.diagnostics["current_price_coverage"] == pytest.approx(0.75)
-    assert exc_info.value.diagnostics["minimum_current_price_coverage"] == pytest.approx(0.80)
+    assert exc_info.value.diagnostics[
+        "minimum_current_price_coverage"
+    ] == pytest.approx(0.80)
 
 
 def test_load_translates_unavailable_historical_universe_to_input_failure(db_session):

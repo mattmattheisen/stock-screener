@@ -63,8 +63,11 @@ CANONICAL_STOCK_RS_FIELDS: tuple[str, ...] = (
 CANONICAL_GROUP_RS_FIELDS: tuple[str, ...] = (
     "rank",
     "avg_rs_rating",
+    "avg_rs_rating_1d",
+    "avg_rs_rating_1w",
     "avg_rs_rating_1m",
     "avg_rs_rating_3m",
+    "avg_rs_rating_6m",
     "num_stocks",
     "top_symbol",
     "rs_formula_version",
@@ -192,7 +195,9 @@ def build_golden_result(symbol: str, profile: str, idx: int) -> dict[str, Any]:
             screeners_total=2,
             gics_sector="Technology",
             gics_industry=["Software", "E-Commerce", "Social Media"][idx],
-            ibd_industry_group=["Comp-Software", "Internet-Retail", "Internet-Content"][idx],
+            ibd_industry_group=["Comp-Software", "Internet-Retail", "Internet-Content"][
+                idx
+            ],
             ibd_group_rank=10 + idx * 3,
         )
 
@@ -370,7 +375,13 @@ def build_golden_result(symbol: str, profile: str, idx: int) -> dict[str, Any]:
             vcp_ready_for_breakout=True,
             vcp_contraction_ratio=0.65,
             vcp_atr_score=82.0,
-            screeners_run=["minervini", "canslim", "ipo", "custom", "volume_breakthrough"],
+            screeners_run=[
+                "minervini",
+                "canslim",
+                "ipo",
+                "custom",
+                "volume_breakthrough",
+            ],
             composite_method="weighted_average",
             screeners_passed=5,
             screeners_total=5,

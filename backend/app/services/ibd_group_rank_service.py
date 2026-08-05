@@ -3,14 +3,17 @@ Service for calculating and managing IBD Industry Group Rankings.
 
 Calculates daily rankings based on average RS rating of constituent stocks.
 """
+
 import logging
 from collections.abc import Collection
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List
-from datetime import datetime, date, timedelta
+
 from sqlalchemy.orm import Session
 
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    GROUP_AVG_RS_FIELDS,
     LEGACY_RS_FORMULA_VERSION,
     GroupSnapshotIdentity,
     RsPublicationIdentity,
@@ -18,35 +21,37 @@ from app.domain.relative_strength import (
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 
 from ..models.industry import IBDGroupRank
+from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
+from .benchmark_cache_service import BenchmarkCacheService
 from .canonical_group_ranking_service import CanonicalGroupRankingService
+from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .group_constituent_source import (
     GroupConstituentPublicationUnavailable,
     GroupConstituentSource,
 )
 from .group_detail_payloads import constituent_stock_payloads_from_scan_items
-from .group_ranking_history import build_group_detail_payload_from_parts
 from .group_rank_cache_policy import GroupRankCacheRequirement
-from .group_rank_models import (
-    GroupRankCalculationResult,
-    GroupRankPrefetchData,
-    GroupRankPrefetchStats,
-    GroupRanking,
-)
-from .group_rank_input_loader import GroupRankInputLoader
 from .group_rank_historical_calculator import (
     GroupRankHistoricalCalculator,
 )
 from .group_rank_history_policy import CALENDAR_DAY_GROUP_RANK_CHANGE_WINDOWS
+from .group_rank_input_loader import GroupRankInputLoader
 from .group_rank_legacy_adapter import LegacyGroupRankPrefetchAdapter
+from .group_rank_models import (
+    GroupRankCalculationResult,
+    GroupRanking,
+    GroupRankPrefetchData,
+    GroupRankPrefetchStats,
+)
 from .group_ranking_calculator import GroupRankingCalculator
-from .group_ranking_repository import GroupRankingRepository
-from .group_ranking_history import apply_calendar_rank_changes
+from .group_ranking_history import (
+    apply_calendar_rank_changes,
+    build_group_detail_payload_from_parts,
+)
 from .group_ranking_payloads import rank_record_payload
+from .group_ranking_repository import GroupRankingRepository
 from .market_rs_snapshot_service import MarketRsSnapshotService
-from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .price_cache_service import PriceCacheService
-from .benchmark_cache_service import BenchmarkCacheService
-from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +67,7 @@ class IncompleteGroupRankingCacheError(RuntimeError):
             f"{market_suffix}"
         )
         if stats.benchmark_available:
-            reason = (
-                f"{stats.cache_miss_symbols} symbols are missing cached price data"
-            )
+            reason = f"{stats.cache_miss_symbols} symbols are missing cached price data"
         super().__init__(reason)
 
 
@@ -101,9 +104,7 @@ class IBDGroupRankService:
         ranking_calculator: GroupRankingCalculator | None = None,
         ranking_repository: GroupRankingRepository | None = None,
         historical_calculator: GroupRankHistoricalCalculator,
-        legacy_prefetch_adapter: (
-            LegacyGroupRankPrefetchAdapter | None
-        ) = None,
+        legacy_prefetch_adapter: (LegacyGroupRankPrefetchAdapter | None) = None,
     ):
         """Initialize the service."""
         self.price_cache = price_cache
@@ -116,17 +117,13 @@ class IBDGroupRankService:
         self.market_rs_repository = market_rs_repository
         self.market_rs_snapshot_service = market_rs_snapshot_service
         self.input_loader = input_loader
-        self.ranking_calculator = (
-            ranking_calculator
-            or GroupRankingCalculator(self.rs_calculator)
+        self.ranking_calculator = ranking_calculator or GroupRankingCalculator(
+            self.rs_calculator
         )
-        self.ranking_repository = (
-            ranking_repository or GroupRankingRepository()
-        )
+        self.ranking_repository = ranking_repository or GroupRankingRepository()
         self.historical_calculator = historical_calculator
         self.legacy_prefetch_adapter = (
-            legacy_prefetch_adapter
-            or LegacyGroupRankPrefetchAdapter()
+            legacy_prefetch_adapter or LegacyGroupRankPrefetchAdapter()
         )
 
     def calculate_group_rankings(
@@ -171,7 +168,8 @@ class IBDGroupRankService:
             raise ValueError(f"Unsupported Group RS formula: {requested_formula}")
         logger.info(
             "Calculating industry group rankings for market=%s date=%s",
-            normalized_market, calculation_date,
+            normalized_market,
+            calculation_date,
         )
         start_time = datetime.now()
 
@@ -200,20 +198,17 @@ class IBDGroupRankService:
             raise MissingIBDIndustryMappingsError()
 
         logger.info(
-            "Found %d industry groups for market %s", len(all_groups), normalized_market,
+            "Found %d industry groups for market %s",
+            len(all_groups),
+            normalized_market,
         )
 
-        prefetch_stats = prefetch.stats.with_cache_requirement(
-            cache_requirement
-        )
+        prefetch_stats = prefetch.stats.with_cache_requirement(cache_requirement)
 
         if cache_requirement.enabled:
             if not prefetch_stats.benchmark_available:
                 raise IncompleteGroupRankingCacheError(prefetch_stats)
-            if (
-                prefetch_stats.cache_coverage_ratio
-                < cache_requirement.min_coverage
-            ):
+            if prefetch_stats.cache_coverage_ratio < cache_requirement.min_coverage:
                 raise IncompleteGroupRankingCacheError(prefetch_stats)
             if prefetch_stats.cache_miss_symbols > 0:
                 logger.warning(
@@ -227,7 +222,8 @@ class IBDGroupRankService:
 
         if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
             logger.error(
-                "Failed to get benchmark data for market %s", normalized_market,
+                "Failed to get benchmark data for market %s",
+                normalized_market,
             )
             return GroupRankCalculationResult(
                 rankings=(),
@@ -413,9 +409,7 @@ class IBDGroupRankService:
         symbols: List[str | None],
     ) -> Dict[str, str | None]:
         normalized_symbols = {
-            str(symbol).strip()
-            for symbol in symbols
-            if str(symbol or "").strip()
+            str(symbol).strip() for symbol in symbols if str(symbol or "").strip()
         }
         if not normalized_symbols:
             return {}
@@ -474,7 +468,7 @@ class IBDGroupRankService:
         )
 
         if not records:
-            return {'industry_group': industry_group, 'history': []}
+            return {"industry_group": industry_group, "history": []}
 
         # Current (most recent) data
         current = records[0]
@@ -503,12 +497,11 @@ class IBDGroupRankService:
         # Build history data points
         history = [
             {
-                'date': r.date.isoformat(),
-                'rank': r.rank,
-                'avg_rs_rating': r.avg_rs_rating,
-                'avg_rs_rating_1m': r.avg_rs_rating_1m,
-                'avg_rs_rating_3m': r.avg_rs_rating_3m,
-                'num_stocks': r.num_stocks,
+                "date": r.date.isoformat(),
+                "rank": r.rank,
+                "avg_rs_rating": r.avg_rs_rating,
+                "num_stocks": r.num_stocks,
+                **{field: getattr(r, field) for field in GROUP_AVG_RS_FIELDS},
             }
             for r in records
         ]
@@ -607,7 +600,7 @@ class IBDGroupRankService:
     def get_rank_movers(
         self,
         db: Session,
-        period: str = '1w',
+        period: str = "1w",
         limit: int = 20,
         calculation_date: date | None = None,
         *,
@@ -624,13 +617,12 @@ class IBDGroupRankService:
         )
 
         if not current_rankings:
-            return {'period': period, 'gainers': [], 'losers': []}
+            return {"period": period, "gainers": [], "losers": []}
 
         # Filter to groups with rank change data for this period
-        change_key = f'rank_change_{period}'
+        change_key = f"rank_change_{period}"
         groups_with_change = [
-            r for r in current_rankings
-            if r.get(change_key) is not None
+            r for r in current_rankings if r.get(change_key) is not None
         ]
 
         # Split by sign so a market with only positive (or only negative) movers
@@ -641,9 +633,9 @@ class IBDGroupRankService:
         losers.sort(key=lambda r: r[change_key])
 
         return {
-            'period': period,
-            'gainers': gainers[:limit],
-            'losers': losers[:limit],
+            "period": period,
+            "gainers": gainers[:limit],
+            "losers": losers[:limit],
         }
 
     def _coerce_prefetch_data(self, prefetch: Any) -> GroupRankPrefetchData:

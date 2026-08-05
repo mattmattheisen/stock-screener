@@ -8,7 +8,7 @@ from typing import Any, Mapping, Optional
 
 import pandas as pd
 
-from app.domain.relative_strength import LEGACY_RS_FORMULA_VERSION
+from app.domain.relative_strength import GROUP_AVG_RS_FIELDS, LEGACY_RS_FORMULA_VERSION
 
 from .group_rank_cache_policy import GroupRankCacheRequirement
 
@@ -47,9 +47,7 @@ class GroupRankPrefetchStats:
             "target_symbols": self.target_symbols,
             "symbols_with_prices": self.symbols_with_prices,
             "cache_miss_symbols": self.cache_miss_symbols,
-            "cache_miss_symbols_sample": list(
-                self.cache_miss_symbols_sample
-            ),
+            "cache_miss_symbols_sample": list(self.cache_miss_symbols_sample),
             "cache_coverage_ratio": self.cache_coverage_ratio,
             "spy_cached": self.benchmark_available,
             "benchmark_cached": self.benchmark_cached,
@@ -57,16 +55,12 @@ class GroupRankPrefetchStats:
             "benchmark_role": self.benchmark_role,
             "market": self.market,
             "cache_only": self.cache_only,
-            "skipped_unsupported_symbols": (
-                self.skipped_unsupported_symbols
-            ),
+            "skipped_unsupported_symbols": (self.skipped_unsupported_symbols),
         }
         if self.cache_coverage_min is not None:
             result["cache_coverage_min"] = self.cache_coverage_min
         if self.cache_requirement_reason is not None:
-            result["cache_requirement_reason"] = (
-                self.cache_requirement_reason
-            )
+            result["cache_requirement_reason"] = self.cache_requirement_reason
         return result
 
 
@@ -95,9 +89,7 @@ class GroupRankPrefetchData:
             raise TypeError("group_names must be tuple[str, ...]")
         for group, symbols in self.symbols_by_group.items():
             if not isinstance(symbols, tuple):
-                raise TypeError(
-                    f"symbols_by_group[{group!r}] must be tuple[str, ...]"
-                )
+                raise TypeError(f"symbols_by_group[{group!r}] must be tuple[str, ...]")
 
 
 @dataclass(frozen=True)
@@ -113,8 +105,11 @@ class GroupRanking:
     num_stocks_rs_above_80: int
     top_symbol: str | None
     top_rs_rating: float | None
+    avg_rs_rating_1d: float | None = None
+    avg_rs_rating_1w: float | None = None
     avg_rs_rating_1m: float | None = None
     avg_rs_rating_3m: float | None = None
+    avg_rs_rating_6m: float | None = None
     rs_formula_version: str = LEGACY_RS_FORMULA_VERSION
     market_rs_run_id: int | None = None
 
@@ -132,16 +127,15 @@ class GroupRanking:
             num_stocks_rs_above_80=int(row["num_stocks_rs_above_80"]),
             top_symbol=row.get("top_symbol"),
             top_rs_rating=row.get("top_rs_rating"),
-            avg_rs_rating_1m=row.get("avg_rs_rating_1m"),
-            avg_rs_rating_3m=row.get("avg_rs_rating_3m"),
             rs_formula_version=str(
                 row.get("rs_formula_version") or LEGACY_RS_FORMULA_VERSION
             ),
             market_rs_run_id=row.get("market_rs_run_id"),
+            **{field: row.get(field) for field in GROUP_AVG_RS_FIELDS},
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "industry_group": self.industry_group,
             "date": self.date,
             "rank": self.rank,
@@ -153,11 +147,11 @@ class GroupRanking:
             "num_stocks_rs_above_80": self.num_stocks_rs_above_80,
             "top_symbol": self.top_symbol,
             "top_rs_rating": self.top_rs_rating,
-            "avg_rs_rating_1m": self.avg_rs_rating_1m,
-            "avg_rs_rating_3m": self.avg_rs_rating_3m,
             "rs_formula_version": self.rs_formula_version,
             "market_rs_run_id": self.market_rs_run_id,
         }
+        result.update({field: getattr(self, field) for field in GROUP_AVG_RS_FIELDS})
+        return result
 
 
 @dataclass(frozen=True)

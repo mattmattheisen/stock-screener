@@ -1,6 +1,18 @@
 """Industry and sector models"""
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, Index, UniqueConstraint
+
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
+
 from ..database import Base
 
 
@@ -50,7 +62,9 @@ class IndustryPerformance(Base):
     volume_trend = Column(String(20))  # increasing, decreasing, neutral
 
     # Timestamp
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     __table_args__ = (
         UniqueConstraint("industry", "date", name="uix_industry_date"),
@@ -78,7 +92,9 @@ class SectorRotation(Base):
     trend = Column(String(20))  # bullish, bearish, neutral
 
     # Timestamp
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     __table_args__ = (
         UniqueConstraint("sector", "date", name="uix_sector_date"),
@@ -122,7 +138,9 @@ class IBDIndustryGroup(Base):
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     __table_args__ = (
         Index("idx_ibd_industry_group", "industry_group"),
@@ -137,7 +155,9 @@ class IBDGroupPeerCache(Base):
     __tablename__ = "ibd_group_peer_cache"
 
     id = Column(Integer, primary_key=True, index=True)
-    scan_id = Column(String(36), ForeignKey("scans.scan_id"), nullable=False, index=True)
+    scan_id = Column(
+        String(36), ForeignKey("scans.scan_id"), nullable=False, index=True
+    )
     industry_group = Column(String(100), nullable=False, index=True)
 
     # Aggregate metrics for all stocks in this group (from scan universe)
@@ -180,8 +200,11 @@ class IBDGroupRank(Base):
     # Core ranking metrics
     rank = Column(Integer, nullable=False)  # 1 = best, higher = worse
     avg_rs_rating = Column(Float, nullable=False)  # Average RS of all stocks in group
+    avg_rs_rating_1d = Column(Float)
+    avg_rs_rating_1w = Column(Float)
     avg_rs_rating_1m = Column(Float)
     avg_rs_rating_3m = Column(Float)
+    avg_rs_rating_6m = Column(Float)
     median_rs_rating = Column(Float)  # Median RS of stocks in group
     weighted_avg_rs_rating = Column(Float)  # Market-cap weighted average RS
     rs_std_dev = Column(Float)  # Dispersion of RS ratings (std dev)

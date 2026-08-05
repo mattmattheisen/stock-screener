@@ -6,33 +6,33 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.domain.relative_strength import (
+    GROUP_AVG_RS_FIELDS,
     GroupSnapshotIdentity,
     RsPublicationIdentity,
 )
 from app.infra.db.models.feature_store import FeatureRun
+from app.services.feature_run_rs_identity import (
+    FeatureRunRsIdentityError,
+    resolve_feature_run_rs_identity,
+)
 from app.services.group_detail_payloads import (
     constituent_stock_payloads_from_group_rows,
 )
 from app.services.group_rank_history_policy import (
     CALENDAR_DAY_GROUP_RANK_CHANGE_WINDOWS,
 )
+from app.services.group_rank_snapshot_reader import GroupSnapshotIntegrityError
 from app.services.group_ranking_history import (
     apply_calendar_rank_changes,
     build_group_detail_payload_from_parts,
 )
 from app.services.group_ranking_payloads import group_snapshot_metadata
-from app.services.group_rank_snapshot_reader import GroupSnapshotIntegrityError
-from app.services.feature_run_rs_identity import (
-    FeatureRunRsIdentityError,
-    resolve_feature_run_rs_identity,
-)
 from app.services.static_groups_payload_builder import (
     StaticGroupsSnapshot,
     build_static_groups_payload,
 )
 from app.services.static_market_artifact_contract import STATIC_SITE_SCHEMA_VERSION
 from app.services.static_site_errors import StaticSiteSectionUnavailableError
-
 
 STATIC_GROUP_HISTORY_RUNS = 40
 
@@ -240,9 +240,8 @@ class StaticGroupSectionBuilder:
                         "date": row["date"],
                         "rank": row["rank"],
                         "avg_rs_rating": row["avg_rs_rating"],
-                        "avg_rs_rating_1m": row.get("avg_rs_rating_1m"),
-                        "avg_rs_rating_3m": row.get("avg_rs_rating_3m"),
                         "num_stocks": row["num_stocks"],
+                        **{field: row.get(field) for field in GROUP_AVG_RS_FIELDS},
                     }
                 )
             details[group] = build_group_detail_payload_from_parts(

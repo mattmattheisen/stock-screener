@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
+    SCANNER_RS_FIELD_BY_HORIZON,
+    STOCK_RS_RATING_ATTR_BY_HORIZON,
     balanced_run_has_required_price_basis,
 )
 from app.domain.scanning.ports import MarketRsResolution
@@ -53,15 +55,10 @@ class SqlMarketRsReader:
                 raise CanonicalMarketRsUnavailable(
                     f"Canonical Market RS run {run_id} is unavailable"
                 )
-            resolved_formula = (
-                formula_version
-                or (
-                    requested_run.formula_version
-                    if requested_run is not None
-                    else self._repository.active_formula(
-                        db, market=normalized_market
-                    )
-                )
+            resolved_formula = formula_version or (
+                requested_run.formula_version
+                if requested_run is not None
+                else self._repository.active_formula(db, market=normalized_market)
             )
             if resolved_formula == LEGACY_RS_FORMULA_VERSION:
                 if run_id is not None:
@@ -131,9 +128,12 @@ class SqlMarketRsReader:
             ratings = {
                 row.symbol: {
                     "rs_rating": int(row.overall_rs),
-                    "rs_rating_1m": int(row.rs_1m),
-                    "rs_rating_3m": int(row.rs_3m),
-                    "rs_rating_12m": int(row.rs_12m),
+                    **{
+                        scanner_field: int(
+                            getattr(row, STOCK_RS_RATING_ATTR_BY_HORIZON[horizon])
+                        )
+                        for horizon, scanner_field in SCANNER_RS_FIELD_BY_HORIZON.items()
+                    },
                 }
                 for row in rows
             }

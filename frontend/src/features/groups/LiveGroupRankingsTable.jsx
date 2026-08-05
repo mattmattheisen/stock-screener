@@ -160,7 +160,7 @@ export default function LiveGroupRankingsTable({
 }) {
   return (
     <TableContainer sx={{ maxHeight: 'calc(100vh - 200px)', flexGrow: 1 }}>
-      <Table stickyHeader size="small">
+      <Table stickyHeader size="small" sx={{ minWidth: 1120 }}>
         <TableHead>
           <TableRow>
             {LIVE_GROUP_RANKING_COLUMNS.map((column) => (

@@ -16,14 +16,13 @@ from app.services.canonical_group_ranking_service import (
     CanonicalGroupRankingService,
     CanonicalGroupRankingUnavailable,
 )
-from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
 from app.services.group_rank_snapshot_coordinator import (
     GroupRankSnapshotCoordinator,
     GroupSnapshotStatus,
 )
+from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
 from app.services.market_rs_inputs import MarketRsInputs
 from app.services.market_rs_snapshot_service import MarketRsSnapshotService
-
 
 AS_OF = date(2026, 4, 10)
 
@@ -40,6 +39,8 @@ class _CompleteMarketRsInputLoader:
             expected_symbols=("AAA", "BBB", "CCC"),
             excess_returns_by_symbol={
                 "AAA": {
+                    "1d": 0.3,
+                    "1w": 0.3,
                     "1m": 0.3,
                     "3m": 0.3,
                     "6m": 0.3,
@@ -47,6 +48,8 @@ class _CompleteMarketRsInputLoader:
                     "12m": 0.3,
                 },
                 "BBB": {
+                    "1d": 0.2,
+                    "1w": 0.2,
                     "1m": 0.2,
                     "3m": 0.2,
                     "6m": 0.2,
@@ -54,6 +57,8 @@ class _CompleteMarketRsInputLoader:
                     "12m": 0.2,
                 },
                 "CCC": {
+                    "1d": 0.1,
+                    "1w": 0.1,
                     "1m": 0.1,
                     "3m": 0.1,
                     "6m": 0.1,
@@ -144,9 +149,7 @@ def test_legacy_snapshot_passes_historical_universe_to_calculation(db_session):
 
 def test_backfill_rolls_back_failed_date_before_processing_next(db_session):
     coordinator = _coordinator(Mock(), Mock(), Mock(), Mock())
-    first = GroupSnapshotIdentity(
-        "US", date(2026, 4, 9), BALANCED_RS_FORMULA_VERSION
-    )
+    first = GroupSnapshotIdentity("US", date(2026, 4, 9), BALANCED_RS_FORMULA_VERSION)
     second = GroupSnapshotIdentity("US", AS_OF, BALANCED_RS_FORMULA_VERSION)
     coordinator.ensure_snapshot = Mock(
         side_effect=[
@@ -308,9 +311,7 @@ def test_failed_balanced_repair_preserves_previous_run_and_group_rows(db_session
             input_loader=_CompleteMarketRsInputLoader(),
             repository=repository,
         ),
-        canonical_group_service=CanonicalGroupRankingService(
-            repository=repository
-        ),
+        canonical_group_service=CanonicalGroupRankingService(repository=repository),
         legacy_group_service=Mock(),
     )
     identity = GroupSnapshotIdentity(

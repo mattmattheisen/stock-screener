@@ -93,6 +93,8 @@ class MarketRsActivationValidator:
             eligible_symbols.add(row.symbol)
             ratings = (
                 row.overall_rs,
+                row.rs_1d,
+                row.rs_1w,
                 row.rs_1m,
                 row.rs_3m,
                 row.rs_6m,
@@ -227,7 +229,9 @@ class MarketRsActivationValidator:
         normalized = normalize_rollout_market(coverage.market)
         through_date = coverage.through_date
         errors: list[str] = []
-        staging_path = Path(static_staging_dir) if static_staging_dir is not None else None
+        staging_path = (
+            Path(static_staging_dir) if static_staging_dir is not None else None
+        )
         candidates = coverage.required_dates
         first_valid = coverage.start_date if candidates else None
         if not candidates:
@@ -267,7 +271,9 @@ class MarketRsActivationValidator:
         rrg_status = None
         if artifact_policy.requires_static_artifacts:
             if staging_path is None:
-                errors.append("Missing static staging directory for artifact validation.")
+                errors.append(
+                    "Missing static staging directory for artifact validation."
+                )
             elif latest_run is not None:
                 try:
                     static_result = self.static_validator.validate(

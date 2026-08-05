@@ -1,8 +1,10 @@
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import event
+from sqlalchemy.dialects import postgresql
 
 from app.models.industry import IBDGroupRank
 from app.services.group_rank_models import GroupRanking
@@ -29,6 +31,11 @@ def _ranking(
         num_stocks_rs_above_80=1,
         top_symbol="AAA",
         top_rs_rating=90.0,
+        avg_rs_rating_1d=71.0,
+        avg_rs_rating_1w=72.0,
+        avg_rs_rating_1m=73.0,
+        avg_rs_rating_3m=74.0,
+        avg_rs_rating_6m=75.0,
     )
 
 
@@ -60,9 +67,7 @@ def _seed_rank(
 
 def test_store_rankings_does_not_commit(db_session, monkeypatch):
     repository = GroupRankingRepository()
-    commit = Mock(
-        side_effect=AssertionError("repository must not commit")
-    )
+    commit = Mock(side_effect=AssertionError("repository must not commit"))
     monkeypatch.setattr(db_session, "commit", commit)
 
     repository.store_rankings(
@@ -141,11 +146,7 @@ def test_store_rankings_bulk_loads_existing_rows_once_for_sqlite_fallback(
             count_selects,
         )
 
-        rows = (
-            db_session.query(IBDGroupRank)
-            .order_by(IBDGroupRank.rank)
-            .all()
-        )
+        rows = db_session.query(IBDGroupRank).order_by(IBDGroupRank.rank).all()
 
         assert query_counts["select"] == 1
         assert len(rows) == 2
@@ -160,6 +161,52 @@ def test_store_rankings_bulk_loads_existing_rows_once_for_sqlite_fallback(
             )
         except Exception:
             pass
+
+
+def test_postgres_upsert_refreshes_all_persisted_group_rank_metrics():
+    class FakeSession:
+        def __init__(self):
+            self.statement = None
+
+        def get_bind(self):
+            return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        def execute(self, statement):
+            self.statement = statement
+
+    db = FakeSession()
+
+    GroupRankingRepository().store_rankings(
+        db,
+        calculation_date=date(2026, 3, 20),
+        rankings=(_ranking("Software", rank=1),),
+        market="US",
+    )
+
+    compiled = str(db.statement.compile(dialect=postgresql.dialect()))
+    expected_updates = (
+        "rank",
+        "avg_rs_rating",
+        "median_rs_rating",
+        "weighted_avg_rs_rating",
+        "rs_std_dev",
+        "num_stocks",
+        "num_stocks_rs_above_80",
+        "top_symbol",
+        "top_rs_rating",
+        "avg_rs_rating_1d",
+        "avg_rs_rating_1w",
+        "avg_rs_rating_1m",
+        "avg_rs_rating_3m",
+        "avg_rs_rating_6m",
+        "market_rs_run_id",
+    )
+    for field in expected_updates:
+        assert f"{field} = excluded.{field}" in compiled
+    assert "market = excluded.market" not in compiled
+    assert "industry_group = excluded.industry_group" not in compiled
+    assert "date = excluded.date" not in compiled
+    assert "rs_formula_version = excluded.rs_formula_version" not in compiled
 
 
 def test_delete_range_is_market_scoped(db_session):
@@ -183,12 +230,7 @@ def test_delete_range_is_market_scoped(db_session):
     )
 
     assert deleted == 1
-    assert (
-        db_session.query(IBDGroupRank)
-        .filter_by(market="JP")
-        .count()
-        == 1
-    )
+    assert db_session.query(IBDGroupRank).filter_by(market="JP").count() == 1
 
 
 def test_replace_rankings_for_date_rolls_back_as_one_transaction(

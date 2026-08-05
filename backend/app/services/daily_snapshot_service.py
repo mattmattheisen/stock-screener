@@ -19,14 +19,15 @@ from sqlalchemy.orm import Session
 
 from app.domain.common.query import FilterSpec, PageSpec, SortOrder, SortSpec
 from app.domain.markets.catalog import get_market_catalog
-from app.domain.scanning.filter_expression_model import QuerySpec
+from app.domain.relative_strength import GROUP_AVG_RS_FIELDS
 from app.domain.scanning.default_filters import resolve_default_scan_filters
+from app.domain.scanning.filter_expression_model import QuerySpec
 from app.infra.serialization import json_safe
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
 from app.schemas.scanning import ScanResultItem
-from app.services.key_market_history import build_key_market_entries
 from app.services.group_ranking_payloads import group_snapshot_metadata
+from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.redis_pool import get_redis_client
 from app.services.snapshot_date_coherence import (
@@ -86,7 +87,9 @@ def _prune_daily_snapshot_memory_cache(now: float) -> None:
         _daily_snapshot_memory_cache.pop(key, None)
 
 
-def get_daily_snapshot_memory_cache(cache_key: str, *, now: float | None = None) -> str | None:
+def get_daily_snapshot_memory_cache(
+    cache_key: str, *, now: float | None = None
+) -> str | None:
     now = monotonic() if now is None else now
     entry = _daily_snapshot_memory_cache.get(cache_key)
     if entry is None:
@@ -263,7 +266,9 @@ def _query_scan_rows(
     )
     result = use_case.execute(uow, query)
     return [
-        ScanResultItem.from_domain(item, include_setup_payload=False).model_dump(mode="json")
+        ScanResultItem.from_domain(item, include_setup_payload=False).model_dump(
+            mode="json"
+        )
         for item in result.page.items
     ]
 
@@ -292,8 +297,7 @@ def _build_top_groups(
         "industry_group",
         "rank",
         "avg_rs_rating",
-        "avg_rs_rating_1m",
-        "avg_rs_rating_3m",
+        *GROUP_AVG_RS_FIELDS,
         "rank_change_1w",
         "rank_change_1m",
         "top_symbol",
@@ -373,7 +377,9 @@ def build_daily_snapshot_payload(
     top_groups, groups_date = _build_top_groups(db, normalized, as_of_date=anchor_date)
     breadth_date = _latest_breadth_date(db, normalized, as_of_date=anchor_date)
     key_markets = build_key_market_entries(db, normalized, as_of_date=anchor_date)
-    market_health_exposure = build_exposure_payload(db, normalized, as_of_date=anchor_date)
+    market_health_exposure = build_exposure_payload(
+        db, normalized, as_of_date=anchor_date
+    )
     exposure_date = (
         market_health_exposure.get("date")
         if isinstance(market_health_exposure, dict)

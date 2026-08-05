@@ -41,12 +41,16 @@ def _score(symbol, value):
     return StockRsScore(
         symbol=symbol,
         overall_rs=value,
+        rs_1d=value,
+        rs_1w=value,
         rs_1m=value,
         rs_3m=value,
         rs_6m=value,
         rs_9m=value,
         rs_12m=value,
         weighted_composite=float(value),
+        excess_return_1d=0.1,
+        excess_return_1w=0.1,
         excess_return_1m=0.1,
         excess_return_3m=0.1,
         excess_return_6m=0.1,
@@ -60,12 +64,15 @@ def test_completed_run_is_invisible_until_rows_and_status_commit(db_session):
     repo.start_or_restart(db_session, **_run_kwargs())
     db_session.commit()
 
-    assert repo.get_completed_exact(
-        db_session,
-        market="US",
-        as_of_date=AS_OF,
-        formula_version=BALANCED_RS_FORMULA_VERSION,
-    ) is None
+    assert (
+        repo.get_completed_exact(
+            db_session,
+            market="US",
+            as_of_date=AS_OF,
+            formula_version=BALANCED_RS_FORMULA_VERSION,
+        )
+        is None
+    )
 
 
 def test_completed_run_can_skip_snapshot_row_hydration(db_session):
@@ -122,6 +129,8 @@ def test_iter_stock_rows_for_run_returns_scalar_snapshots(db_session):
 
     assert [row.symbol for row in rows] == ["AAA", "BBB"]
     assert rows[0].overall_rs == 70
+    assert rows[0].rs_1d == 70
+    assert rows[0].rs_1w == 70
     assert not isinstance(rows[0], StockRsSnapshot)
 
 
@@ -330,12 +339,15 @@ def test_two_sessions_share_one_completed_winner_and_never_read_partial_rows(
             run,
             {"AAA": _score("AAA", 1), "BBB": _score("BBB", 99)},
         )
-        assert repo.get_completed_exact(
-            second,
-            market="US",
-            as_of_date=AS_OF,
-            formula_version=BALANCED_RS_FORMULA_VERSION,
-        ) is None
+        assert (
+            repo.get_completed_exact(
+                second,
+                market="US",
+                as_of_date=AS_OF,
+                formula_version=BALANCED_RS_FORMULA_VERSION,
+            )
+            is None
+        )
         repo.mark_completed(run, excluded_symbol_count=0, diagnostics={})
         first.commit()
 
