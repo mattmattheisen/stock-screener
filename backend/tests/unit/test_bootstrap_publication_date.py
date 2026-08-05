@@ -197,3 +197,28 @@ def test_bootstrap_publication_date_rejects_incompatible_window_runs() -> None:
     assert resolution.market_rs_run_id == 42
     assert resolution.lag_days == 0
     assert resolution.reason_code == "balanced_run_incompatible"
+
+
+def test_bootstrap_publication_date_rejects_incompatible_latest_fallback_run() -> None:
+    repository = SimpleNamespace(
+        active_formula=lambda _db, *, market: BALANCED_RS_FORMULA_VERSION,
+        list_completed_runs=lambda _db, **_kwargs: (),
+        get_latest_completed=lambda _db, **_kwargs: SimpleNamespace(
+            id=42,
+            as_of_date=date(2026, 4, 10),
+            diagnostics_json={"price_basis": BALANCED_RS_PRICE_BASIS},
+        ),
+    )
+
+    resolution = resolve_bootstrap_publication_date(
+        object(),
+        market="HK",
+        requested_date=date(2026, 4, 10),
+        repository=repository,
+        max_lag_days=3,
+    )
+
+    assert resolution.selected_date == date(2026, 4, 10)
+    assert resolution.market_rs_run_id == 42
+    assert resolution.lag_days == 0
+    assert resolution.reason_code == "balanced_run_incompatible"

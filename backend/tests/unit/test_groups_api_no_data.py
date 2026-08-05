@@ -8,12 +8,14 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from app.main import app
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
+    BALANCED_RS_PRICE_BASIS,
+    BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
+from app.main import app
 from app.wiring.bootstrap import get_ui_snapshot_service
 
 
@@ -111,7 +113,10 @@ async def test_get_current_rankings_supports_non_us_market_scope(
         expected_symbol_count=5000,
         eligible_symbol_count=5000,
         excluded_symbol_count=0,
-        diagnostics_json={},
+        diagnostics_json={
+            "price_basis": BALANCED_RS_PRICE_BASIS,
+            "rs_snapshot_schema_version": BALANCED_RS_SNAPSHOT_SCHEMA_VERSION,
+        },
     )
     db_session.add(run)
     db_session.commit()

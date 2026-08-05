@@ -284,6 +284,7 @@ class IBDGroupRankService:
             market=market,
             as_of_date=calculation_date,
             formula_version=BALANCED_RS_FORMULA_VERSION,
+            rebuild_incompatible=True,
         )
         rows = self.canonical_group_service.calculate_and_store(
             db,

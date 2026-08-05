@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     GROUP_AVG_RS_FIELDS,
+    balanced_run_has_current_snapshot_contract,
 )
 from app.infra.db.models.relative_strength import MarketRsRun
 from app.models.industry import IBDGroupRank
@@ -106,6 +107,12 @@ def group_snapshot_metadata(
         or run.status != "completed"
     ):
         raise RuntimeError("Group snapshot metadata does not match its Market RS run")
+    if formula_version == BALANCED_RS_FORMULA_VERSION and (
+        run is None or not balanced_run_has_current_snapshot_contract(run)
+    ):
+        raise RuntimeError(
+            "Group snapshot metadata references an incompatible balanced snapshot"
+        )
     return {
         "rs_formula_version": formula_version,
         "rs_as_of_date": snapshot_date,
