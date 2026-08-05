@@ -84,6 +84,7 @@ class GroupRankSnapshotCoordinator:
                 market=identity.market,
                 as_of_date=identity.as_of_date,
                 formula_version=identity.formula_version,
+                rebuild_incompatible=True,
             )
             rankings = self.canonical_group_service.calculate_and_store(
                 db,

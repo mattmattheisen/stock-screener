@@ -190,7 +190,7 @@ def calculate_market_rs_snapshot(
     calculation_date: str | None = None,
     formula_version: str = BALANCED_RS_FORMULA_VERSION,
     activity_lifecycle: str | None = None,
-    rebuild_incompatible: bool = False,
+    rebuild_incompatible: bool = True,
 ) -> dict[str, object]:
     """Idempotently publish one exact-date balanced Market RS snapshot.
 
