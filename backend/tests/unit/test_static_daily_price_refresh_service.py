@@ -1,24 +1,24 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.domain.relative_strength import HORIZON_SESSIONS
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.services.static_daily_price_refresh_service import (
     STATIC_DAILY_PRICE_BOOTSTRAP_PERIOD,
-    STATIC_DAILY_PRICE_REFRESH_PERIOD,
     STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE,
+    STATIC_DAILY_PRICE_REFRESH_PERIOD,
     STATIC_RATE_LIMITED_RETRY_BATCH_SIZE,
     STATIC_RATE_LIMITED_RETRY_WAIT_SECONDS,
     StaticDailyPriceRefreshService,
     static_daily_price_refresh_batch_size,
 )
-
 
 IN_KEY_MARKET_PRICE_SYMBOLS = ["^NSEI", "NIFTYBEES.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"]
 HK_KEY_MARKET_PRICE_SYMBOLS = ["^HSI", "2800.HK", "0700.HK", "3690.HK", "0941.HK"]
@@ -46,9 +46,11 @@ class _RRGStartupCalendar:
     @staticmethod
     def session_anchors(market, as_of_date, *, offsets):
         assert market == "IN"
-        assert tuple(offsets) == (21, 63, 126, 189, 252)
+        assert tuple(offsets) == tuple(HORIZON_SESSIONS.values())
         return {
             0: as_of_date,
+            1: as_of_date - timedelta(days=1),
+            5: as_of_date - timedelta(days=7),
             21: date(2026, 1, 30),
             63: date(2025, 12, 1),
             126: date(2025, 9, 1),

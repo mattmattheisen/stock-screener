@@ -8,14 +8,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
+from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION, HORIZON_SESSIONS
 from app.models.stock import StockPrice
-from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
+from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from app.services.market_rs_inputs import MarketRsInputUnavailable
-
 
 RUNTIME_MARKET_RS_ANCHORS = {
     0: date(2026, 4, 10),
+    1: date(2026, 4, 9),
+    5: date(2026, 4, 3),
     21: date(2026, 3, 10),
     63: date(2026, 1, 9),
     126: date(2025, 10, 10),
@@ -48,7 +49,7 @@ class _MarketRsCalendarStub:
 
     @staticmethod
     def session_anchors(_market, _as_of_date, *, offsets):
-        assert set(offsets) == {21, 63, 126, 189, 252}
+        assert set(offsets) == set(HORIZON_SESSIONS.values())
         return dict(RUNTIME_MARKET_RS_ANCHORS)
 
 
