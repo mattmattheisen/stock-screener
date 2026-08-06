@@ -252,7 +252,7 @@ def test_static_site_daily_price_build_requires_current_session_coverage() -> No
     )[0]
 
     assert "id: build-daily-price-bundle" in build_price_step
-    assert "MarketRsInputLoader._minimum_current_price_coverage" in build_price_step
+    assert "static_daily_price_bundle_min_coverage" in build_price_step
     assert 'BUILD_LOG="$(mktemp)"' in build_price_step
     assert '| tee "$BUILD_LOG"' in build_price_step
     assert 'build_pipeline_status=("${PIPESTATUS[@]}")' in build_price_step
