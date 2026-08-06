@@ -39,6 +39,7 @@ from app.services.static_daily_price_refresh_service import (
 )
 from app.services.static_breadth_assessment import (
     classify_static_breadth_backfill,
+    static_breadth_backfill_needs_scan_counts,
     static_breadth_row_has_accepted_coverage,
 )
 from app.services.static_market_coverage_policy import (
@@ -736,23 +737,29 @@ def _ensure_breadth_history(
             exclude_unsupported_price_symbols=True,
             required_as_of_date=as_of_date,
         )
-        backfill_rows = (
-            db.query(MarketBreadth)
-            .filter(
-                MarketBreadth.date.in_(target_dates),
-                MarketBreadth.market == normalized_market,
+        scanned_by_date: dict[date, int] = {}
+        if static_breadth_backfill_needs_scan_counts(
+            stats,
+            minimum_stocks_scanned=minimum_validated_stocks,
+        ):
+            backfill_rows = (
+                db.query(MarketBreadth)
+                .filter(
+                    MarketBreadth.date.in_(target_dates),
+                    MarketBreadth.market == normalized_market,
+                )
+                .all()
             )
-            .all()
-        )
+            scanned_by_date = {
+                row.date: int(row.total_stocks_scanned or 0)
+                for row in backfill_rows
+            }
         assessment = classify_static_breadth_backfill(
             stats=stats,
             dates=target_dates,
             as_of_date=as_of_date,
             minimum_stocks_scanned=minimum_validated_stocks,
-            scanned_by_date={
-                row.date: int(row.total_stocks_scanned or 0)
-                for row in backfill_rows
-            },
+            scanned_by_date=scanned_by_date,
         )
         stats.update(assessment.diagnostics())
         stats.update(

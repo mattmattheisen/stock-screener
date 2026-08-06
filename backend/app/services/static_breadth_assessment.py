@@ -59,24 +59,24 @@ def classify_static_breadth_backfill(
     tolerated_error_dates: list[date] = []
     undercovered_dates: list[date] = []
     has_seen_valid_history = False
-    should_validate_undercoverage = (
-        int(stats.get("insufficient_history_observations") or 0) > 0
-        and minimum_stocks_scanned > 0
+    should_validate_undercoverage = static_breadth_backfill_validates_undercoverage(
+        stats,
+        minimum_stocks_scanned=minimum_stocks_scanned,
     )
 
     for calc_date in sorted(set(dates)):
-        if _static_breadth_row_has_accepted_coverage(
-            scanned_by_date.get(calc_date),
-            minimum_stocks_scanned=minimum_stocks_scanned,
-        ):
-            has_seen_valid_history = True
-            continue
-
         if calc_date in error_dates:
             if calc_date == as_of_date or has_seen_valid_history:
                 hard_error_dates.append(calc_date)
             else:
                 tolerated_error_dates.append(calc_date)
+            continue
+
+        if _static_breadth_row_has_accepted_coverage(
+            scanned_by_date.get(calc_date),
+            minimum_stocks_scanned=minimum_stocks_scanned,
+        ):
+            has_seen_valid_history = True
             continue
 
         if (
@@ -116,6 +116,30 @@ def static_breadth_row_has_accepted_coverage(
     return _static_breadth_row_has_accepted_coverage(
         total_stocks_scanned,
         minimum_stocks_scanned=minimum_stocks_scanned,
+    )
+
+
+def static_breadth_backfill_needs_scan_counts(
+    stats: Mapping[str, Any],
+    *,
+    minimum_stocks_scanned: int,
+) -> bool:
+    return bool(_static_breadth_error_dates(stats)) or (
+        static_breadth_backfill_validates_undercoverage(
+            stats,
+            minimum_stocks_scanned=minimum_stocks_scanned,
+        )
+    )
+
+
+def static_breadth_backfill_validates_undercoverage(
+    stats: Mapping[str, Any],
+    *,
+    minimum_stocks_scanned: int,
+) -> bool:
+    return (
+        int(stats.get("insufficient_history_observations") or 0) > 0
+        and minimum_stocks_scanned > 0
     )
 
 

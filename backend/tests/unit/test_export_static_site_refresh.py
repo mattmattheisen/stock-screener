@@ -532,6 +532,7 @@ def test_ensure_breadth_history_marks_backfill_errors_not_completed(monkeypatch)
 def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch):
     as_of_date = date(2026, 7, 31)
     backfill_kwargs: dict[str, object] = {}
+    query_counts = {"market_breadth": 0}
 
     class _FakeQuery:
         def __init__(self, rows):
@@ -546,6 +547,7 @@ def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch)
     class _FakeDb(_FakeSession):
         def query(self, entity, *args):
             if entity is MarketBreadth:
+                query_counts["market_breadth"] += 1
                 return _FakeQuery([
                     SimpleNamespace(date=as_of_date, total_stocks_scanned=1)
                 ])
@@ -590,6 +592,7 @@ def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch)
     assert result["incomplete_existing_dates"] == 1
     assert result["recomputed_dates"] == 1
     assert backfill_kwargs["trading_dates"] == [as_of_date]
+    assert query_counts["market_breadth"] == 1
 
 
 def test_ensure_breadth_history_recomputes_ratio_window_after_historical_repair(

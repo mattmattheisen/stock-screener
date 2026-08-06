@@ -64,6 +64,28 @@ def test_static_breadth_assessment_tolerates_only_pre_warmup_error_dates():
     )
 
 
+def test_static_breadth_assessment_prioritizes_error_dates_over_persisted_coverage():
+    as_of_date = date(2026, 7, 31)
+
+    assessment = classify_static_breadth_backfill(
+        stats=_backfill_stats(
+            errors=1,
+            error_dates=[as_of_date.isoformat()],
+        ),
+        dates=[as_of_date],
+        as_of_date=as_of_date,
+        minimum_stocks_scanned=8,
+        scanned_by_date={as_of_date: 10},
+    )
+
+    assert assessment.status == "errored"
+    assert assessment.hard_error_dates == (as_of_date,)
+    assert assessment.error == (
+        "Cache-only breadth backfill has hard date errors "
+        "(dates=2026-07-31)"
+    )
+
+
 def test_static_breadth_assessment_tolerates_pre_warmup_undercoverage():
     pre_warmup_gap_date = date(2026, 7, 30)
     as_of_date = date(2026, 7, 31)
