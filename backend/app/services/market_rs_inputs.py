@@ -9,7 +9,6 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.domain.relative_strength import HORIZON_SESSIONS
 from app.domain.relative_strength.price_validity import is_valid_adjusted_price
 from app.models.stock import StockPrice
@@ -25,6 +24,9 @@ from app.services.market_rs_result_contract import (
 from app.services.point_in_time_universe_service import (
     PointInTimeUniverseService,
     PointInTimeUniverseUnavailable,
+)
+from app.services.static_market_coverage_policy import (
+    market_current_price_min_coverage,
 )
 
 EMPTY_UNIVERSE_HASH = hashlib.sha256(b"").hexdigest()
@@ -92,15 +94,7 @@ class MarketRsInputLoader:
 
     @staticmethod
     def _minimum_current_price_coverage(market: str) -> float:
-        normalized = str(market or "").strip().lower()
-        market_threshold = getattr(
-            settings,
-            f"market_rs_min_current_price_coverage_{normalized}",
-            None,
-        )
-        if market_threshold is not None:
-            return float(market_threshold)
-        return float(settings.market_rs_min_current_price_coverage)
+        return market_current_price_min_coverage(market)
 
     def load(
         self,

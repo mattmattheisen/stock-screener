@@ -497,9 +497,17 @@ def test_ensure_breadth_history_marks_backfill_errors_not_completed(monkeypatch)
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
-    monkeypatch.setattr(export_static_site, "_generate_trading_dates", lambda *args, **kwargs: [as_of_date])
+    monkeypatch.setattr(
+        export_static_site,
+        "_generate_trading_dates",
+        lambda *args, **kwargs: [as_of_date],
+    )
     monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
-    monkeypatch.setattr(export_static_site, "BreadthCalculatorService", _FakeBreadthCalculator)
+    monkeypatch.setattr(
+        export_static_site,
+        "BreadthCalculatorService",
+        _FakeBreadthCalculator,
+    )
 
     result = export_static_site._ensure_breadth_history(
         as_of_date=as_of_date,
@@ -510,6 +518,13 @@ def test_ensure_breadth_history_marks_backfill_errors_not_completed(monkeypatch)
     assert result["status"] == "errored"
     assert result["errors"] == 1
     assert result["error_dates"] == ["2026-07-31"]
+    assert result["hard_error_dates"] == ["2026-07-31"]
+    assert result["unclassified_error_count"] == 0
+    assert "tolerated_error_dates" not in result
+    assert result["error"] == (
+        "Cache-only breadth backfill has hard date errors "
+        "(dates=2026-07-31)"
+    )
     assert backfill_kwargs["exclude_unsupported_price_symbols"] is True
     assert backfill_kwargs["required_as_of_date"] == as_of_date
 
@@ -557,7 +572,11 @@ def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch)
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
-    monkeypatch.setattr(export_static_site, "_generate_trading_dates", lambda *args, **kwargs: [as_of_date])
+    monkeypatch.setattr(
+        export_static_site,
+        "_generate_trading_dates",
+        lambda *args, **kwargs: [as_of_date],
+    )
     monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
     monkeypatch.setattr(export_static_site, "BreadthCalculatorService", _FakeBreadthCalculator)
 
@@ -682,7 +701,11 @@ def test_ensure_breadth_history_skips_validated_existing_rows(monkeypatch):
             return _FakeQuery([])
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
-    monkeypatch.setattr(export_static_site, "_generate_trading_dates", lambda *args, **kwargs: [as_of_date])
+    monkeypatch.setattr(
+        export_static_site,
+        "_generate_trading_dates",
+        lambda *args, **kwargs: [as_of_date],
+    )
     monkeypatch.setattr(
         export_static_site,
         "BreadthCalculatorService",
@@ -795,9 +818,17 @@ def test_ensure_breadth_history_marks_calculation_errors_not_completed(monkeypat
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
-    monkeypatch.setattr(export_static_site, "_generate_trading_dates", lambda *args, **kwargs: [as_of_date])
+    monkeypatch.setattr(
+        export_static_site,
+        "_generate_trading_dates",
+        lambda *args, **kwargs: [as_of_date],
+    )
     monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
-    monkeypatch.setattr(export_static_site, "BreadthCalculatorService", _FakeBreadthCalculator)
+    monkeypatch.setattr(
+        export_static_site,
+        "BreadthCalculatorService",
+        _FakeBreadthCalculator,
+    )
 
     result = export_static_site._ensure_breadth_history(
         as_of_date=as_of_date,
@@ -834,10 +865,7 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
             if entity is MarketBreadth:
                 return _FakeQuery(breadth_rows)
             if entity is StockUniverse.symbol:
-                return _FakeQuery([
-                    (f"AAA{i}",)
-                    for i in range(10)
-                ])
+                return _FakeQuery([(f"AAA{i}",) for i in range(10)])
             return _FakeQuery([])
 
     class _FakeBreadthCalculator:
@@ -865,7 +893,11 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
-    monkeypatch.setattr(export_static_site, "_generate_trading_dates", lambda *args, **kwargs: [as_of_date])
+    monkeypatch.setattr(
+        export_static_site,
+        "_generate_trading_dates",
+        lambda *args, **kwargs: [as_of_date],
+    )
     monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
     monkeypatch.setattr(
         export_static_site,
@@ -881,17 +913,16 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
 
     assert result["status"] == "errored"
     assert result["undercovered_dates"] == ["2026-07-31"]
-    assert result["minimum_stocks_scanned"] == 9
+    assert result["minimum_stocks_scanned"] == 8
     assert result["error"] == (
         "Cache-only breadth backfill has insufficient usable coverage "
-        "(dates=2026-07-31, minimum_scanned=9)"
+        "(dates=2026-07-31, minimum_scanned=8)"
     )
 
 
-def test_ensure_breadth_history_accepts_historical_warmup_undercoverage(
+def test_ensure_breadth_history_uses_market_specific_static_floor(
     monkeypatch,
 ):
-    older_date = date(2026, 7, 30)
     as_of_date = date(2026, 7, 31)
     breadth_rows: list[SimpleNamespace] = []
 
@@ -910,10 +941,7 @@ def test_ensure_breadth_history_accepts_historical_warmup_undercoverage(
             if entity is MarketBreadth:
                 return _FakeQuery(breadth_rows)
             if entity is StockUniverse.symbol:
-                return _FakeQuery([
-                    (f"AAA{i}",)
-                    for i in range(10)
-                ])
+                return _FakeQuery([(f"AAA{i}",) for i in range(10)])
             return _FakeQuery([])
 
     class _FakeBreadthCalculator:
@@ -921,36 +949,30 @@ def test_ensure_breadth_history_accepts_historical_warmup_undercoverage(
             self.market = market
 
         def backfill_range(self, **kwargs):
-            breadth_rows.extend(
-                [
-                    SimpleNamespace(
-                        date=older_date,
-                        total_stocks_scanned=1,
-                    ),
-                    SimpleNamespace(
-                        date=as_of_date,
-                        total_stocks_scanned=10,
-                    ),
-                ]
+            breadth_rows.append(
+                SimpleNamespace(
+                    date=as_of_date,
+                    total_stocks_scanned=7,
+                )
             )
             return {
-                "total_dates": 2,
-                "processed": 2,
+                "total_dates": 1,
+                "processed": 1,
                 "errors": 0,
                 "error_dates": [],
                 "target_symbols": 10,
-                "symbols_with_cached_history": 10,
-                "cache_miss_stocks": 0,
+                "symbols_with_cached_history": 7,
+                "cache_miss_stocks": 3,
                 "error_stocks": 0,
-                "cache_coverage_ratio": 1.0,
-                "insufficient_history_observations": 9,
+                "cache_coverage_ratio": 0.7,
+                "insufficient_history_observations": 3,
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
     monkeypatch.setattr(
         export_static_site,
         "_generate_trading_dates",
-        lambda *args, **kwargs: [older_date, as_of_date],
+        lambda *args, **kwargs: [as_of_date],
     )
     monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
     monkeypatch.setattr(
@@ -961,111 +983,11 @@ def test_ensure_breadth_history_accepts_historical_warmup_undercoverage(
 
     result = export_static_site._ensure_breadth_history(
         as_of_date=as_of_date,
-        market="HK",
+        market="CA",
         min_trading_days=0,
     )
 
     assert result["status"] == "completed"
+    assert result["minimum_stocks_scanned"] == 7
     assert "undercovered_dates" not in result
     assert "error" not in result
-
-
-def test_ensure_breadth_history_rejects_undercoverage_after_warmup(
-    monkeypatch,
-):
-    warmup_date = date(2026, 7, 27)
-    covered_date = date(2026, 7, 28)
-    recent_gap_date = date(2026, 7, 30)
-    as_of_date = date(2026, 7, 31)
-    breadth_rows: list[SimpleNamespace] = []
-
-    class _FakeQuery:
-        def __init__(self, rows):
-            self.rows = rows
-
-        def filter(self, *args, **kwargs):
-            return self
-
-        def all(self):
-            return self.rows
-
-    class _FakeDb(_FakeSession):
-        def query(self, entity, *args):
-            if entity is MarketBreadth:
-                return _FakeQuery(breadth_rows)
-            if entity is StockUniverse.symbol:
-                return _FakeQuery([
-                    (f"AAA{i}",)
-                    for i in range(10)
-                ])
-            return _FakeQuery([])
-
-    class _FakeBreadthCalculator:
-        def __init__(self, db, price_cache, *, market):
-            self.market = market
-
-        def backfill_range(self, **kwargs):
-            breadth_rows.extend(
-                [
-                    SimpleNamespace(
-                        date=warmup_date,
-                        total_stocks_scanned=1,
-                    ),
-                    SimpleNamespace(
-                        date=covered_date,
-                        total_stocks_scanned=10,
-                    ),
-                    SimpleNamespace(
-                        date=recent_gap_date,
-                        total_stocks_scanned=1,
-                    ),
-                    SimpleNamespace(
-                        date=as_of_date,
-                        total_stocks_scanned=10,
-                    ),
-                ]
-            )
-            return {
-                "total_dates": 4,
-                "processed": 4,
-                "errors": 0,
-                "error_dates": [],
-                "target_symbols": 10,
-                "symbols_with_cached_history": 10,
-                "cache_miss_stocks": 0,
-                "error_stocks": 0,
-                "cache_coverage_ratio": 1.0,
-                "insufficient_history_observations": 10,
-            }
-
-    monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
-    monkeypatch.setattr(
-        export_static_site,
-        "_generate_trading_dates",
-        lambda *args, **kwargs: [
-            warmup_date,
-            covered_date,
-            recent_gap_date,
-            as_of_date,
-        ],
-    )
-    monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
-    monkeypatch.setattr(
-        export_static_site,
-        "BreadthCalculatorService",
-        _FakeBreadthCalculator,
-    )
-
-    result = export_static_site._ensure_breadth_history(
-        as_of_date=as_of_date,
-        market="HK",
-        min_trading_days=0,
-    )
-
-    assert result["status"] == "errored"
-    assert result["undercovered_dates"] == ["2026-07-30"]
-    assert result["minimum_stocks_scanned"] == 9
-    assert result["error"] == (
-        "Cache-only breadth backfill has insufficient usable coverage "
-        "(dates=2026-07-30, minimum_scanned=9)"
-    )

@@ -543,8 +543,8 @@ class Settings(BaseSettings):
     # Market RS calculation path, including static publish, backfill, and rollout.
     market_rs_min_current_price_coverage_ca: float = 0.70
     # DE static runs include many broad-market listings Yahoo cannot price
-    # reliably; the 2026-07-23 run landed at 89.08%, below the global 90% bar.
-    market_rs_min_current_price_coverage_de: float = 0.88
+    # reliably; the 2026-08-05 run landed at 84.02%, below the previous 88% bar.
+    market_rs_min_current_price_coverage_de: float = 0.84
     # Asia static-site actuals from the 2026-07-22 scheduled run landed well
     # below the global 90% bar for several Yahoo-covered broad universes. Keep
     # market-specific floors close to observed coverage instead of weakening

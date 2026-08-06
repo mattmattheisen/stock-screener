@@ -307,9 +307,9 @@ jobs:
           cd backend
           MIN_SYMBOL_COVERAGE="$(python - <<'PY'
           import os
-          from app.services.market_rs_inputs import MarketRsInputLoader
+          from app.services.static_market_coverage_policy import static_daily_price_bundle_min_coverage
 
-          print(MarketRsInputLoader._minimum_current_price_coverage(os.environ["MARKET"]))
+          print(static_daily_price_bundle_min_coverage(os.environ["MARKET"]))
           PY
           )"
           set +e

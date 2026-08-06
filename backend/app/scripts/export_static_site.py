@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
@@ -33,11 +32,17 @@ from app.services.group_rank_history_backfill_service import (
 )
 from app.services.benchmark_cache_service import BenchmarkFallbackPolicy
 from app.services.benchmark_resolution import BenchmarkResolution
-from app.services.daily_breadth_runner import CACHE_MISS_TOLERANCE_RATIO
 from app.services.market_exposure_service import EXPOSURE_BACKFILL_DAYS
 from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
     static_daily_price_refresh_batch_size as _static_daily_price_refresh_batch_size,
+)
+from app.services.static_breadth_assessment import (
+    classify_static_breadth_backfill,
+    static_breadth_row_has_accepted_coverage,
+)
+from app.services.static_market_coverage_policy import (
+    static_breadth_minimum_validated_scan_count,
 )
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
@@ -665,10 +670,9 @@ def _ensure_breadth_history(
             db,
             market=normalized_market,
         )
-        minimum_validated_stocks = (
-            _static_breadth_minimum_validated_scan_count(
-                supported_symbol_count
-            )
+        minimum_validated_stocks = static_breadth_minimum_validated_scan_count(
+            supported_symbol_count,
+            market=normalized_market,
         )
         if supported_symbol_count <= 0:
             incomplete_existing_dates = list(target_dates)
@@ -678,9 +682,9 @@ def _ensure_breadth_history(
                 for calc_date in target_dates
                 if (
                     calc_date in existing_by_date
-                    and not _static_breadth_row_has_accepted_coverage(
-                        existing_by_date[calc_date],
-                        minimum_validated_stocks=minimum_validated_stocks,
+                    and not static_breadth_row_has_accepted_coverage(
+                        existing_by_date[calc_date].total_stocks_scanned,
+                        minimum_stocks_scanned=minimum_validated_stocks,
                     )
                 )
             ]
@@ -711,6 +715,7 @@ def _ensure_breadth_history(
                 "recomputed_dates": 0,
                 "validated_existing_dates": len(target_dates),
                 "target_symbols": supported_symbol_count,
+                "minimum_stocks_scanned": minimum_validated_stocks,
             }
 
         print(
@@ -731,24 +736,28 @@ def _ensure_breadth_history(
             exclude_unsupported_price_symbols=True,
             required_as_of_date=as_of_date,
         )
-        undercovered_dates = _static_breadth_undercovered_backfill_dates(
-            db,
-            market=normalized_market,
+        backfill_rows = (
+            db.query(MarketBreadth)
+            .filter(
+                MarketBreadth.date.in_(target_dates),
+                MarketBreadth.market == normalized_market,
+            )
+            .all()
+        )
+        assessment = classify_static_breadth_backfill(
+            stats=stats,
             dates=target_dates,
             as_of_date=as_of_date,
-            minimum_validated_stocks=minimum_validated_stocks,
-            stats=stats,
+            minimum_stocks_scanned=minimum_validated_stocks,
+            scanned_by_date={
+                row.date: int(row.total_stocks_scanned or 0)
+                for row in backfill_rows
+            },
         )
-        if undercovered_dates:
-            stats["undercovered_dates"] = [
-                calc_date.isoformat()
-                for calc_date in undercovered_dates
-            ]
-            stats["minimum_stocks_scanned"] = minimum_validated_stocks
-        error = _static_breadth_backfill_error(stats)
+        stats.update(assessment.diagnostics())
         stats.update(
             {
-                "status": "errored" if error else "completed",
+                "status": assessment.status,
                 "market": normalized_market,
                 "as_of_date": as_of_date.isoformat(),
                 "lookback_start_date": start_date.isoformat(),
@@ -758,8 +767,8 @@ def _ensure_breadth_history(
                 "recomputed_dates": len(recompute_dates),
             }
         )
-        if error:
-            stats["error"] = error
+        if assessment.error:
+            stats["error"] = assessment.error
         return stats
 
 
@@ -775,49 +784,6 @@ def _static_breadth_supported_symbol_count(db, *, market: str) -> int:
     ]
     supported_symbols, _unsupported_symbols = split_supported_price_symbols(symbols)
     return len(supported_symbols)
-
-
-def _static_breadth_undercovered_backfill_dates(
-    db,
-    *,
-    market: str,
-    dates: Sequence[date],
-    as_of_date: date,
-    minimum_validated_stocks: int,
-    stats: Mapping[str, Any],
-) -> list[date]:
-    insufficient_observations = int(
-        stats.get("insufficient_history_observations") or 0
-    )
-    if insufficient_observations <= 0 or minimum_validated_stocks <= 0:
-        return []
-
-    rows = (
-        db.query(MarketBreadth)
-        .filter(
-            MarketBreadth.date.in_(dates),
-            MarketBreadth.market == market,
-        )
-        .all()
-    )
-    rows_by_date = {row.date: row for row in rows}
-    undercovered_dates: list[date] = []
-    has_seen_valid_history = False
-    for calc_date in sorted(set(dates)):
-        row = rows_by_date.get(calc_date)
-        has_accepted_coverage = (
-            row is not None
-            and _static_breadth_row_has_accepted_coverage(
-                row,
-                minimum_validated_stocks=minimum_validated_stocks,
-            )
-        )
-        if has_accepted_coverage:
-            has_seen_valid_history = True
-            continue
-        if calc_date == as_of_date or has_seen_valid_history:
-            undercovered_dates.append(calc_date)
-    return undercovered_dates
 
 
 def _static_breadth_recompute_dates(
@@ -845,82 +811,10 @@ def _static_breadth_recompute_dates(
     return sorted(recompute_dates)
 
 
-def _static_breadth_minimum_validated_scan_count(
-    supported_symbol_count: int,
-) -> int:
-    if supported_symbol_count <= 0:
-        return 0
-    return max(
-        1,
-        math.ceil(
-            supported_symbol_count * (1.0 - CACHE_MISS_TOLERANCE_RATIO)
-        ),
-    )
-
-
-def _static_breadth_row_has_accepted_coverage(
-    row: MarketBreadth,
-    *,
-    minimum_validated_stocks: int,
-) -> bool:
-    return int(row.total_stocks_scanned or 0) >= minimum_validated_stocks
-
-
-def _static_breadth_backfill_error(stats: Mapping[str, Any]) -> str | None:
-    calculation_errors = int(stats.get("error_stocks") or 0)
-    if calculation_errors > 0:
-        return (
-            "Cache-only breadth backfill has calculation errors "
-            f"(error_stocks={calculation_errors})"
-        )
-
-    errors = int(stats.get("errors") or 0)
-    if errors > 0:
-        return f"Cache-only breadth backfill has errors (errors={errors})"
-
-    total_dates = int(stats.get("total_dates") or 0)
-    processed = int(stats.get("processed") or 0)
-    if total_dates > 0 and processed == 0:
-        return "Cache-only breadth backfill processed no dates"
-
-    undercovered_dates = stats.get("undercovered_dates")
-    if undercovered_dates:
-        date_sample = ",".join(str(calc_date) for calc_date in undercovered_dates)
-        minimum_stocks_scanned = int(stats.get("minimum_stocks_scanned") or 0)
-        return (
-            "Cache-only breadth backfill has insufficient usable coverage "
-            f"(dates={date_sample}, "
-            f"minimum_scanned={minimum_stocks_scanned})"
-        )
-
-    target_symbols = stats.get("target_symbols")
-    if target_symbols is None:
-        return None
-
-    total_symbols = int(target_symbols or 0)
-    if total_symbols == 0:
-        return "Cache-only breadth backfill processed no stocks"
-
-    cache_misses = int(stats.get("cache_miss_stocks") or 0)
-    miss_ratio = cache_misses / total_symbols
-    if miss_ratio > CACHE_MISS_TOLERANCE_RATIO:
-        return (
-            "Cache-only breadth backfill exceeds miss tolerance "
-            f"(cache_misses={cache_misses}, total={total_symbols}, "
-            f"ratio={miss_ratio:.1%}, "
-            f"limit={CACHE_MISS_TOLERANCE_RATIO:.0%})"
-        )
-    return None
-
-
 def _static_breadth_ready_for_exposure(result: Any) -> bool:
     if not isinstance(result, Mapping):
         return False
     if result.get("error"):
-        return False
-    if int(result.get("error_stocks") or 0) > 0:
-        return False
-    if int(result.get("errors") or 0) > 0:
         return False
     return result.get("status") in {"completed", "skipped"}
 
