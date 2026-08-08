@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from types import MappingProxyType
 
 import pandas as pd
 import pytest
@@ -7,9 +8,18 @@ from app.domain.markets.calendar_policy import (
     CalendarProvider,
     CalendarSessionOverride,
 )
+from app.domain.markets.calendar_coverage import (
+    AnnualCalendarManifest,
+    CalendarCoverageRegistry,
+    CalendarSource,
+    MarketCalendarCoverage,
+)
 from app.domain.markets.catalog import get_market_catalog
 from app.services import market_calendar_service as calendar_module
-from app.services.market_calendar_service import MarketCalendarService
+from app.services.market_calendar_service import (
+    CalendarCoverageExpired,
+    MarketCalendarService,
+)
 
 
 class _FakeCalendar:
@@ -171,7 +181,79 @@ class _RangeBoundedSessionCalendar(_BoundedSessionCalendar):
         )
 
 
+def _coverage_registry(
+    *,
+    market: str = "CN",
+    verified_through: date = date.max,
+    official_sessions: tuple[date, ...] = (),
+    close_exceptions=None,
+) -> CalendarCoverageRegistry:
+    source = CalendarSource(
+        name="Official test source",
+        url="https://exchange.example/calendar",
+        checked_at=date(2026, 1, 1),
+    )
+    annual = {}
+    for session in official_sessions:
+        annual.setdefault(session.year, []).append(session)
+    annual_manifests = {
+        year: AnnualCalendarManifest(
+            market=market,
+            mic=get_market_catalog().get(market).primary_mic,
+            year=year,
+            status="official",
+            sessions=tuple(sorted(sessions)),
+            close_exceptions=MappingProxyType(
+                {
+                    day: close
+                    for day, close in (close_exceptions or {}).items()
+                    if day.year == year
+                }
+            ),
+            source=source,
+        )
+        for year, sessions in annual.items()
+    }
+    coverage = MarketCalendarCoverage(
+        market=market,
+        mic=get_market_catalog().get(market).primary_mic,
+        verified_through=verified_through,
+        source=source,
+        annual=MappingProxyType(annual_manifests),
+    )
+    return CalendarCoverageRegistry(
+        {market: coverage},
+        provisional_through=date(2030, 12, 31),
+        generated_at=date(2026, 1, 1),
+    )
+
+
+def _unbounded_registry() -> CalendarCoverageRegistry:
+    source = CalendarSource(
+        name="Provider-only test coverage",
+        url="https://exchange.example/calendar",
+        checked_at=date(2026, 1, 1),
+    )
+    catalog = get_market_catalog()
+    coverage = {
+        market: MarketCalendarCoverage(
+            market=market,
+            mic=catalog.get(market).primary_mic,
+            verified_through=date.max,
+            source=source,
+            annual=MappingProxyType({}),
+        )
+        for market in catalog.supported_market_codes()
+    }
+    return CalendarCoverageRegistry(
+        coverage,
+        provisional_through=date.max,
+        generated_at=date(2026, 1, 1),
+    )
+
+
 def _service_with_provider(provider_factory, **kwargs):
+    kwargs.setdefault("calendar_coverage_registry", _unbounded_registry())
     return MarketCalendarService(
         calendar_providers={
             CalendarProvider.EXCHANGE_CALENDARS: provider_factory,
@@ -464,114 +546,144 @@ def test_last_completed_trading_day_respects_closed_date_overrides():
     assert service.last_completed_trading_day("JP", now=noon_tokyo) == date(2026, 3, 19)
 
 
-@pytest.mark.parametrize("market", ["CN", "SG"])
-def test_calendar_bounds_fallback_uses_weekdays(market):
-    service = _service_with_provider(lambda _: _BoundsCalendar())
-
-    assert service.is_trading_day(market, date(2026, 4, 10)) is True
-    assert service.is_trading_day(market, date(2026, 4, 11)) is False
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        "The requested date is before the earliest date supported by the calendar",
-        "The requested date is after the latest date supported by the calendar",
-    ],
-)
-def test_calendar_bounds_fallback_recognizes_earliest_latest_messages(message):
+def test_official_sessions_override_provider_membership():
+    registry = _coverage_registry(
+        market="CN",
+        verified_through=date(2026, 12, 31),
+        official_sessions=(date(2026, 4, 9), date(2026, 4, 10)),
+    )
     service = _service_with_provider(
-        lambda _: _EarliestLatestBoundsCalendar(message),
+        lambda _: _SessionCalendar([date(2026, 4, 13)]),
+        calendar_coverage_registry=registry,
     )
 
     assert service.is_trading_day("CN", date(2026, 4, 10)) is True
+    assert service.is_trading_day("CN", date(2026, 4, 13)) is False
+
+
+def test_verified_boundary_succeeds_and_next_date_hard_fails():
+    boundary = date(2026, 12, 31)
+    registry = _coverage_registry(
+        verified_through=boundary,
+        official_sessions=(boundary,),
+    )
+    service = _service_with_provider(
+        lambda _: _BoundsCalendar(),
+        calendar_coverage_registry=registry,
+    )
+
+    assert service.is_trading_day("CN", boundary) is True
+    with pytest.raises(CalendarCoverageExpired) as raised:
+        service.is_trading_day("CN", date(2027, 1, 1))
+
+    message = str(raised.value)
+    assert "CN" in message
+    assert "2027-01-01" in message
+    assert "2026-12-31" in message
+    assert "https://exchange.example/calendar" in message
+    assert "docs/operations/market-calendar-maintenance.md" in message
+
+
+def test_range_uses_provider_history_before_official_files_and_guards_end():
+    registry = _coverage_registry(
+        verified_through=date(2026, 12, 31),
+        official_sessions=(date(2026, 1, 2),),
+    )
+    service = _service_with_provider(
+        lambda _: _SessionCalendar([date(2025, 12, 30), date(2025, 12, 31)]),
+        calendar_coverage_registry=registry,
+    )
+
+    assert service.trading_days(
+        "CN", date(2025, 12, 30), date(2026, 1, 2)
+    ) == [date(2025, 12, 30), date(2025, 12, 31), date(2026, 1, 2)]
+    with pytest.raises(CalendarCoverageExpired):
+        service.trading_days("CN", date(2026, 12, 31), date(2027, 1, 1))
 
 
 @pytest.mark.parametrize("market", ["CN", "SG"])
-def test_calendar_schedule_unavailable_fallback_uses_weekdays(market):
-    service = _service_with_provider(lambda _: _ScheduleUnavailableCalendar())
-
-    assert service.is_trading_day(market, date(2026, 4, 10)) is True
-    assert service.is_trading_day(market, date(2026, 4, 11)) is False
-
-
-def test_weekday_bounds_fallback_does_not_readd_provider_known_holidays():
+def test_future_weekdays_never_use_provider_bounds_fallback(market):
+    registry = _coverage_registry(
+        market=market,
+        verified_through=date(2026, 12, 31),
+        official_sessions=(date(2026, 12, 31),),
+    )
     service = _service_with_provider(
-        lambda _: _BoundedSessionCalendar(
-            sessions=[date(2026, 4, 10), date(2026, 12, 31)],
-            last_session=date(2026, 12, 31),
-        ),
+        lambda _: _BoundsCalendar(),
+        calendar_coverage_registry=registry,
     )
 
-    assert service.trading_days("CN", date(2026, 4, 10), date(2026, 4, 13)) == [
-        date(2026, 4, 10),
-    ]
+    with pytest.raises(CalendarCoverageExpired):
+        service.is_trading_day(market, date(2027, 1, 4))
 
 
-def test_weekday_bounds_fallback_extends_after_provider_last_session():
+def test_last_completed_trading_day_guards_market_local_current_date():
+    registry = _coverage_registry(
+        market="CN",
+        verified_through=date(2026, 12, 31),
+        official_sessions=(date(2026, 12, 31),),
+    )
     service = _service_with_provider(
-        lambda _: _BoundedSessionCalendar(
-            sessions=[date(2025, 12, 31)],
-            last_session=date(2025, 12, 31),
-        ),
+        lambda _: _BoundsCalendar(),
+        calendar_coverage_registry=registry,
     )
 
-    assert service.trading_days("CN", date(2026, 1, 1), date(2026, 1, 5)) == [
-        date(2026, 1, 1),
-        date(2026, 1, 2),
-        date(2026, 1, 5),
-    ]
+    with pytest.raises(CalendarCoverageExpired):
+        service.last_completed_trading_day(
+            "CN", now=datetime.fromisoformat("2027-01-04T18:00:00+08:00")
+        )
 
 
-def test_weekday_bounds_fallback_preserves_provider_prefix_when_range_exceeds_bounds():
+def test_session_anchors_inherit_verified_as_of_guard():
+    registry = _coverage_registry(
+        market="CN",
+        verified_through=date(2026, 12, 31),
+        official_sessions=(date(2026, 12, 31),),
+    )
     service = _service_with_provider(
-        lambda _: _RangeBoundedSessionCalendar(
-            sessions=[date(2025, 12, 29), date(2025, 12, 31)],
-            last_session=date(2025, 12, 31),
-        ),
+        lambda _: _BoundsCalendar(),
+        calendar_coverage_registry=registry,
     )
 
-    assert service.trading_days("CN", date(2025, 12, 29), date(2026, 1, 5)) == [
-        date(2025, 12, 29),
-        date(2025, 12, 31),
-        date(2026, 1, 1),
-        date(2026, 1, 2),
-        date(2026, 1, 5),
-    ]
+    with pytest.raises(CalendarCoverageExpired):
+        service.session_anchors("CN", date(2027, 1, 4), offsets=(1,))
 
 
-def test_weekday_bounds_fallback_preserves_provider_suffix_when_range_starts_before_bounds():
+def test_official_session_uses_regular_close_when_provider_schedule_is_unavailable():
+    current_day = date(2026, 4, 10)
+    registry = _coverage_registry(
+        market="CN",
+        verified_through=date(2026, 12, 31),
+        official_sessions=(date(2026, 4, 9), current_day),
+    )
     service = _service_with_provider(
-        lambda _: _RangeBoundedSessionCalendar(
-            sessions=[date(2026, 1, 2), date(2026, 1, 6)],
-            first_session=date(2026, 1, 2),
-            last_session=date(2026, 12, 31),
-        ),
+        lambda _: _BoundsCalendar(),
+        calendar_coverage_registry=registry,
     )
 
-    assert service.trading_days("CN", date(2025, 12, 29), date(2026, 1, 6)) == [
-        date(2025, 12, 29),
-        date(2025, 12, 30),
-        date(2025, 12, 31),
-        date(2026, 1, 1),
-        date(2026, 1, 2),
-        date(2026, 1, 6),
-    ]
+    assert service.last_completed_trading_day(
+        "CN", now=datetime.fromisoformat("2026-04-10T15:31:00+08:00")
+    ) == current_day
 
 
-@pytest.mark.parametrize("market", ["CN", "SG"])
-def test_last_completed_trading_day_bounds_fallback(market):
-    service = _service_with_provider(lambda _: _BoundsCalendar())
+def test_official_close_exception_overrides_provider_close():
+    from datetime import time
 
-    before_close = datetime.fromisoformat("2026-04-10T15:00:00+08:00")
-    after_close = datetime.fromisoformat("2026-04-10T16:00:00+08:00")
-
-    assert service.last_completed_trading_day(market, now=before_close) == date(
-        2026, 4, 9
+    current_day = date(2026, 4, 10)
+    registry = _coverage_registry(
+        market="CN",
+        verified_through=date(2026, 12, 31),
+        official_sessions=(date(2026, 4, 9), current_day),
+        close_exceptions={current_day: time(13, 0)},
     )
-    assert service.last_completed_trading_day(market, now=after_close) == date(
-        2026, 4, 10
+    service = _service_with_provider(
+        lambda _: _BoundsCalendar(),
+        calendar_coverage_registry=registry,
     )
+
+    assert service.last_completed_trading_day(
+        "CN", now=datetime.fromisoformat("2026-04-10T13:31:00+08:00")
+    ) == current_day
 
 
 @pytest.mark.parametrize("market", ["CN", "SG"])
