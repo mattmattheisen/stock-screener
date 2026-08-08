@@ -210,10 +210,6 @@ def _load_market_coverage(
         raise CalendarManifestError(
             f"{market} has no annual manifest through {provisional_through.year}"
         )
-    if annual_by_year[provisional_through.year].status != "provisional":
-        raise CalendarManifestError(
-            f"{market} {provisional_through.year} must remain provisional"
-        )
 
     return MarketCalendarCoverage(
         market=market,

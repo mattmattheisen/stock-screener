@@ -170,3 +170,32 @@ def test_registry_rejects_provisional_horizon_before_2030(tmp_path: Path) -> Non
             index_name="minimal-index.json",
             market_catalog=_kr_catalog(),
         )
+
+
+def test_registry_accepts_official_coverage_replacing_provisional_horizon(
+    tmp_path: Path,
+) -> None:
+    root = _copy_fixture(tmp_path)
+    for year in range(2027, 2031):
+        path = root / "kr" / f"{year}.provisional.json"
+
+        def promote(payload):
+            payload["status"] = "official"
+            payload.pop("provider")
+            payload.pop("provider_version")
+
+        _mutate_json(path, promote)
+    _mutate_json(
+        root / "minimal-index.json",
+        lambda payload: payload["markets"]["KR"].update(
+            {"verified_through": "2030-12-31"}
+        ),
+    )
+
+    registry = CalendarCoverageRegistry.load(
+        root,
+        index_name="minimal-index.json",
+        market_catalog=_kr_catalog(),
+    )
+
+    assert registry.coverage_for("KR").annual[2030].status == "official"
