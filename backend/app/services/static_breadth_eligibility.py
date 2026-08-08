@@ -9,7 +9,7 @@ import math
 import hashlib
 from types import MappingProxyType
 
-from sqlalchemy import func
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session
 
 from ..domain.providers.price_symbol_support import split_supported_price_symbols
@@ -95,35 +95,61 @@ def classify_static_breadth_eligibility(
     eligible_by_date: dict[date, tuple[str, ...]] = {}
     insufficient: set[str] = set()
     exact_date_gaps: set[str] = set()
+    valid_counts_by_date = {day: {} for day in ordered_dates}
+    exact_symbols_by_date = {day: set() for day in ordered_dates}
+    union_symbols = sorted(
+        {symbol for symbols in supported_by_date.values() for symbol in symbols}
+    )
+    valid_ohlc = and_(*_valid_ohlc_predicate())
+    aggregate_columns = []
+    for calculation_date in ordered_dates:
+        aggregate_columns.extend(
+            (
+                func.sum(
+                    case(
+                        (
+                            and_(valid_ohlc, StockPrice.date <= calculation_date),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                func.max(
+                    case(
+                        (
+                            and_(valid_ohlc, StockPrice.date == calculation_date),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+            )
+        )
+    for offset in range(0, len(union_symbols), PRICE_QUERY_CHUNK_SIZE):
+        chunk = union_symbols[offset : offset + PRICE_QUERY_CHUNK_SIZE]
+        rows = (
+            db.query(StockPrice.symbol, *aggregate_columns)
+            .filter(
+                StockPrice.symbol.in_(chunk),
+                StockPrice.date <= ordered_dates[-1],
+            )
+            .group_by(StockPrice.symbol)
+            .all()
+        )
+        for row in rows:
+            symbol = row[0]
+            values = row[1:]
+            for index, calculation_date in enumerate(ordered_dates):
+                valid_counts_by_date[calculation_date][symbol] = int(
+                    values[index * 2] or 0
+                )
+                if int(values[index * 2 + 1] or 0) > 0:
+                    exact_symbols_by_date[calculation_date].add(symbol)
+
     for calculation_date in ordered_dates:
         supported_symbols = supported_by_date[calculation_date]
-        valid_counts: dict[str, int] = {}
-        exact_symbols: set[str] = set()
-        for offset in range(0, len(supported_symbols), PRICE_QUERY_CHUNK_SIZE):
-            chunk = supported_symbols[offset : offset + PRICE_QUERY_CHUNK_SIZE]
-            count_rows = (
-                db.query(StockPrice.symbol, func.count(StockPrice.id))
-                .filter(
-                    StockPrice.symbol.in_(chunk),
-                    StockPrice.date <= calculation_date,
-                    *_valid_ohlc_predicate(),
-                )
-                .group_by(StockPrice.symbol)
-                .all()
-            )
-            valid_counts.update(
-                {symbol: int(count) for symbol, count in count_rows}
-            )
-            exact_symbols.update(
-                symbol
-                for (symbol,) in db.query(StockPrice.symbol)
-                .filter(
-                    StockPrice.symbol.in_(chunk),
-                    StockPrice.date == calculation_date,
-                    *_valid_ohlc_predicate(),
-                )
-                .all()
-            )
+        valid_counts = valid_counts_by_date[calculation_date]
+        exact_symbols = exact_symbols_by_date[calculation_date]
         eligible: list[str] = []
         for symbol in supported_symbols:
             if symbol not in exact_symbols:

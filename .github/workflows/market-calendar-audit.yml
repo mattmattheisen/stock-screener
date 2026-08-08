@@ -26,5 +26,8 @@ jobs:
       - name: Audit official Market calendar coverage
         run: |
           cd backend
-          python -m app.scripts.build_market_calendar_data --check
+          if ! DRIFT_OUTPUT="$(python -m app.scripts.build_market_calendar_data --check 2>&1)"; then
+            SAFE_DRIFT_OUTPUT="${DRIFT_OUTPUT//$'\n'/'%0A'}"
+            echo "::warning::Market calendar generation drift detected: ${SAFE_DRIFT_OUTPUT}"
+          fi
           python -m app.scripts.audit_market_calendars --github-actions

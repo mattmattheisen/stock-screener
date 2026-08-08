@@ -1,6 +1,7 @@
 from datetime import date
 
 import pandas as pd
+from sqlalchemy import event
 
 from app.models.stock import StockPrice
 from app.services.point_in_time_universe_service import (
@@ -76,6 +77,17 @@ def test_classifies_point_in_time_eligibility_and_price_exclusions(universe_sess
             second_date: "current_active_fallback_v1",
         },
     )
+    price_queries = []
+
+    def record_price_query(_conn, _cursor, statement, *_args):
+        if "stock_prices" in statement:
+            price_queries.append(statement)
+
+    event.listen(
+        universe_session.get_bind(),
+        "before_cursor_execute",
+        record_price_query,
+    )
 
     result = classify_static_breadth_eligibility(
         universe_session,
@@ -100,6 +112,7 @@ def test_classifies_point_in_time_eligibility_and_price_exclusions(universe_sess
     assert "NULL_BAR" in result.insufficient_history_symbols
     assert result.exact_date_gap_symbols == ("DATE_GAP", "NULL_BAR")
     assert result.exact_date_gap_count == 2
+    assert len(price_queries) == 1
 
 
 def test_exclusion_samples_are_bounded_sorted_and_zero_counts_are_distinct(
