@@ -434,6 +434,13 @@ LLM-backed research assistant (Groq by default) using an agent + tool-executor p
 
 Open Operations when the header chip warns, a scan is blocked by a refresh, or bootstrap looks stalled. It exposes runtime activity, telemetry alerts, the queue/job inventory, worker leases/ownership, and cancellable jobs. Detailed runtime and worker guidance: [Operations Guide](OPERATIONS.md).
 
+Market calendars are checked by a weekly audit. Calendar-age warnings do not block
+builds or publication. A calculation stops only when its requested calculation date
+is beyond verified official coverage, at which point an
+operator must import the exchange's newly published schedule and advance the
+Market's coverage manifest. Provisional calendars through 2030 remain visible
+for planning but are not treated as official verification.
+
 ---
 
 ## Methodology reference

@@ -354,6 +354,76 @@ gh workflow run static-site.yml \
 
 The JSON map is per Market; omitted Markets remain on `balanced-horizon-percentile-v2`, allowing an isolated rollback without changing other current or fallback artifacts. Verify live/static metadata says `legacy-linear-v1` for the restored Market. Retain balanced rows for diagnosis; rollback changes pointers, not history. A later return to balanced static output must use a newly validated live activation and omit that Market from `rs_formula_overrides`.
 
+## Market Calendar Maintenance
+
+Calendar maintenance is an **annual/on-publication** operator responsibility. The
+Saturday **weekly audit** only validates the checked-in manifests and warns; it
+does not scrape exchange sites or change calendar data.
+
+The source of truth is `backend/data/market_calendars/index.json` plus the annual
+files below it. An `official` annual file is normalized from a published,
+first-party exchange notice and is authoritative at runtime. A `provisional`
+file is generated from the pinned Python calendar provider and exists for
+planning and review through 2030; it does not extend `verified_through`.
+
+The audit emits the active **180 / 90 / 60 / 30 / expired** warning band. These
+warnings are non-blocking in both the weekly workflow and static-site workflow.
+Runtime access hard-fails only when the requested calculation date is later than
+that Market's `verified_through`; historical lookbacks before the checked-in
+years remain provider-backed.
+
+Run the audit locally from `backend/`:
+
+```bash
+../backend/venv/bin/python -m app.scripts.audit_market_calendars
+../backend/venv/bin/python -m app.scripts.audit_market_calendars \
+  --as-of 2026-08-08 --github-actions
+```
+
+When a first-party exchange publishes a new calendar:
+
+1. Save the reviewed session dates as a JSON array, one ISO date per entry.
+2. Import and normalize the official year. For example:
+
+```bash
+../backend/venv/bin/python -m app.scripts.generate_market_calendar_manifests \
+  --market HK --status official --year 2027 \
+  --official-sessions /tmp/hk-2027-sessions.json \
+  --source-name "HKEX 2027 Holiday Schedule" \
+  --source-url "https://www.hkex.com.hk/..." \
+  --checked-at 2026-12-01
+```
+
+3. Review the normalized annual file, update the Market's source and
+   `verified_through` in `backend/data/market_calendars/index.json`, and advance
+   coverage only through the last date supported by that official publication.
+4. Inspect and test the change:
+
+```bash
+git diff -- backend/data/market_calendars
+../backend/venv/bin/python -m app.scripts.audit_market_calendars
+../backend/venv/bin/pytest tests/unit/domain/markets/test_calendar_coverage.py \
+  tests/unit/test_market_calendar_data.py \
+  tests/unit/test_market_calendar_service.py -q
+```
+
+Regenerate provisional years after a pinned provider upgrade, then inspect the
+diff. `--check` is the CI drift check and makes no changes:
+
+```bash
+../backend/venv/bin/python -m app.scripts.generate_market_calendar_manifests \
+  --status provisional --start-year 2027 --through-year 2030
+../backend/venv/bin/python -m app.scripts.generate_market_calendar_manifests \
+  --status provisional --start-year 2027 --through-year 2030 --check
+```
+
+For an emergency closure, locate and archive the first-party exchange notice,
+remove the closed date from the reviewed official session JSON, re-import that
+year, update its source/check date, run the diff and calendar tests above, then
+publish through the normal review path. If only market-data feeds show a gap,
+treat **no-bar data** as evidence for investigation, not a closure authority;
+never infer an exchange holiday from provider absence alone.
+
 ## Common Recovery Paths
 
 ### Bootstrap Is Slow
