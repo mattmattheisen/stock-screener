@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from app.config import settings
 
 
@@ -26,21 +24,17 @@ def static_daily_price_bundle_min_coverage(market: str) -> float:
 
 
 def static_breadth_history_min_coverage(market: str) -> float:
-    """Return the static breadth history's stock-scan coverage floor."""
-    return market_current_price_min_coverage(market)
+    """Return the independent breadth floor for a prequalified universe."""
+    del market
+    return 1.0
 
 
 def static_breadth_minimum_validated_scan_count(
-    supported_symbol_count: int,
+    eligible_symbol_count: int,
     *,
     market: str,
 ) -> int:
     """Return the minimum breadth rows that must scan valid symbols."""
-    if supported_symbol_count <= 0:
+    if eligible_symbol_count <= 0:
         return 0
-    return max(
-        1,
-        math.ceil(
-            supported_symbol_count * static_breadth_history_min_coverage(market)
-        ),
-    )
+    return eligible_symbol_count
