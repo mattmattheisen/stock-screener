@@ -159,6 +159,58 @@ and in normal publication runs. Static export code is not taught to suppress
 `CalendarCoverageExpired`; if the selected calculation date is beyond verified
 coverage, that market's export fails normally.
 
+## Historical Breadth Eligibility
+
+Static breadth history must not reuse the Market RS current-price percentage as
+both its threshold and its universe definition. Those are different contracts:
+
+- current-price coverage asks whether enough of today's active Market universe
+  has a usable current adjusted price;
+- historical-breadth eligibility asks which symbols can mathematically contribute
+  a 63-session breadth observation on each historical calculation date.
+
+The existing `BreadthHistoryPriceCoverageService` becomes the authoritative
+preflight for breadth readiness. For each calculation date, a symbol is breadth
+eligible only when it:
+
+1. belongs to the resolved point-in-time Market universe for that date;
+2. is supported by the configured price-symbol provider;
+3. has an exact valid OHLC observation on that date; and
+4. has at least 70 valid observations through that date, which is the calculator's
+   existing requirement for a 63-session change.
+
+This is a date-specific denominator. A recent listing can become eligible later
+in the backfill window, and a currently active symbol is not retroactively counted
+before it joined the Market universe. Symbols with missing or incomplete history
+remain visible in diagnostics and in the separate price-history refresh result;
+they are not misclassified as calculation failures for dates on which they could
+not contribute a valid breadth observation.
+
+`BreadthCalculatorService.backfill_range` accepts the resolved candidate universe
+and returns `eligible_stocks_by_date` alongside `scanned_stocks_by_date`. Static
+breadth assessment then validates the scanned count against the eligible count for
+the same date. Calculation errors remain hard failures. A non-empty date with zero
+eligible symbols also remains a hard failure, so an empty or broken price cache
+cannot pass by shrinking the denominator to zero.
+
+The current-price threshold remains unchanged for the daily-price and Market RS
+gates. Historical breadth gets a separate policy name and diagnostics, with no
+implicit call to `market_current_price_min_coverage`. Existing breadth records are
+revalidated against recomputed date-specific eligibility before being reused.
+
+The static artifact status records, per backfill:
+
+- point-in-time candidate count and universe policy;
+- eligible count and scanned count by date;
+- unsupported-symbol count;
+- insufficient-history count;
+- exact-date price-gap count;
+- a bounded sample for each exclusion reason.
+
+If point-in-time membership cannot be reconstructed, the existing explicit
+current-active fallback policy may be used, but the fallback is named in status
+diagnostics. It must not be presented as point-in-time coverage.
+
 ## Maintenance Procedure
 
 `docs/OPERATIONS.md` will document the annual workflow:
@@ -202,6 +254,18 @@ Unit tests cover:
 - provisional horizon validation through 2030;
 - deterministic CLI Markdown and Actions annotations.
 
+Breadth-specific tests cover:
+
+- current active symbols excluded from dates before their point-in-time entry;
+- recent listings becoming eligible only after their seventieth observation;
+- exact-date gaps excluded from eligibility but reported diagnostically;
+- calculation errors still hard-failing an otherwise eligible date;
+- a zero-eligible date failing rather than passing vacuously;
+- different eligible denominators across a multi-date backfill;
+- current-price thresholds remaining unchanged and independent;
+- US, DE, and HK regression fixtures that previously compared scanned history to
+  the full current active universe.
+
 Workflow tests verify the weekly schedule, manual dispatch, non-blocking warning
 step, and static-site integration. Existing Market calendar and static artifact
 tests remain regression coverage.
@@ -211,5 +275,5 @@ tests remain regression coverage.
 - Purchasing or integrating a live calendar vendor.
 - Treating missing price bars as proof of a closure.
 - Automatically committing scraped exchange pages.
-- Solving static breadth eligibility or AU price-coverage failures; those are
+- Solving AU price-coverage or CN bootstrap-duration failures; those remain
   independent fixes identified by the workflow review.
