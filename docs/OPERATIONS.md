@@ -407,14 +407,16 @@ git diff -- backend/data/market_calendars
   tests/unit/test_market_calendar_service.py -q
 ```
 
-Regenerate provisional years after a pinned provider upgrade, then inspect the
-diff. `--check` is the CI drift check and makes no changes:
+Regenerate a Market's provisional years after a pinned provider upgrade, then
+inspect the diff. Select a start year after that Market's last official file
+(the generator refuses to overwrite official years). The repository-wide
+builder also applies reviewed project rules such as Singapore's fixed holidays.
+`--check` is the CI drift check and makes no changes:
 
 ```bash
 ../backend/venv/bin/python -m app.scripts.generate_market_calendar_manifests \
-  --status provisional --start-year 2027 --through-year 2030
-../backend/venv/bin/python -m app.scripts.generate_market_calendar_manifests \
-  --status provisional --start-year 2027 --through-year 2030 --check
+  --market HK --status provisional --start-year 2027 --through-year 2030
+../backend/venv/bin/python -m app.scripts.build_market_calendar_data --check
 ```
 
 For an emergency closure, locate and archive the first-party exchange notice,

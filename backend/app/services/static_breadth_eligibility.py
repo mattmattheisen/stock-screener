@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 import math
+import hashlib
 from types import MappingProxyType
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..domain.providers.price_symbol_support import split_supported_price_symbols
@@ -17,6 +18,7 @@ from .bounded_history_universe import CurrentActiveFallbackUniverseResolver
 
 
 MINIMUM_BREADTH_OBSERVATIONS = 70
+STATIC_BREADTH_ELIGIBILITY_VERSION = "exact-ohlc-70-v1"
 DEFAULT_EXCLUSION_SAMPLE_LIMIT = 20
 PRICE_QUERY_CHUNK_SIZE = 500
 
@@ -27,21 +29,33 @@ class StaticBreadthEligibility:
     candidate_counts_by_date: Mapping[date, int]
     eligible_counts_by_date: Mapping[date, int]
     universe_policy_by_date: Mapping[date, str]
+    eligibility_signatures_by_date: Mapping[date, str]
+    unsupported_count: int
+    insufficient_history_count: int
+    exact_date_gap_count: int
     unsupported_symbols: tuple[str, ...]
     insufficient_history_symbols: tuple[str, ...]
     exact_date_gap_symbols: tuple[str, ...]
 
 
-def _valid_ohlc(row: StockPrice) -> bool:
-    values = (row.open, row.high, row.low, row.close)
-    return all(
-        value is not None and math.isfinite(float(value))
-        for value in values
-    )
+def _valid_ohlc_predicate():
+    predicates = []
+    for column in (StockPrice.open, StockPrice.high, StockPrice.low, StockPrice.close):
+        predicates.extend(
+            (column.is_not(None), column < math.inf, column > -math.inf)
+        )
+    return tuple(predicates)
 
 
 def _bounded_sample(symbols: set[str], limit: int) -> tuple[str, ...]:
     return tuple(sorted(symbols)[:limit])
+
+
+def static_breadth_eligibility_signature(symbols: Sequence[str]) -> str:
+    payload = "".join(
+        (f"{STATIC_BREADTH_ELIGIBILITY_VERSION}\n", *(f"{symbol}\n" for symbol in symbols))
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def classify_static_breadth_eligibility(
@@ -78,48 +92,47 @@ def classify_static_breadth_eligibility(
             resolver.policy_for(normalized_market, calculation_date) or "unrecorded"
         )
 
-    union_symbols = sorted(
-        {
-            symbol
-            for symbols in supported_by_date.values()
-            for symbol in symbols
-        }
-    )
-    valid_dates_by_symbol: dict[str, set[date]] = defaultdict(set)
-    if ordered_dates:
-        latest_date = ordered_dates[-1]
-        for offset in range(0, len(union_symbols), PRICE_QUERY_CHUNK_SIZE):
-            chunk = union_symbols[offset : offset + PRICE_QUERY_CHUNK_SIZE]
-            if not chunk:
-                continue
-            rows = (
-                db.query(StockPrice)
-                .filter(
-                    StockPrice.symbol.in_(chunk),
-                    StockPrice.date <= latest_date,
-                )
-                .all()
-            )
-            for row in rows:
-                if _valid_ohlc(row):
-                    valid_dates_by_symbol[row.symbol].add(row.date)
-
     eligible_by_date: dict[date, tuple[str, ...]] = {}
     insufficient: set[str] = set()
     exact_date_gaps: set[str] = set()
     for calculation_date in ordered_dates:
-        eligible: list[str] = []
-        for symbol in supported_by_date[calculation_date]:
-            valid_dates = valid_dates_by_symbol.get(symbol, set())
-            if calculation_date not in valid_dates:
-                exact_date_gaps.add(symbol)
-            observation_count = sum(
-                observed_date <= calculation_date for observed_date in valid_dates
+        supported_symbols = supported_by_date[calculation_date]
+        valid_counts: dict[str, int] = {}
+        exact_symbols: set[str] = set()
+        for offset in range(0, len(supported_symbols), PRICE_QUERY_CHUNK_SIZE):
+            chunk = supported_symbols[offset : offset + PRICE_QUERY_CHUNK_SIZE]
+            count_rows = (
+                db.query(StockPrice.symbol, func.count(StockPrice.id))
+                .filter(
+                    StockPrice.symbol.in_(chunk),
+                    StockPrice.date <= calculation_date,
+                    *_valid_ohlc_predicate(),
+                )
+                .group_by(StockPrice.symbol)
+                .all()
             )
+            valid_counts.update(
+                {symbol: int(count) for symbol, count in count_rows}
+            )
+            exact_symbols.update(
+                symbol
+                for (symbol,) in db.query(StockPrice.symbol)
+                .filter(
+                    StockPrice.symbol.in_(chunk),
+                    StockPrice.date == calculation_date,
+                    *_valid_ohlc_predicate(),
+                )
+                .all()
+            )
+        eligible: list[str] = []
+        for symbol in supported_symbols:
+            if symbol not in exact_symbols:
+                exact_date_gaps.add(symbol)
+            observation_count = valid_counts.get(symbol, 0)
             if observation_count < MINIMUM_BREADTH_OBSERVATIONS:
                 insufficient.add(symbol)
             if (
-                calculation_date in valid_dates
+                symbol in exact_symbols
                 and observation_count >= MINIMUM_BREADTH_OBSERVATIONS
             ):
                 eligible.append(symbol)
@@ -139,6 +152,15 @@ def classify_static_breadth_eligibility(
         ),
         eligible_counts_by_date=MappingProxyType(eligible_counts),
         universe_policy_by_date=MappingProxyType(policy_by_date),
+        eligibility_signatures_by_date=MappingProxyType(
+            {
+                calculation_date: static_breadth_eligibility_signature(symbols)
+                for calculation_date, symbols in eligible_by_date.items()
+            }
+        ),
+        unsupported_count=len(unsupported),
+        insufficient_history_count=len(insufficient),
+        exact_date_gap_count=len(exact_date_gaps),
         unsupported_symbols=_bounded_sample(unsupported, exclusion_sample_limit),
         insufficient_history_symbols=_bounded_sample(
             insufficient, exclusion_sample_limit

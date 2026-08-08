@@ -8,6 +8,7 @@ import pytest
 
 from app.domain.markets.calendar_coverage import CalendarCoverageRegistry
 from app.domain.markets.catalog import get_market_catalog
+from app.scripts.build_market_calendar_data import REVIEWED_OFFICIAL_CLOSURES
 
 
 CALENDAR_ROOT = Path(__file__).resolve().parents[2] / "data" / "market_calendars"
@@ -113,3 +114,27 @@ def test_repository_uses_available_official_forward_coverage(
     assert registry.coverage_for("US").verified_through == date(2028, 12, 31)
     assert registry.coverage_for("JP").verified_through == date(2027, 12, 31)
     assert registry.coverage_for("DE").verified_through == date(2030, 12, 31)
+
+
+def test_every_official_year_has_explicit_reviewed_closure_inputs(
+    registry: CalendarCoverageRegistry,
+) -> None:
+    official_years = {
+        (coverage.market, year)
+        for coverage in registry.coverages()
+        for year, annual in coverage.annual.items()
+        if annual.status == "official"
+    }
+
+    assert set(REVIEWED_OFFICIAL_CLOSURES) == official_years
+
+
+def test_singapore_provisional_calendar_excludes_fixed_holidays(
+    registry: CalendarCoverageRegistry,
+) -> None:
+    annual = registry.coverage_for("SG").annual[2027]
+
+    assert annual.status == "provisional"
+    assert date(2027, 1, 1) not in annual.sessions
+    assert date(2027, 3, 26) not in annual.sessions  # Good Friday
+    assert date(2027, 8, 9) not in annual.sessions

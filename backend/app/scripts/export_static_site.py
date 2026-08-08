@@ -679,6 +679,15 @@ def _ensure_breadth_history(
                     existing_by_date[calc_date].total_stocks_scanned,
                     eligible_stocks=eligibility.eligible_counts_by_date[calc_date],
                 )
+                or (
+                    calc_date in existing_by_date
+                    and getattr(
+                        existing_by_date[calc_date],
+                        "eligibility_signature",
+                        None,
+                    )
+                    != eligibility.eligibility_signatures_by_date[calc_date]
+                )
             )
         ]
         repair_dates = sorted(set(missing_dates + incomplete_existing_dates))
@@ -729,6 +738,10 @@ def _ensure_breadth_history(
             required_as_of_date=as_of_date,
             eligible_symbols_by_date={
                 calc_date: eligibility.eligible_symbols_by_date[calc_date]
+                for calc_date in recompute_dates
+            },
+            eligibility_signatures_by_date={
+                calc_date: eligibility.eligibility_signatures_by_date[calc_date]
                 for calc_date in recompute_dates
             },
         )
@@ -786,6 +799,15 @@ def _static_breadth_eligibility_diagnostics(
             calc_date.isoformat(): policy
             for calc_date, policy in eligibility.universe_policy_by_date.items()
         },
+        "eligibility_signatures_by_date": {
+            calc_date.isoformat(): signature
+            for calc_date, signature in (
+                eligibility.eligibility_signatures_by_date.items()
+            )
+        },
+        "unsupported_symbols": eligibility.unsupported_count,
+        "insufficient_history_symbols": eligibility.insufficient_history_count,
+        "exact_date_gap_symbols": eligibility.exact_date_gap_count,
         "unsupported_symbols_sample": list(eligibility.unsupported_symbols),
         "insufficient_history_symbols_sample": list(
             eligibility.insufficient_history_symbols

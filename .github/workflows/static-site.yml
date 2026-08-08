@@ -55,6 +55,7 @@ jobs:
       - name: Audit official Market calendar coverage
         run: |
           cd backend
+          python -m app.scripts.build_market_calendar_data --check
           python -m app.scripts.audit_market_calendars --github-actions
 
   select-markets:

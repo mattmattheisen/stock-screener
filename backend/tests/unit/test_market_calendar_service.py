@@ -581,7 +581,23 @@ def test_verified_boundary_succeeds_and_next_date_hard_fails():
     assert "2027-01-01" in message
     assert "2026-12-31" in message
     assert "https://exchange.example/calendar" in message
-    assert "docs/operations/market-calendar-maintenance.md" in message
+    assert "docs/OPERATIONS.md#market-calendar-maintenance" in message
+
+
+def test_primary_mic_official_sessions_do_not_override_explicit_alternate_mic():
+    calculation_date = date(2026, 4, 10)
+    registry = _coverage_registry(
+        market="IN",
+        verified_through=date(2026, 12, 31),
+        official_sessions=(date(2026, 4, 9),),
+    )
+    service = _service_with_provider(
+        lambda _: _SessionCalendar([calculation_date]),
+        calendar_coverage_registry=registry,
+    )
+
+    assert service.is_trading_day("IN", calculation_date) is False
+    assert service.is_trading_day("IN", calculation_date, mic="XBOM") is True
 
 
 def test_range_uses_provider_history_before_official_files_and_guards_end():

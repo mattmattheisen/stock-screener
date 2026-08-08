@@ -48,7 +48,7 @@ class MarketCalendarService:
     """Unified market calendar contract backed by provider-specific calendars."""
 
     CALENDAR_DATA_ROOT = Path(__file__).resolve().parents[2] / "data/market_calendars"
-    CALENDAR_MAINTENANCE_DOC = "docs/operations/market-calendar-maintenance.md"
+    CALENDAR_MAINTENANCE_DOC = "docs/OPERATIONS.md#market-calendar-maintenance"
 
     def __init__(
         self,
@@ -237,7 +237,9 @@ class MarketCalendarService:
         *,
         mic: str | None = None,
     ) -> MarketCalendarCoverage:
-        del mic  # Coverage is currently maintained at each Market's primary MIC.
+        # Expiry is Market-scoped. Official session overlays are applied only
+        # to the primary MIC; explicit alternate MICs remain provider-backed.
+        del mic
         coverage = self._calendar_coverage_registry.coverage_for(market)
         if requested_date > coverage.verified_through:
             raise CalendarCoverageExpired(
@@ -253,7 +255,11 @@ class MarketCalendarService:
     def _official_manifest_for_day(
         coverage: MarketCalendarCoverage,
         day: date,
+        *,
+        mic: str | None = None,
     ) -> AnnualCalendarManifest | None:
+        if mic is not None and str(mic).strip().upper() != coverage.mic:
+            return None
         annual = coverage.annual.get(day.year)
         if annual is None or annual.status != "official":
             return None
@@ -284,7 +290,7 @@ class MarketCalendarService:
         cursor = start
         while cursor <= end:
             year_end = min(end, date(cursor.year, 12, 31))
-            annual = self._official_manifest_for_day(coverage, cursor)
+            annual = self._official_manifest_for_day(coverage, cursor, mic=mic)
             if annual is not None:
                 sessions.update(
                     session
@@ -338,7 +344,7 @@ class MarketCalendarService:
         override = self._override_for_day(market, day)
         if override is not None:
             return override
-        official = self._official_manifest_for_day(coverage, day)
+        official = self._official_manifest_for_day(coverage, day, mic=mic)
         if official is not None:
             return day in official.sessions
         return self._get_calendar(market, mic=mic).is_session(pd.Timestamp(day))
@@ -480,7 +486,9 @@ class MarketCalendarService:
                 coverage,
                 mic=mic,
             )
-        official = self._official_manifest_for_day(coverage, current_day)
+        official = self._official_manifest_for_day(
+            coverage, current_day, mic=mic
+        )
         exceptional_close = (
             official.close_exceptions.get(current_day) if official is not None else None
         )

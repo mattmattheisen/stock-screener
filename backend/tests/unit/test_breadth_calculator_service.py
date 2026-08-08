@@ -376,6 +376,10 @@ def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():
             first_date: ("AAA",),
             second_date: ("BBB",),
         },
+        eligibility_signatures_by_date={
+            first_date: "a" * 64,
+            second_date: "b" * 64,
+        },
     )
 
     price_cache.get_many_cached_only_fresh.assert_called_once_with(
@@ -393,6 +397,13 @@ def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():
         "2026-03-19": 0,
         "2026-03-20": 0,
     }
+    stored = {
+        row.date: row.eligibility_signature
+        for row in db.query(MarketBreadth).filter(
+            MarketBreadth.date.in_([first_date, second_date])
+        )
+    }
+    assert stored == {first_date: "a" * 64, second_date: "b" * 64}
 
 
 def test_backfill_allocates_symbol_coverage_once(monkeypatch):

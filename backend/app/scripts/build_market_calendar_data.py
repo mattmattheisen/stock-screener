@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pandas_market_calendars as pmc
+from dateutil.easter import easter
 
 from app.domain.markets.calendar_coverage import CalendarSource
 from app.domain.markets.catalog import get_market_catalog
@@ -82,70 +83,102 @@ OFFICIAL_SOURCES = {
     ),
 }
 
-ADDITIONAL_OFFICIAL_CLOSURES = {
-    ("JP", 2026): {date(2026, 3, 20), date(2026, 9, 22), date(2026, 9, 23)},
-    ("KR", 2026): {date(2026, 5, 25), date(2026, 6, 3), date(2026, 7, 17)},
-    ("TW", 2026): {
-        date(2026, 1, 1),
-        date(2026, 2, 12),
-        date(2026, 2, 13),
-        date(2026, 2, 16),
-        date(2026, 2, 17),
-        date(2026, 2, 18),
-        date(2026, 2, 19),
-        date(2026, 2, 20),
-        date(2026, 2, 27),
-        date(2026, 4, 3),
-        date(2026, 4, 6),
-        date(2026, 5, 1),
-        date(2026, 6, 19),
-        date(2026, 9, 25),
-        date(2026, 9, 28),
-        date(2026, 10, 9),
-        date(2026, 10, 26),
-        date(2026, 12, 25),
-    },
-    ("MY", 2026): {
-        date(2026, 3, 23),
-        date(2026, 6, 1),
-        date(2026, 6, 17),
-    },
-}
+def _reviewed_dates(value: str) -> frozenset[date]:
+    return frozenset(date.fromisoformat(token) for token in value.split())
 
-OFFICIAL_WEEKDAY_CLOSURES = {
-    ("CN", 2026): {
-        date(2026, 1, 1),
-        date(2026, 1, 2),
-        date(2026, 2, 16),
-        date(2026, 2, 17),
-        date(2026, 2, 18),
-        date(2026, 2, 19),
-        date(2026, 2, 20),
-        date(2026, 2, 23),
-        date(2026, 4, 6),
-        date(2026, 5, 1),
-        date(2026, 5, 4),
-        date(2026, 5, 5),
-        date(2026, 6, 19),
-        date(2026, 9, 25),
-        date(2026, 10, 1),
-        date(2026, 10, 2),
-        date(2026, 10, 5),
-        date(2026, 10, 6),
-        date(2026, 10, 7),
-    },
-    ("SG", 2026): {
-        date(2026, 1, 1),
-        date(2026, 2, 17),
-        date(2026, 2, 18),
-        date(2026, 4, 3),
-        date(2026, 5, 1),
-        date(2026, 5, 27),
-        date(2026, 6, 1),
-        date(2026, 8, 10),
-        date(2026, 11, 9),
-        date(2026, 12, 25),
-    },
+
+# Complete weekday-closure inputs transcribed and reviewed against the cited
+# first-party publications. Official manifests are built from these inputs,
+# never from provider session output.
+REVIEWED_OFFICIAL_CLOSURES = {
+    ("AU", 2026): _reviewed_dates(
+        "2026-01-01 2026-01-26 2026-04-03 2026-04-06 2026-06-08 "
+        "2026-12-25 2026-12-28"
+    ),
+    ("CA", 2026): _reviewed_dates(
+        "2026-01-01 2026-02-16 2026-04-03 2026-05-18 2026-07-01 "
+        "2026-08-03 2026-09-07 2026-10-12 2026-12-25 2026-12-28"
+    ),
+    ("CN", 2026): _reviewed_dates(
+        "2026-01-01 2026-01-02 2026-02-16 2026-02-17 2026-02-18 "
+        "2026-02-19 2026-02-20 2026-02-23 2026-04-06 2026-05-01 "
+        "2026-05-04 2026-05-05 2026-06-19 2026-09-25 2026-10-01 "
+        "2026-10-02 2026-10-05 2026-10-06 2026-10-07"
+    ),
+    ("DE", 2026): _reviewed_dates(
+        "2026-01-01 2026-04-03 2026-04-06 2026-05-01 2026-12-24 "
+        "2026-12-25 2026-12-31"
+    ),
+    ("DE", 2027): _reviewed_dates(
+        "2027-01-01 2027-03-26 2027-03-29 2027-12-24 2027-12-31"
+    ),
+    ("DE", 2028): _reviewed_dates(
+        "2028-04-14 2028-04-17 2028-05-01 2028-12-25 2028-12-26"
+    ),
+    ("DE", 2029): _reviewed_dates(
+        "2029-01-01 2029-03-30 2029-04-02 2029-05-01 2029-12-24 "
+        "2029-12-25 2029-12-26 2029-12-31"
+    ),
+    ("DE", 2030): _reviewed_dates(
+        "2030-01-01 2030-04-19 2030-04-22 2030-05-01 2030-12-24 "
+        "2030-12-25 2030-12-26 2030-12-31"
+    ),
+    ("HK", 2026): _reviewed_dates(
+        "2026-01-01 2026-02-17 2026-02-18 2026-02-19 2026-04-03 "
+        "2026-04-06 2026-04-07 2026-05-01 2026-05-25 2026-06-19 "
+        "2026-07-01 2026-10-01 2026-10-19 2026-12-25"
+    ),
+    ("IN", 2026): _reviewed_dates(
+        "2026-01-26 2026-03-03 2026-03-26 2026-03-31 2026-04-03 "
+        "2026-04-14 2026-05-01 2026-05-28 2026-06-26 2026-09-14 "
+        "2026-10-02 2026-10-20 2026-11-10 2026-11-24 2026-12-25"
+    ),
+    ("JP", 2026): _reviewed_dates(
+        "2026-01-01 2026-01-02 2026-01-12 2026-02-11 2026-02-23 "
+        "2026-03-20 2026-04-29 2026-05-04 2026-05-05 2026-05-06 "
+        "2026-07-20 2026-08-11 2026-09-21 2026-09-22 2026-09-23 "
+        "2026-10-12 2026-11-03 2026-11-23 2026-12-31"
+    ),
+    ("JP", 2027): _reviewed_dates(
+        "2027-01-01 2027-01-11 2027-02-11 2027-02-23 2027-03-22 "
+        "2027-04-29 2027-05-03 2027-05-04 2027-05-05 2027-07-19 "
+        "2027-08-11 2027-09-20 2027-09-23 2027-10-11 2027-11-03 "
+        "2027-11-23 2027-12-31"
+    ),
+    ("KR", 2026): _reviewed_dates(
+        "2026-01-01 2026-02-16 2026-02-17 2026-02-18 2026-03-02 "
+        "2026-05-01 2026-05-05 2026-05-25 2026-06-03 2026-07-17 "
+        "2026-08-17 2026-09-24 2026-09-25 2026-10-05 2026-10-09 "
+        "2026-12-25 2026-12-31"
+    ),
+    ("MY", 2026): _reviewed_dates(
+        "2026-01-01 2026-02-02 2026-02-17 2026-02-18 2026-03-06 "
+        "2026-03-20 2026-03-23 2026-05-01 2026-05-27 2026-06-01 "
+        "2026-06-16 2026-06-17 2026-08-25 2026-08-31 2026-09-16 "
+        "2026-12-25"
+    ),
+    ("SG", 2026): _reviewed_dates(
+        "2026-01-01 2026-02-17 2026-02-18 2026-04-03 2026-05-01 "
+        "2026-05-27 2026-06-01 2026-08-10 2026-11-09 2026-12-25"
+    ),
+    ("TW", 2026): _reviewed_dates(
+        "2026-01-01 2026-01-02 2026-02-12 2026-02-13 2026-02-16 "
+        "2026-02-17 2026-02-18 2026-02-19 2026-02-20 2026-02-27 "
+        "2026-04-03 2026-04-06 2026-05-01 2026-06-19 2026-09-25 "
+        "2026-09-28 2026-10-09 2026-10-26 2026-12-25"
+    ),
+    ("US", 2026): _reviewed_dates(
+        "2026-01-01 2026-01-19 2026-02-16 2026-04-03 2026-05-25 "
+        "2026-06-19 2026-07-03 2026-09-07 2026-11-26 2026-12-25"
+    ),
+    ("US", 2027): _reviewed_dates(
+        "2027-01-01 2027-01-18 2027-02-15 2027-03-26 2027-05-31 "
+        "2027-06-18 2027-07-05 2027-09-06 2027-11-25 2027-12-24"
+    ),
+    ("US", 2028): _reviewed_dates(
+        "2028-01-17 2028-02-21 2028-04-14 2028-05-29 2028-06-19 "
+        "2028-07-04 2028-09-04 2028-11-23 2028-12-25"
+    ),
 }
 
 
@@ -157,6 +190,27 @@ def _weekdays(year: int) -> tuple[date, ...]:
             sessions.append(candidate)
         candidate += timedelta(days=1)
     return tuple(sessions)
+
+
+def _singapore_provisional_sessions(year: int) -> tuple[date, ...]:
+    """Planning calendar with deterministic fixed-date and Good Friday rules.
+
+    Variable lunar/religious holidays remain provisional assumptions and are
+    replaced when SGX publishes the official annual schedule.
+    """
+    closures = {
+        date(year, 1, 1),
+        date(year, 5, 1),
+        date(year, 8, 9),
+        date(year, 12, 25),
+        easter(year) - timedelta(days=2),
+    }
+    closures.update(
+        holiday + timedelta(days=1)
+        for holiday in tuple(closures)
+        if holiday.weekday() == 6
+    )
+    return tuple(day for day in _weekdays(year) if day not in closures)
 
 
 def _source(market: str) -> CalendarSource:
@@ -200,33 +254,20 @@ def build(root: Path, *, check: bool = False) -> None:
         years: dict[str, str] = {}
         for year in range(FIRST_YEAR, THROUGH_YEAR + 1):
             if year <= official_through:
-                if (market, year) in OFFICIAL_WEEKDAY_CLOSURES:
-                    output = generator.import_official_closures(
-                        root,
-                        market=market,
-                        year=year,
-                        closures=OFFICIAL_WEEKDAY_CLOSURES[(market, year)],
-                        source=_source(market),
-                        check=check,
-                    )
-                else:
-                    sessions, _provider, _version = generator._provider_sessions(  # noqa: SLF001 - deterministic data builder
-                        market, year
-                    )
-                    sessions = tuple(
-                        session
-                        for session in sessions
-                        if session
-                        not in ADDITIONAL_OFFICIAL_CLOSURES.get((market, year), set())
-                    )
-                    output = generator.import_official_year(
-                        root,
-                        market=market,
-                        year=year,
-                        sessions=sessions,
-                        source=_source(market),
-                        check=check,
-                    )
+                try:
+                    official_closures = REVIEWED_OFFICIAL_CLOSURES[(market, year)]
+                except KeyError as exc:
+                    raise RuntimeError(
+                        f"missing reviewed official closure input for {market} {year}"
+                    ) from exc
+                output = generator.import_official_closures(
+                    root,
+                    market=market,
+                    year=year,
+                    closures=official_closures,
+                    source=_source(market),
+                    check=check,
+                )
             elif market == "CN":
                 calendar = pmc.get_calendar("SSE")
                 schedule = calendar.schedule(
@@ -248,14 +289,17 @@ def build(root: Path, *, check: bool = False) -> None:
                     root,
                     market=market,
                     year=year,
-                    sessions=_weekdays(year),
+                    sessions=_singapore_provisional_sessions(year),
                     source=CalendarSource(
-                        name="Project rule-generated Singapore planning calendar",
+                        name=(
+                            "Project fixed-holiday and Good Friday Singapore "
+                            "planning calendar; variable holidays provisional"
+                        ),
                         url="https://www.sgx.com/stock-exchange/clearing-information",
                         checked_at=CHECKED_AT,
                     ),
-                    provider="project_weekday_rules",
-                    provider_version="1",
+                    provider="project_singapore_holiday_rules",
+                    provider_version="2",
                     check=check,
                 )
             else:

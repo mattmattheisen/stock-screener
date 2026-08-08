@@ -67,6 +67,15 @@ def _patch_breadth_eligibility(
             universe_policy_by_date=MappingProxyType(
                 {calculation_date: policy for calculation_date in calculation_dates}
             ),
+            eligibility_signatures_by_date=MappingProxyType(
+                {
+                    calculation_date: _breadth_signature(calculation_date)
+                    for calculation_date in calculation_dates
+                }
+            ),
+            unsupported_count=0,
+            insufficient_history_count=0,
+            exact_date_gap_count=0,
             unsupported_symbols=(),
             insufficient_history_symbols=(),
             exact_date_gap_symbols=(),
@@ -77,6 +86,10 @@ def _patch_breadth_eligibility(
         "classify_static_breadth_eligibility",
         classify,
     )
+
+
+def _breadth_signature(calculation_date):
+    return f"signature-{calculation_date.isoformat()}"
 
 
 def test_refresh_static_daily_prices_uses_exposure_lookback_for_history_hydration(
@@ -689,7 +702,11 @@ def test_ensure_breadth_history_recomputes_ratio_window_after_historical_repair(
         def query(self, entity, *args):
             if entity is MarketBreadth:
                 return _FakeQuery([
-                    SimpleNamespace(date=calc_date, total_stocks_scanned=1)
+                    SimpleNamespace(
+                        date=calc_date,
+                        total_stocks_scanned=1,
+                        eligibility_signature=_breadth_signature(calc_date),
+                    )
                     for calc_date in target_dates
                     if calc_date != repair_date
                 ])
@@ -761,7 +778,11 @@ def test_ensure_breadth_history_skips_validated_existing_rows(monkeypatch):
         def query(self, entity, *args):
             if entity is MarketBreadth:
                 return _FakeQuery([
-                    SimpleNamespace(date=as_of_date, total_stocks_scanned=2)
+                    SimpleNamespace(
+                        date=as_of_date,
+                        total_stocks_scanned=2,
+                        eligibility_signature=_breadth_signature(as_of_date),
+                    )
                 ])
             if entity is StockUniverse.symbol:
                 return _FakeQuery([("AAA",), ("BBB",)])
@@ -806,7 +827,13 @@ def test_historical_breadth_reuses_rows_eligible_for_their_date(monkeypatch, mar
             return self
 
         def all(self):
-            return [SimpleNamespace(date=as_of_date, total_stocks_scanned=7)]
+            return [
+                SimpleNamespace(
+                    date=as_of_date,
+                    total_stocks_scanned=7,
+                    eligibility_signature=_breadth_signature(as_of_date),
+                )
+            ]
 
     class _FakeDb(_FakeSession):
         def query(self, *args, **kwargs):
@@ -837,6 +864,74 @@ def test_historical_breadth_reuses_rows_eligible_for_their_date(monkeypatch, mar
     assert result["eligible_stocks_by_date"] == {"2026-07-31": 7}
 
 
+def test_legacy_breadth_row_with_larger_count_recomputes_without_matching_signature(
+    monkeypatch,
+):
+    as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(
+        monkeypatch,
+        {as_of_date: 7},
+        candidate_counts_by_date={as_of_date: 10},
+    )
+    calls = []
+
+    class _FakeQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [
+                SimpleNamespace(
+                    date=as_of_date,
+                    total_stocks_scanned=10,
+                    eligibility_signature=None,
+                )
+            ]
+
+    class _FakeDb(_FakeSession):
+        def query(self, *args, **kwargs):
+            return _FakeQuery()
+
+    class _FakeBreadthCalculator:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def backfill_range(self, **kwargs):
+            calls.append(kwargs)
+            return {
+                "total_dates": 1,
+                "processed": 1,
+                "errors": 0,
+                "error_dates": [],
+                "error_stocks": 0,
+                "scanned_stocks_by_date": {as_of_date.isoformat(): 7},
+            }
+
+    monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
+    monkeypatch.setattr(
+        export_static_site,
+        "_generate_trading_dates",
+        lambda *args, **kwargs: [as_of_date],
+    )
+    monkeypatch.setattr(export_static_site, "get_price_cache", lambda: object())
+    monkeypatch.setattr(
+        export_static_site, "BreadthCalculatorService", _FakeBreadthCalculator
+    )
+
+    result = export_static_site._ensure_breadth_history(
+        as_of_date=as_of_date,
+        market="US",
+        min_trading_days=0,
+    )
+
+    assert result["status"] == "completed"
+    assert result["incomplete_existing_dates"] == 1
+    assert len(calls) == 1
+    assert calls[0]["eligibility_signatures_by_date"] == {
+        as_of_date: _breadth_signature(as_of_date)
+    }
+
+
 def test_ensure_breadth_history_skips_existing_rows_with_tolerated_historical_gaps(
     monkeypatch,
 ):
@@ -864,10 +959,12 @@ def test_ensure_breadth_history_skips_existing_rows_with_tolerated_historical_ga
                     SimpleNamespace(
                         date=previous_date,
                         total_stocks_scanned=9,
+                        eligibility_signature=_breadth_signature(previous_date),
                     ),
                     SimpleNamespace(
                         date=as_of_date,
                         total_stocks_scanned=10,
+                        eligibility_signature=_breadth_signature(as_of_date),
                     ),
                 ])
             if entity is StockUniverse.symbol:

@@ -193,6 +193,7 @@ class BreadthCalculatorService:
         exclude_unsupported_price_symbols: bool = False,
         required_as_of_date: date | None = None,
         eligible_symbols_by_date: Mapping[date, tuple[str, ...]] | None = None,
+        eligibility_signatures_by_date: Mapping[date, str] | None = None,
     ) -> Dict:
         """
         Calculate and persist breadth for an entire historical range.
@@ -287,6 +288,15 @@ class BreadthCalculatorService:
             )
 
         metrics_by_date = {calc_date: self._empty_metrics() for calc_date in ordered_dates}
+        if eligibility_signatures_by_date is not None:
+            for calculation_date in ordered_dates:
+                signature = eligibility_signatures_by_date.get(calculation_date)
+                if signature is None:
+                    raise ValueError(
+                        "eligibility signature missing for "
+                        f"{calculation_date.isoformat()}"
+                    )
+                metrics_by_date[calculation_date]["eligibility_signature"] = signature
         outcomes_by_date = {
             calc_date: BreadthOutcomeCounter()
             for calc_date in ordered_dates
@@ -932,6 +942,9 @@ class BreadthCalculatorService:
             existing_record.stocks_up_13pct_34days = metrics['stocks_up_13pct_34days']
             existing_record.stocks_down_13pct_34days = metrics['stocks_down_13pct_34days']
             existing_record.total_stocks_scanned = metrics['total_stocks_scanned']
+            existing_record.eligibility_signature = metrics.get(
+                "eligibility_signature"
+            )
             existing_record.calculation_duration_seconds = duration_seconds
             logger.debug(
                 "Updated existing breadth record for %s %s",
@@ -955,6 +968,7 @@ class BreadthCalculatorService:
                 stocks_up_13pct_34days=metrics['stocks_up_13pct_34days'],
                 stocks_down_13pct_34days=metrics['stocks_down_13pct_34days'],
                 total_stocks_scanned=metrics['total_stocks_scanned'],
+                eligibility_signature=metrics.get("eligibility_signature"),
                 calculation_duration_seconds=duration_seconds,
             )
             self.db.add(breadth_record)
@@ -996,6 +1010,9 @@ class BreadthCalculatorService:
                 existing_record.stocks_up_13pct_34days = metrics['stocks_up_13pct_34days']
                 existing_record.stocks_down_13pct_34days = metrics['stocks_down_13pct_34days']
                 existing_record.total_stocks_scanned = metrics['total_stocks_scanned']
+                existing_record.eligibility_signature = metrics.get(
+                    "eligibility_signature"
+                )
                 existing_record.calculation_duration_seconds = metrics.get('calculation_duration_seconds')
             else:
                 self.db.add(MarketBreadth(
@@ -1014,6 +1031,7 @@ class BreadthCalculatorService:
                     stocks_up_13pct_34days=metrics['stocks_up_13pct_34days'],
                     stocks_down_13pct_34days=metrics['stocks_down_13pct_34days'],
                     total_stocks_scanned=metrics['total_stocks_scanned'],
+                    eligibility_signature=metrics.get("eligibility_signature"),
                     calculation_duration_seconds=metrics.get('calculation_duration_seconds'),
                 ))
 

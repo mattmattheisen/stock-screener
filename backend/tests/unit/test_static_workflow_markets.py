@@ -92,6 +92,7 @@ def test_static_workflow_validates_calendar_manifests_before_selecting_markets()
     )[0]
 
     assert "app.scripts.audit_market_calendars --github-actions" in audit_job
+    assert "app.scripts.build_market_calendar_data --check" in audit_job
     assert "continue-on-error" not in audit_job
     assert "needs: calendar-audit" in select_job
     assert "warning" not in select_job.lower()

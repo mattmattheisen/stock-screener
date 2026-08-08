@@ -95,9 +95,11 @@ def test_classifies_point_in_time_eligibility_and_price_exclusions(universe_sess
         second_date: "current_active_fallback_v1",
     }
     assert result.unsupported_symbols == ("ABC-W",)
+    assert result.unsupported_count == 1
     assert "BECOMES_READY" in result.insufficient_history_symbols
     assert "NULL_BAR" in result.insufficient_history_symbols
     assert result.exact_date_gap_symbols == ("DATE_GAP", "NULL_BAR")
+    assert result.exact_date_gap_count == 2
 
 
 def test_exclusion_samples_are_bounded_sorted_and_zero_counts_are_distinct(
@@ -121,6 +123,7 @@ def test_exclusion_samples_are_bounded_sorted_and_zero_counts_are_distinct(
     assert result.candidate_counts_by_date[calculation_date] == 26
     assert result.eligible_counts_by_date[calculation_date] == 0
     assert len(result.unsupported_symbols) == 20
+    assert result.unsupported_count == 26
     assert result.unsupported_symbols == tuple(sorted(unsupported)[:20])
 
 
