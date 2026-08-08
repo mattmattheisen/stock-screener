@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-08",
+  "provisional_through": "2030-12-31",
+  "markets": {
+    "US": {
+      "mic": "XNYS",
+      "verified_through": "2028-12-31",
+      "source": {
+        "name": "NYSE Holidays & Trading Hours",
+        "url": "https://www.nyse.com/trade/hours-calendars",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "us/2026.json",
+        "2027": "us/2027.json",
+        "2028": "us/2028.json",
+        "2029": "us/2029.provisional.json",
+        "2030": "us/2030.provisional.json"
+      }
+    },
+    "HK": {
+      "mic": "XHKG",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "HKEX Hong Kong Securities Market Holiday Schedule for 2026",
+        "url": "https://www.hkex.com.hk/-/media/HKEX-Market/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2025/ce_SEHK_CT_075_2025.pdf",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "hk/2026.json",
+        "2027": "hk/2027.provisional.json",
+        "2028": "hk/2028.provisional.json",
+        "2029": "hk/2029.provisional.json",
+        "2030": "hk/2030.provisional.json"
+      }
+    },
+    "IN": {
+      "mic": "XNSE",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "NSE Market Timings & Holidays",
+        "url": "https://www.nseindia.com/resources/exchange-communication-holidays",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "in/2026.json",
+        "2027": "in/2027.provisional.json",
+        "2028": "in/2028.provisional.json",
+        "2029": "in/2029.provisional.json",
+        "2030": "in/2030.provisional.json"
+      }
+    },
+    "JP": {
+      "mic": "XTKS",
+      "verified_through": "2027-12-31",
+      "source": {
+        "name": "Japan Exchange Group Market Holidays",
+        "url": "https://www.jpx.co.jp/english/corporate/about-jpx/calendar/index.html",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "jp/2026.json",
+        "2027": "jp/2027.json",
+        "2028": "jp/2028.provisional.json",
+        "2029": "jp/2029.provisional.json",
+        "2030": "jp/2030.provisional.json"
+      }
+    },
+    "KR": {
+      "mic": "XKRX",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "Korea Exchange Market Closing (Holiday)",
+        "url": "https://global.krx.co.kr/contents/GLB/05/0501/0501110000/GLB0501110000.jsp",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "kr/2026.json",
+        "2027": "kr/2027.provisional.json",
+        "2028": "kr/2028.provisional.json",
+        "2029": "kr/2029.provisional.json",
+        "2030": "kr/2030.provisional.json"
+      }
+    },
+    "TW": {
+      "mic": "XTAI",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "Taiwan Stock Exchange Holiday Schedule",
+        "url": "https://www.twse.com.tw/en/trading/holiday.html",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "tw/2026.json",
+        "2027": "tw/2027.provisional.json",
+        "2028": "tw/2028.provisional.json",
+        "2029": "tw/2029.provisional.json",
+        "2030": "tw/2030.provisional.json"
+      }
+    },
+    "CN": {
+      "mic": "XSHG",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "Shenzhen Stock Exchange Stock Market Holiday Schedule 2026",
+        "url": "https://www.szse.cn/www/English/services/trading/calendar/",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "cn/2026.json",
+        "2027": "cn/2027.provisional.json",
+        "2028": "cn/2028.provisional.json",
+        "2029": "cn/2029.provisional.json",
+        "2030": "cn/2030.provisional.json"
+      }
+    },
+    "CA": {
+      "mic": "XTSE",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "TMX TSX Calendar",
+        "url": "https://www.tsx.com/en/trading/calendars-and-trading-hours/calendar",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "ca/2026.json",
+        "2027": "ca/2027.provisional.json",
+        "2028": "ca/2028.provisional.json",
+        "2029": "ca/2029.provisional.json",
+        "2030": "ca/2030.provisional.json"
+      }
+    },
+    "DE": {
+      "mic": "XETR",
+      "verified_through": "2030-12-31",
+      "source": {
+        "name": "Deutsche Börse Trading Calendar",
+        "url": "https://www.cashmarket.deutsche-boerse.com/cash-en/trading/trading-calendar-and-trading-hours",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "de/2026.json",
+        "2027": "de/2027.json",
+        "2028": "de/2028.json",
+        "2029": "de/2029.json",
+        "2030": "de/2030.json"
+      }
+    },
+    "SG": {
+      "mic": "XSES",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "Singapore Exchange Clearing Information and Holidays",
+        "url": "https://www.sgx.com/stock-exchange/clearing-information",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "sg/2026.json",
+        "2027": "sg/2027.provisional.json",
+        "2028": "sg/2028.provisional.json",
+        "2029": "sg/2029.provisional.json",
+        "2030": "sg/2030.provisional.json"
+      }
+    },
+    "AU": {
+      "mic": "XASX",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "ASX Trade Calendar",
+        "url": "https://www.asx.com.au/markets/market-resources/trading-hours-calendar/cash-market-trading-hours/trading-calendar",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "au/2026.json",
+        "2027": "au/2027.provisional.json",
+        "2028": "au/2028.provisional.json",
+        "2029": "au/2029.provisional.json",
+        "2030": "au/2030.provisional.json"
+      }
+    },
+    "MY": {
+      "mic": "XKLS",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "Bursa Malaysia Market Trading Days and Public Holidays",
+        "url": "https://www.bursamalaysia.com/market_information/market_statistic/market_holidays",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "my/2026.json",
+        "2027": "my/2027.provisional.json",
+        "2028": "my/2028.provisional.json",
+        "2029": "my/2029.provisional.json",
+        "2030": "my/2030.provisional.json"
+      }
+    }
+  }
+}

@@ -230,6 +230,53 @@ def test_generator_imports_explicit_official_sessions(tmp_path: Path) -> None:
     assert output.name == "2027.json"
 
 
+def test_generator_builds_official_weekday_sessions_from_exchange_closures(
+    tmp_path: Path,
+) -> None:
+    generator = _generator(_ProviderCalendar(()))
+
+    output = generator.import_official_closures(
+        tmp_path,
+        market="KR",
+        year=2027,
+        closures=(date(2027, 1, 1), date(2027, 1, 4)),
+        source=CalendarSource(
+            name="Korea Exchange 2027 market calendar",
+            url="https://global.krx.co.kr/official-2027",
+            checked_at=date(2026, 12, 1),
+        ),
+    )
+
+    sessions = json.loads(output.read_text(encoding="utf-8"))["sessions"]
+    assert sessions[:2] == ["2027-01-05", "2027-01-06"]
+    assert "2027-01-02" not in sessions
+    assert "2027-01-03" not in sessions
+    assert "2027-01-04" not in sessions
+
+
+def test_generator_imports_explicit_provisional_sessions_with_provenance(
+    tmp_path: Path,
+) -> None:
+    generator = _generator(_ProviderCalendar(()))
+
+    output = generator.import_provisional_year(
+        tmp_path,
+        market="KR",
+        year=2028,
+        sessions=(date(2028, 1, 4), date(2028, 1, 3)),
+        source=_source(),
+        provider="project_rule_generation",
+        provider_version="1",
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert output.name == "2028.provisional.json"
+    assert payload["status"] == "provisional"
+    assert payload["provider"] == "project_rule_generation"
+    assert payload["provider_version"] == "1"
+    assert payload["sessions"] == ["2028-01-03", "2028-01-04"]
+
+
 def test_generator_module_import_does_not_require_database_settings() -> None:
     env = dict(os.environ)
     env.pop("DATABASE_URL", None)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from datetime import date
+from datetime import date, timedelta
 from importlib import metadata
 import json
 from pathlib import Path
@@ -106,6 +106,71 @@ class CalendarManifestGenerator:
         path = Path(root) / entry.code.lower() / f"{year}.json"
         self._write_or_check(((path, _render_json(payload)),), check=check)
         return path
+
+    def import_provisional_year(
+        self,
+        root: str | Path,
+        *,
+        market: str,
+        year: int,
+        sessions: Iterable[date],
+        source: CalendarSource,
+        provider: str,
+        provider_version: str,
+        check: bool = False,
+    ) -> Path:
+        entry = self._market_catalog.get(market)
+        official_path = Path(root) / entry.code.lower() / f"{year}.json"
+        if official_path.exists():
+            raise CalendarManifestGenerationError(
+                f"refusing to overwrite official calendar {official_path}"
+            )
+        payload = _annual_payload(
+            market=entry.code,
+            mic=entry.primary_mic,
+            year=year,
+            status="provisional",
+            sessions=sessions,
+            source=source,
+            provider=provider,
+            provider_version=provider_version,
+        )
+        path = Path(root) / entry.code.lower() / f"{year}.provisional.json"
+        self._write_or_check(((path, _render_json(payload)),), check=check)
+        return path
+
+    def import_official_closures(
+        self,
+        root: str | Path,
+        *,
+        market: str,
+        year: int,
+        closures: Iterable[date],
+        source: CalendarSource,
+        extra_sessions: Iterable[date] = (),
+        check: bool = False,
+    ) -> Path:
+        closure_dates = frozenset(closures)
+        extra_session_dates = frozenset(extra_sessions)
+        if any(day.year != year for day in (*closure_dates, *extra_session_dates)):
+            raise CalendarManifestGenerationError(
+                f"{market} {year} closures and extra sessions must stay in year"
+            )
+        sessions: set[date] = set(extra_session_dates)
+        candidate = date(year, 1, 1)
+        final_day = date(year, 12, 31)
+        while candidate <= final_day:
+            if candidate.weekday() < 5 and candidate not in closure_dates:
+                sessions.add(candidate)
+            candidate += timedelta(days=1)
+        return self.import_official_year(
+            root,
+            market=market,
+            year=year,
+            sessions=sessions,
+            source=source,
+            check=check,
+        )
 
     def _provider_sessions(
         self,
