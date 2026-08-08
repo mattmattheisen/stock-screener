@@ -192,6 +192,7 @@ class BreadthCalculatorService:
         cache_only: bool | None = None,
         exclude_unsupported_price_symbols: bool = False,
         required_as_of_date: date | None = None,
+        eligible_symbols_by_date: Mapping[date, tuple[str, ...]] | None = None,
     ) -> Dict:
         """
         Calculate and persist breadth for an entire historical range.
@@ -229,25 +230,55 @@ class BreadthCalculatorService:
             }
 
         start_time = datetime.now()
-        active_stocks = self.db.query(StockUniverse).filter(
-            StockUniverse.is_active == True,
-            StockUniverse.market == self.market,
-        ).all()
+        explicit_eligible_symbols: dict[date, tuple[str, ...]] | None = None
+        if eligible_symbols_by_date is not None:
+            explicit_eligible_symbols = {
+                calculation_date: tuple(
+                    sorted(set(eligible_symbols_by_date.get(calculation_date, ())))
+                )
+                for calculation_date in ordered_dates
+            }
+            target_symbols = sorted(
+                {
+                    symbol
+                    for symbols in explicit_eligible_symbols.values()
+                    for symbol in symbols
+                }
+            )
+        else:
+            active_stocks = self.db.query(StockUniverse).filter(
+                StockUniverse.is_active == True,
+                StockUniverse.market == self.market,
+            ).all()
+            target_symbols = [stock.symbol for stock in active_stocks]
         skipped_unsupported_symbols: list[str] = []
         if exclude_unsupported_price_symbols:
             supported_symbols, skipped_unsupported_symbols = split_supported_price_symbols(
-                [stock.symbol for stock in active_stocks]
+                target_symbols
             )
-            supported_symbol_set = set(supported_symbols)
-            active_stocks = [
-                stock
-                for stock in active_stocks
-                if stock.symbol in supported_symbol_set
-            ]
+            target_symbols = supported_symbols
+            if explicit_eligible_symbols is not None:
+                supported_symbol_set = set(supported_symbols)
+                explicit_eligible_symbols = {
+                    calculation_date: tuple(
+                        symbol
+                        for symbol in symbols
+                        if symbol in supported_symbol_set
+                    )
+                    for calculation_date, symbols in explicit_eligible_symbols.items()
+                }
+        explicit_eligible_symbol_sets = (
+            {
+                calculation_date: set(symbols)
+                for calculation_date, symbols in explicit_eligible_symbols.items()
+            }
+            if explicit_eligible_symbols is not None
+            else None
+        )
         logger.info(
             "Backfilling breadth for %s trading days across %s active stocks",
             len(ordered_dates),
-            len(active_stocks),
+            len(target_symbols),
         )
         if skipped_unsupported_symbols:
             logger.info(
@@ -262,20 +293,19 @@ class BreadthCalculatorService:
         }
         price_coverage = BreadthPriceCoverageAccumulator()
         batch_size = 500
-        total_stocks = len(active_stocks)
+        total_stocks = len(target_symbols)
 
         for i in range(0, total_stocks, batch_size):
-            batch = active_stocks[i:i + batch_size]
+            batch_symbols = target_symbols[i:i + batch_size]
             batch_num = i // batch_size + 1
             total_batches = (total_stocks + batch_size - 1) // batch_size
             logger.info(
                 "Backfill batch %s/%s (%s stocks)",
                 batch_num,
                 total_batches,
-                len(batch),
+                len(batch_symbols),
             )
 
-            batch_symbols = [stock.symbol for stock in batch]
             cache_load_kwargs = {}
             if required_as_of_date is not None:
                 cache_load_kwargs["required_as_of_date"] = required_as_of_date
@@ -289,19 +319,28 @@ class BreadthCalculatorService:
                 batch_cache_miss_symbols,
             )
 
-            for stock in batch:
+            for symbol in batch_symbols:
+                symbol_dates = (
+                    [
+                        calculation_date
+                        for calculation_date in ordered_dates
+                        if symbol in explicit_eligible_symbol_sets[calculation_date]
+                    ]
+                    if explicit_eligible_symbol_sets is not None
+                    else ordered_dates
+                )
                 try:
-                    price_history = price_data_by_symbol.get(stock.symbol)
+                    price_history = price_data_by_symbol.get(symbol)
                     if price_history is None or price_history.empty:
-                        for calc_date in ordered_dates:
+                        for calc_date in symbol_dates:
                             outcomes_by_date[calc_date].record_cache_miss()
                         continue
 
                     stock_metrics_by_date = self._calculate_stock_metrics_by_date_from_prices(
                         prices_df=price_history,
-                        calculation_dates=ordered_dates,
+                        calculation_dates=symbol_dates,
                     )
-                    for calc_date in ordered_dates:
+                    for calc_date in symbol_dates:
                         daily_metrics = metrics_by_date[calc_date]
                         stock_metrics = stock_metrics_by_date.get(calc_date)
                         if stock_metrics is None:
@@ -310,8 +349,8 @@ class BreadthCalculatorService:
                         self._apply_stock_metrics(daily_metrics, stock_metrics)
                         outcomes_by_date[calc_date].record_scanned()
                 except Exception as e:
-                    logger.warning("Error processing %s in breadth backfill: %s", stock.symbol, e)
-                    for calc_date in ordered_dates:
+                    logger.warning("Error processing %s in breadth backfill: %s", symbol, e)
+                    for calc_date in symbol_dates:
                         outcomes_by_date[calc_date].record_error()
 
         prior_counts = self._get_prior_breadth_counts(ordered_dates[0], limit=10)
@@ -371,6 +410,27 @@ class BreadthCalculatorService:
             'errors': len(error_dates),
             'error_dates': error_dates,
         }
+        if explicit_eligible_symbols is not None:
+            result.update(
+                {
+                    "eligible_stocks_by_date": {
+                        calculation_date.isoformat(): len(symbols)
+                        for calculation_date, symbols in explicit_eligible_symbols.items()
+                    },
+                    "scanned_stocks_by_date": {
+                        calculation_date.isoformat(): outcomes_by_date[
+                            calculation_date
+                        ].report().scanned
+                        for calculation_date in ordered_dates
+                    },
+                    "calculation_errors_by_date": {
+                        calculation_date.isoformat(): outcomes_by_date[
+                            calculation_date
+                        ].report().errors
+                        for calculation_date in ordered_dates
+                    },
+                }
+            )
         if exclude_unsupported_price_symbols:
             result.update({
                 "skipped_unsupported_symbols": len(skipped_unsupported_symbols),

@@ -357,6 +357,44 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     assert stored[1].ratio_10day == 1.9
 
 
+def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():
+    db = _make_db_session()
+    first_date = date(2026, 3, 19)
+    second_date = date(2026, 3, 20)
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": _flat_price_df(second_date),
+        "BBB": _flat_price_df(second_date),
+    }
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.backfill_range(
+        first_date,
+        second_date,
+        trading_dates=[first_date, second_date],
+        eligible_symbols_by_date={
+            first_date: ("AAA",),
+            second_date: ("BBB",),
+        },
+    )
+
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAA", "BBB"], period="2y"
+    )
+    assert result["eligible_stocks_by_date"] == {
+        "2026-03-19": 1,
+        "2026-03-20": 1,
+    }
+    assert result["scanned_stocks_by_date"] == {
+        "2026-03-19": 1,
+        "2026-03-20": 1,
+    }
+    assert result["calculation_errors_by_date"] == {
+        "2026-03-19": 0,
+        "2026-03-20": 0,
+    }
+
+
 def test_backfill_allocates_symbol_coverage_once(monkeypatch):
     created = 0
     real_accumulator = breadth_module.BreadthPriceCoverageAccumulator
