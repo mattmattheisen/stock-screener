@@ -1,0 +1,29 @@
+name: Market Calendar Audit
+
+on:
+  schedule:
+    - cron: '10 7 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install pinned backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Audit official Market calendar coverage
+        run: |
+          cd backend
+          python -m app.scripts.audit_market_calendars --github-actions
