@@ -130,6 +130,13 @@ class CalendarCoverageRegistry:
             )
         return coverage
 
+    def coverages(self) -> tuple[MarketCalendarCoverage, ...]:
+        """Return all Market coverage records in stable Market-code order."""
+        return tuple(
+            self._coverage_by_market[market]
+            for market in sorted(self._coverage_by_market)
+        )
+
     def official_sessions(
         self,
         market: str,
