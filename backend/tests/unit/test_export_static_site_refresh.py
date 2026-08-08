@@ -3,6 +3,9 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import date, datetime
 from types import SimpleNamespace
+from types import MappingProxyType
+
+import pytest
 
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.models.market_breadth import MarketBreadth
@@ -10,6 +13,7 @@ from app.models.stock_universe import StockUniverse
 from app.scripts import export_static_site
 from app.services.market_exposure_service import EXPOSURE_BACKFILL_DAYS
 from app.services.static_market_publish_policy import StaticMarketRsArtifactState
+from app.services.static_breadth_eligibility import StaticBreadthEligibility
 
 
 class _FakeSession:
@@ -25,6 +29,54 @@ class _ReadyGroupRankBackfill:
 
     def as_dict(self) -> dict[str, str]:
         return {"status": "completed"}
+
+
+def _patch_breadth_eligibility(
+    monkeypatch,
+    eligible_counts_by_date,
+    *,
+    candidate_counts_by_date=None,
+    policy="point_in_time",
+):
+    eligible_counts = dict(eligible_counts_by_date)
+    candidate_counts = dict(candidate_counts_by_date or eligible_counts)
+
+    def classify(_db, *, market, calculation_dates):
+        del market
+        eligible_symbols = {
+            calculation_date: tuple(
+                f"ELIGIBLE-{index}"
+                for index in range(eligible_counts.get(calculation_date, 0))
+            )
+            for calculation_date in calculation_dates
+        }
+        return StaticBreadthEligibility(
+            eligible_symbols_by_date=MappingProxyType(eligible_symbols),
+            candidate_counts_by_date=MappingProxyType(
+                {
+                    calculation_date: candidate_counts.get(calculation_date, 0)
+                    for calculation_date in calculation_dates
+                }
+            ),
+            eligible_counts_by_date=MappingProxyType(
+                {
+                    calculation_date: eligible_counts.get(calculation_date, 0)
+                    for calculation_date in calculation_dates
+                }
+            ),
+            universe_policy_by_date=MappingProxyType(
+                {calculation_date: policy for calculation_date in calculation_dates}
+            ),
+            unsupported_symbols=(),
+            insufficient_history_symbols=(),
+            exact_date_gap_symbols=(),
+        )
+
+    monkeypatch.setattr(
+        export_static_site,
+        "classify_static_breadth_eligibility",
+        classify,
+    )
 
 
 def test_refresh_static_daily_prices_uses_exposure_lookback_for_history_hydration(
@@ -470,6 +522,7 @@ def test_static_daily_refresh_quarantines_breadth_history_exceptions(monkeypatch
 
 def test_ensure_breadth_history_marks_backfill_errors_not_completed(monkeypatch):
     as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(monkeypatch, {as_of_date: 1})
     backfill_kwargs: dict[str, object] = {}
 
     class _FakeQuery:
@@ -531,6 +584,7 @@ def test_ensure_breadth_history_marks_backfill_errors_not_completed(monkeypatch)
 
 def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch):
     as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(monkeypatch, {as_of_date: 2})
     backfill_kwargs: dict[str, object] = {}
     query_counts = {"market_breadth": 0}
 
@@ -571,6 +625,7 @@ def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch)
                 "cache_miss_stocks": 0,
                 "error_stocks": 0,
                 "cache_coverage_ratio": 1.0,
+                "scanned_stocks_by_date": {as_of_date.isoformat(): 2},
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
@@ -592,6 +647,7 @@ def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch)
     assert result["incomplete_existing_dates"] == 1
     assert result["recomputed_dates"] == 1
     assert backfill_kwargs["trading_dates"] == [as_of_date]
+    assert len(backfill_kwargs["eligible_symbols_by_date"][as_of_date]) == 2
     assert query_counts["market_breadth"] == 1
 
 
@@ -614,6 +670,9 @@ def test_ensure_breadth_history_recomputes_ratio_window_after_historical_repair(
     ]
     repair_date = target_dates[1]
     as_of_date = target_dates[-1]
+    _patch_breadth_eligibility(
+        monkeypatch, {calculation_date: 1 for calculation_date in target_dates}
+    )
     backfill_kwargs: dict[str, object] = {}
 
     class _FakeQuery:
@@ -654,6 +713,10 @@ def test_ensure_breadth_history_recomputes_ratio_window_after_historical_repair(
                 "cache_miss_stocks": 0,
                 "error_stocks": 0,
                 "cache_coverage_ratio": 1.0,
+                "scanned_stocks_by_date": {
+                    calculation_date.isoformat(): 1
+                    for calculation_date in kwargs["trading_dates"]
+                },
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
@@ -682,6 +745,7 @@ def test_ensure_breadth_history_recomputes_ratio_window_after_historical_repair(
 
 def test_ensure_breadth_history_skips_validated_existing_rows(monkeypatch):
     as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(monkeypatch, {as_of_date: 2})
 
     class _FakeQuery:
         def __init__(self, rows):
@@ -725,7 +789,52 @@ def test_ensure_breadth_history_skips_validated_existing_rows(monkeypatch):
 
     assert result["status"] == "skipped"
     assert result["validated_existing_dates"] == 1
-    assert result["target_symbols"] == 2
+    assert result["eligible_stocks_by_date"] == {"2026-07-31": 2}
+
+
+@pytest.mark.parametrize("market", ["US", "DE", "HK"])
+def test_historical_breadth_reuses_rows_eligible_for_their_date(monkeypatch, market):
+    as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(
+        monkeypatch,
+        {as_of_date: 7},
+        candidate_counts_by_date={as_of_date: 10},
+    )
+
+    class _FakeQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [SimpleNamespace(date=as_of_date, total_stocks_scanned=7)]
+
+    class _FakeDb(_FakeSession):
+        def query(self, *args, **kwargs):
+            return _FakeQuery()
+
+    monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
+    monkeypatch.setattr(
+        export_static_site,
+        "_generate_trading_dates",
+        lambda *args, **kwargs: [as_of_date],
+    )
+    monkeypatch.setattr(
+        export_static_site,
+        "BreadthCalculatorService",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("date-eligible existing breadth must be reused")
+        ),
+    )
+
+    result = export_static_site._ensure_breadth_history(
+        as_of_date=as_of_date,
+        market=market,
+        min_trading_days=0,
+    )
+
+    assert result["status"] == "skipped"
+    assert result["candidate_stocks_by_date"] == {"2026-07-31": 10}
+    assert result["eligible_stocks_by_date"] == {"2026-07-31": 7}
 
 
 def test_ensure_breadth_history_skips_existing_rows_with_tolerated_historical_gaps(
@@ -733,6 +842,10 @@ def test_ensure_breadth_history_skips_existing_rows_with_tolerated_historical_ga
 ):
     previous_date = date(2026, 7, 30)
     as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(
+        monkeypatch,
+        {previous_date: 9, as_of_date: 10},
+    )
 
     class _FakeQuery:
         def __init__(self, rows):
@@ -786,11 +899,15 @@ def test_ensure_breadth_history_skips_existing_rows_with_tolerated_historical_ga
 
     assert result["status"] == "skipped"
     assert result["validated_existing_dates"] == 2
-    assert result["target_symbols"] == 10
+    assert result["eligible_stocks_by_date"] == {
+        "2026-07-30": 9,
+        "2026-07-31": 10,
+    }
 
 
 def test_ensure_breadth_history_marks_calculation_errors_not_completed(monkeypatch):
     as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(monkeypatch, {as_of_date: 2})
 
     class _FakeQuery:
         def filter(self, *args, **kwargs):
@@ -851,6 +968,11 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
     monkeypatch,
 ):
     as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(
+        monkeypatch,
+        {as_of_date: 8},
+        candidate_counts_by_date={as_of_date: 10},
+    )
     breadth_rows: list[SimpleNamespace] = []
 
     class _FakeQuery:
@@ -893,6 +1015,7 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
                 "error_stocks": 0,
                 "cache_coverage_ratio": 1.0,
                 "insufficient_history_observations": 9,
+                "scanned_stocks_by_date": {as_of_date.isoformat(): 1},
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
@@ -916,17 +1039,24 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
 
     assert result["status"] == "errored"
     assert result["undercovered_dates"] == ["2026-07-31"]
-    assert result["minimum_stocks_scanned"] == 8
+    assert result["eligible_stocks_by_date"] == {"2026-07-31": 8}
+    assert result["scanned_stocks_by_date"] == {"2026-07-31": 1}
     assert result["error"] == (
         "Cache-only breadth backfill has insufficient usable coverage "
-        "(dates=2026-07-31, minimum_scanned=8)"
+        "(scanned/eligible=2026-07-31:1/8)"
     )
 
 
-def test_ensure_breadth_history_uses_market_specific_static_floor(
+def test_ensure_breadth_history_accepts_smaller_historical_eligible_universe(
     monkeypatch,
 ):
     as_of_date = date(2026, 7, 31)
+    _patch_breadth_eligibility(
+        monkeypatch,
+        {as_of_date: 7},
+        candidate_counts_by_date={as_of_date: 10},
+        policy="current_active_fallback_v1",
+    )
     breadth_rows: list[SimpleNamespace] = []
 
     class _FakeQuery:
@@ -969,6 +1099,7 @@ def test_ensure_breadth_history_uses_market_specific_static_floor(
                 "error_stocks": 0,
                 "cache_coverage_ratio": 0.7,
                 "insufficient_history_observations": 3,
+                "scanned_stocks_by_date": {as_of_date.isoformat(): 7},
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
@@ -991,6 +1122,11 @@ def test_ensure_breadth_history_uses_market_specific_static_floor(
     )
 
     assert result["status"] == "completed"
-    assert result["minimum_stocks_scanned"] == 7
+    assert result["candidate_stocks_by_date"] == {"2026-07-31": 10}
+    assert result["eligible_stocks_by_date"] == {"2026-07-31": 7}
+    assert result["scanned_stocks_by_date"] == {"2026-07-31": 7}
+    assert result["universe_policy_by_date"] == {
+        "2026-07-31": "current_active_fallback_v1"
+    }
     assert "undercovered_dates" not in result
     assert "error" not in result

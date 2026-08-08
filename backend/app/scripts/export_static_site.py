@@ -11,7 +11,6 @@ from typing import Any, Literal, Mapping, Sequence
 from app.config import settings
 from app.database import SessionLocal
 from app.domain.markets import market_registry
-from app.domain.providers.price_symbol_support import split_supported_price_symbols
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
@@ -19,7 +18,6 @@ from app.domain.relative_strength import (
 from app.infra.db.models.feature_store import FeatureRunPointer
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.models.market_breadth import MarketBreadth
-from app.models.stock_universe import StockUniverse
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
@@ -39,11 +37,11 @@ from app.services.static_daily_price_refresh_service import (
 )
 from app.services.static_breadth_assessment import (
     classify_static_breadth_backfill,
-    static_breadth_backfill_needs_scan_counts,
     static_breadth_row_has_accepted_coverage,
 )
-from app.services.static_market_coverage_policy import (
-    static_breadth_minimum_validated_scan_count,
+from app.services.static_breadth_eligibility import (
+    StaticBreadthEligibility,
+    classify_static_breadth_eligibility,
 )
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
@@ -667,28 +665,22 @@ def _ensure_breadth_history(
         existing_by_date = {row.date: row for row in existing_rows}
         existing_dates = set(existing_by_date)
         missing_dates = [calc_date for calc_date in target_dates if calc_date not in existing_dates]
-        supported_symbol_count = _static_breadth_supported_symbol_count(
+        eligibility = classify_static_breadth_eligibility(
             db,
             market=normalized_market,
+            calculation_dates=target_dates,
         )
-        minimum_validated_stocks = static_breadth_minimum_validated_scan_count(
-            supported_symbol_count,
-            market=normalized_market,
-        )
-        if supported_symbol_count <= 0:
-            incomplete_existing_dates = list(target_dates)
-        else:
-            incomplete_existing_dates = [
-                calc_date
-                for calc_date in target_dates
-                if (
-                    calc_date in existing_by_date
-                    and not static_breadth_row_has_accepted_coverage(
-                        existing_by_date[calc_date].total_stocks_scanned,
-                        minimum_stocks_scanned=minimum_validated_stocks,
-                    )
+        incomplete_existing_dates = [
+            calc_date
+            for calc_date in target_dates
+            if (
+                calc_date in existing_by_date
+                and not static_breadth_row_has_accepted_coverage(
+                    existing_by_date[calc_date].total_stocks_scanned,
+                    eligible_stocks=eligibility.eligible_counts_by_date[calc_date],
                 )
-            ]
+            )
+        ]
         repair_dates = sorted(set(missing_dates + incomplete_existing_dates))
         recompute_dates = _static_breadth_recompute_dates(
             target_dates=target_dates,
@@ -715,8 +707,7 @@ def _ensure_breadth_history(
                 "missing_dates": 0,
                 "recomputed_dates": 0,
                 "validated_existing_dates": len(target_dates),
-                "target_symbols": supported_symbol_count,
-                "minimum_stocks_scanned": minimum_validated_stocks,
+                **_static_breadth_eligibility_diagnostics(eligibility),
             }
 
         print(
@@ -736,29 +727,28 @@ def _ensure_breadth_history(
             cache_only=True,
             exclude_unsupported_price_symbols=True,
             required_as_of_date=as_of_date,
+            eligible_symbols_by_date={
+                calc_date: eligibility.eligible_symbols_by_date[calc_date]
+                for calc_date in recompute_dates
+            },
         )
-        scanned_by_date: dict[date, int] = {}
-        if static_breadth_backfill_needs_scan_counts(
-            stats,
-            minimum_stocks_scanned=minimum_validated_stocks,
-        ):
-            backfill_rows = (
-                db.query(MarketBreadth)
-                .filter(
-                    MarketBreadth.date.in_(target_dates),
-                    MarketBreadth.market == normalized_market,
-                )
-                .all()
-            )
-            scanned_by_date = {
-                row.date: int(row.total_stocks_scanned or 0)
-                for row in backfill_rows
+        scanned_by_date = {
+            row.date: int(row.total_stocks_scanned or 0)
+            for row in existing_rows
+        }
+        scanned_by_date.update(
+            {
+                date.fromisoformat(raw_date): int(count or 0)
+                for raw_date, count in (
+                    stats.get("scanned_stocks_by_date") or {}
+                ).items()
             }
+        )
         assessment = classify_static_breadth_backfill(
             stats=stats,
             dates=target_dates,
             as_of_date=as_of_date,
-            minimum_stocks_scanned=minimum_validated_stocks,
+            eligible_stocks_by_date=eligibility.eligible_counts_by_date,
             scanned_by_date=scanned_by_date,
         )
         stats.update(assessment.diagnostics())
@@ -772,6 +762,7 @@ def _ensure_breadth_history(
                 "missing_dates": len(missing_dates),
                 "incomplete_existing_dates": len(incomplete_existing_dates),
                 "recomputed_dates": len(recompute_dates),
+                **_static_breadth_eligibility_diagnostics(eligibility),
             }
         )
         if assessment.error:
@@ -779,18 +770,30 @@ def _ensure_breadth_history(
         return stats
 
 
-def _static_breadth_supported_symbol_count(db, *, market: str) -> int:
-    symbols = [
-        symbol
-        for symbol, in db.query(StockUniverse.symbol)
-        .filter(
-            StockUniverse.is_active.is_(True),
-            StockUniverse.market == market,
-        )
-        .all()
-    ]
-    supported_symbols, _unsupported_symbols = split_supported_price_symbols(symbols)
-    return len(supported_symbols)
+def _static_breadth_eligibility_diagnostics(
+    eligibility: StaticBreadthEligibility,
+) -> dict[str, Any]:
+    return {
+        "candidate_stocks_by_date": {
+            calc_date.isoformat(): count
+            for calc_date, count in eligibility.candidate_counts_by_date.items()
+        },
+        "eligible_stocks_by_date": {
+            calc_date.isoformat(): count
+            for calc_date, count in eligibility.eligible_counts_by_date.items()
+        },
+        "universe_policy_by_date": {
+            calc_date.isoformat(): policy
+            for calc_date, policy in eligibility.universe_policy_by_date.items()
+        },
+        "unsupported_symbols_sample": list(eligibility.unsupported_symbols),
+        "insufficient_history_symbols_sample": list(
+            eligibility.insufficient_history_symbols
+        ),
+        "exact_date_gap_symbols_sample": list(
+            eligibility.exact_date_gap_symbols
+        ),
+    }
 
 
 def _static_breadth_recompute_dates(
