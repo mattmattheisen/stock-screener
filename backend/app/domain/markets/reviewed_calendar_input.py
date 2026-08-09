@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, time
 import json
 from pathlib import Path
 from types import MappingProxyType
@@ -27,6 +27,7 @@ class ReviewedMarketCalendar:
     source: CalendarSource
     official_through: int
     closures: Mapping[int, frozenset[date]]
+    close_exceptions: Mapping[int, Mapping[date, time]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +88,13 @@ class ReviewedCalendarInput:
 
     def official_through(self, market: str) -> int:
         return self._market(market).official_through
+
+    def close_exceptions_for(
+        self, market: str, year: int
+    ) -> Mapping[date, time]:
+        return self._market(market).close_exceptions.get(
+            year, MappingProxyType({})
+        )
 
     def _market(self, market: str) -> ReviewedMarketCalendar:
         normalized = str(market or "").strip().upper()
@@ -163,10 +171,56 @@ def _parse_market(
                 f"{market} closure {outside[0].isoformat()} is outside {year}"
             )
         closures[year] = frozenset(parsed_dates)
+
+    raw_close_exceptions = payload.get("close_exceptions", {})
+    if not isinstance(raw_close_exceptions, dict):
+        raise ReviewedCalendarInputError(
+            f"{market}.close_exceptions must be an object"
+        )
+    try:
+        exception_years = {int(raw_year) for raw_year in raw_close_exceptions}
+    except (TypeError, ValueError) as exc:
+        raise ReviewedCalendarInputError(
+            f"{market}.close_exceptions keys must be years"
+        ) from exc
+    extra_exception_years = sorted(exception_years - expected_years)
+    if extra_exception_years:
+        raise ReviewedCalendarInputError(
+            f"{market} has close exceptions outside official coverage: "
+            f"{extra_exception_years}"
+        )
+
+    close_exceptions: dict[int, Mapping[date, time]] = {}
+    for year in sorted(expected_years):
+        raw_year_exceptions = raw_close_exceptions.get(str(year), {})
+        if not isinstance(raw_year_exceptions, dict):
+            raise ReviewedCalendarInputError(
+                f"{market}.close_exceptions.{year} must be an object"
+            )
+        parsed_exceptions: dict[date, time] = {}
+        for raw_date, raw_time in raw_year_exceptions.items():
+            exception_date = _parse_date(
+                raw_date, f"{market}.close_exceptions.{year} date"
+            )
+            if exception_date.year != year:
+                raise ReviewedCalendarInputError(
+                    f"{market} exceptional close "
+                    f"{exception_date.isoformat()} is outside {year}"
+                )
+            if exception_date in closures[year]:
+                raise ReviewedCalendarInputError(
+                    f"{market} exceptional close "
+                    f"{exception_date.isoformat()} is also a closure"
+                )
+            parsed_exceptions[exception_date] = _parse_time(
+                raw_time, f"{market}.close_exceptions.{year}.{raw_date}"
+            )
+        close_exceptions[year] = MappingProxyType(parsed_exceptions)
     return ReviewedMarketCalendar(
         source=source,
         official_through=official_through,
         closures=MappingProxyType(closures),
+        close_exceptions=MappingProxyType(close_exceptions),
     )
 
 
@@ -183,6 +237,15 @@ def _parse_date(value: object, field: str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise ReviewedCalendarInputError(f"{field} must be an ISO date") from exc
+
+
+def _parse_time(value: object, field: str) -> time:
+    if not isinstance(value, str):
+        raise ReviewedCalendarInputError(f"{field} must be an ISO time")
+    try:
+        return time.fromisoformat(value)
+    except ValueError as exc:
+        raise ReviewedCalendarInputError(f"{field} must be an ISO time") from exc
 
 
 def _read_json(path: Path) -> dict[str, object]:
