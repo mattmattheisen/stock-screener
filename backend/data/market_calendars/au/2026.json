@@ -8,6 +8,10 @@
     "url": "https://www.asx.com.au/markets/market-resources/trading-hours-calendar/cash-market-trading-hours/trading-calendar",
     "checked_at": "2026-08-08"
   },
+  "close_exceptions": {
+    "2026-12-24": "14:10:00",
+    "2026-12-31": "14:10:00"
+  },
   "sessions": [
     "2026-01-02",
     "2026-01-05",

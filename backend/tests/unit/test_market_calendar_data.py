@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -61,6 +61,31 @@ KNOWN_2026_CLOSURES = {
     "JP": (date(2026, 3, 20), date(2026, 9, 22), date(2026, 9, 23)),
 }
 
+VERIFIED_EXCEPTIONAL_CLOSES = {
+    "AU": {
+        date(2026, 12, 24): time(14, 10),
+        date(2026, 12, 31): time(14, 10),
+    },
+    "CA": {date(2026, 12, 24): time(13, 0)},
+    "HK": {
+        date(2026, 2, 16): time(12, 0),
+        date(2026, 12, 24): time(12, 0),
+        date(2026, 12, 31): time(12, 0),
+    },
+    "SG": {
+        date(2026, 2, 16): time(12, 0),
+        date(2026, 12, 24): time(12, 0),
+        date(2026, 12, 31): time(12, 0),
+    },
+    "US": {
+        date(2026, 11, 27): time(13, 0),
+        date(2026, 12, 24): time(13, 0),
+        date(2027, 11, 26): time(13, 0),
+        date(2028, 7, 3): time(13, 0),
+        date(2028, 11, 24): time(13, 0),
+    },
+}
+
 
 @pytest.fixture(scope="module")
 def registry() -> CalendarCoverageRegistry:
@@ -117,6 +142,25 @@ def test_repository_uses_available_official_forward_coverage(
     assert registry.coverage_for("US").verified_through == date(2028, 12, 31)
     assert registry.coverage_for("JP").verified_through == date(2027, 12, 31)
     assert registry.coverage_for("DE").verified_through == date(2030, 12, 31)
+
+
+@pytest.mark.parametrize(
+    ("market", "expected"),
+    VERIFIED_EXCEPTIONAL_CLOSES.items(),
+)
+def test_repository_preserves_verified_exceptional_closes(
+    registry: CalendarCoverageRegistry,
+    market: str,
+    expected: dict[date, time],
+) -> None:
+    actual = {
+        exception_date: close_time
+        for annual in registry.coverage_for(market).annual.values()
+        if annual.status == "official"
+        for exception_date, close_time in annual.close_exceptions.items()
+    }
+
+    assert actual == expected
 
 
 def test_every_official_year_has_explicit_reviewed_closure_inputs(

@@ -8,6 +8,11 @@
     "url": "https://www.hkex.com.hk/-/media/HKEX-Market/Services/Circulars-and-Notices/Participant-and-Members-Circulars/SEHK/2025/ce_SEHK_CT_075_2025.pdf",
     "checked_at": "2026-08-08"
   },
+  "close_exceptions": {
+    "2026-02-16": "12:00:00",
+    "2026-12-24": "12:00:00",
+    "2026-12-31": "12:00:00"
+  },
   "sessions": [
     "2026-01-02",
     "2026-01-05",

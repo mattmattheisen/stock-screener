@@ -385,9 +385,11 @@ Run the audit locally from `backend/`:
 When a first-party exchange publishes a new calendar:
 
 1. In `inputs/reviewed_official_calendars.json`, update the Market's source,
-   `official_through`, and complete weekday-closure array for the new year.
-   Use an explicit empty array when the reviewed publication has no weekday
-   closures.
+   `official_through`, complete weekday-closure array, and any shortened
+   sessions under `close_exceptions` for the new year. Exceptional close values
+   are ISO times in the exchange's local timezone. Use an explicit empty array
+   when the reviewed publication has no weekday closures; the optional
+   `close_exceptions` year may be omitted when it has no shortened sessions.
 2. Compile and review the official year:
 
 ```bash

@@ -8,6 +8,10 @@
     "url": "https://www.nyse.com/trade/hours-calendars",
     "checked_at": "2026-08-08"
   },
+  "close_exceptions": {
+    "2026-11-27": "13:00:00",
+    "2026-12-24": "13:00:00"
+  },
   "sessions": [
     "2026-01-02",
     "2026-01-05",
