@@ -1311,8 +1311,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
 def _ensure_breadth_history(
     *,
     as_of_date: date,
@@ -1350,3 +1348,7 @@ def _ensure_breadth_history(
             lookback_days=lookback_days,
         )
     ).as_dict()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

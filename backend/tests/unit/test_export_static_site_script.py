@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
+import runpy
+import sys
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-import sys
 
 import pytest
 
 import app.scripts.export_static_site as export_script
-import app.tasks.market_rs_tasks as market_rs_tasks
 import app.tasks.fundamentals_tasks as fundamentals_tasks
+import app.tasks.market_rs_tasks as market_rs_tasks
 import app.tasks.universe_tasks as universe_tasks
+from app.domain.markets import market_registry
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
-from app.domain.markets import market_registry
 from app.interfaces.tasks import feature_store_tasks
 from app.services.group_rank_history_backfill_service import (
     DEFAULT_CALENDAR_DAY_GROUP_RANK_HISTORY_LOOKBACK_DAYS,
@@ -26,8 +27,30 @@ from app.services.group_rank_history_backfill_service import (
     GroupRankHistoryBackfillStatus,
 )
 
-
 _REAL_ENSURE_GROUP_RANK_HISTORY = export_script._ensure_group_rank_history
+
+
+def test_direct_module_execution_binds_breadth_wrapper_before_main():
+    module_path = Path(export_script.__file__)
+
+    def stop_at_main(frame, event, _arg):
+        if (
+            event == "call"
+            and frame.f_code.co_name == "main"
+            and Path(frame.f_code.co_filename) == module_path
+        ):
+            assert "_ensure_breadth_history" in frame.f_globals
+            raise SystemExit(0)
+
+    previous_profile = sys.getprofile()
+    sys.setprofile(stop_at_main)
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            runpy.run_path(str(module_path), run_name="__main__")
+    finally:
+        sys.setprofile(previous_profile)
+
+    assert exc_info.value.code == 0
 
 
 def _backfill_result(
