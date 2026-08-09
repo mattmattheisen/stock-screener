@@ -215,14 +215,43 @@ class BreadthBackfillExecutor:
                 len(batch_symbols),
             )
 
-            cache_load_kwargs = {}
-            if required_as_of_date is not None:
-                cache_load_kwargs["required_as_of_date"] = required_as_of_date
-            price_data_by_symbol, batch_cache_miss_symbols = calculator._load_price_data_for_batch(
-                batch_symbols=batch_symbols,
-                cache_only=policy.cache_only,
-                **cache_load_kwargs,
-            )
+            if (
+                required_as_of_date is not None
+                and explicit_eligible_symbol_sets is not None
+            ):
+                symbols_by_required_date: dict[date, list[str]] = {}
+                for symbol in batch_symbols:
+                    symbol_required_date = max(
+                        calculation_date
+                        for calculation_date in ordered_dates
+                        if symbol in explicit_eligible_symbol_sets[calculation_date]
+                    )
+                    symbols_by_required_date.setdefault(
+                        symbol_required_date,
+                        [],
+                    ).append(symbol)
+
+                price_data_by_symbol = {}
+                batch_cache_miss_symbols = []
+                for symbol_required_date, symbols in symbols_by_required_date.items():
+                    price_data, cache_misses = calculator._load_price_data_for_batch(
+                        batch_symbols=symbols,
+                        cache_only=policy.cache_only,
+                        required_as_of_date=symbol_required_date,
+                    )
+                    price_data_by_symbol.update(price_data)
+                    batch_cache_miss_symbols.extend(cache_misses)
+            else:
+                cache_load_kwargs = {}
+                if required_as_of_date is not None:
+                    cache_load_kwargs["required_as_of_date"] = required_as_of_date
+                price_data_by_symbol, batch_cache_miss_symbols = (
+                    calculator._load_price_data_for_batch(
+                        batch_symbols=batch_symbols,
+                        cache_only=policy.cache_only,
+                        **cache_load_kwargs,
+                    )
+                )
             price_coverage.record_batch(
                 batch_symbols,
                 batch_cache_miss_symbols,

@@ -239,6 +239,53 @@ def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():
     }
     assert stored == {first_date: aaa_signature, second_date: bbb_signature}
 
+
+def test_backfill_range_validates_historical_symbols_on_their_eligible_date():
+    db = _make_db_session()
+    historical_date = date(2026, 3, 19)
+    current_date = date(2026, 3, 20)
+    eligible_date_by_symbol = {
+        "CURRENT": current_date,
+        "HISTORICAL": historical_date,
+    }
+
+    def cached_prices(symbols, period, *, required_as_of_date):
+        assert period == "2y"
+        return {
+            symbol: (
+                _flat_price_df(eligible_date_by_symbol[symbol])
+                if required_as_of_date == eligible_date_by_symbol[symbol]
+                else None
+            )
+            for symbol in symbols
+        }
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.side_effect = cached_prices
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.backfill_range(
+        historical_date,
+        current_date,
+        trading_dates=[historical_date, current_date],
+        cache_only=True,
+        required_as_of_date=current_date,
+        eligible_symbols_by_date={
+            historical_date: ("HISTORICAL",),
+            current_date: ("CURRENT",),
+        },
+        eligibility_signatures_by_date={
+            historical_date: static_breadth_eligibility_signature(("HISTORICAL",)),
+            current_date: static_breadth_eligibility_signature(("CURRENT",)),
+        },
+    )
+
+    assert result["scanned_stocks_by_date"] == {
+        "2026-03-19": 1,
+        "2026-03-20": 1,
+    }
+
+
 def test_backfill_range_rejects_signature_for_different_eligible_symbols():
     db = _make_db_session()
     calculation_date = date(2026, 3, 20)
