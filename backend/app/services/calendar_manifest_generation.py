@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from importlib import metadata
 import json
 from pathlib import Path
@@ -92,6 +92,7 @@ class CalendarManifestGenerator:
         year: int,
         sessions: Iterable[date],
         source: CalendarSource,
+        close_exceptions: Mapping[date, time] | None = None,
         check: bool = False,
     ) -> Path:
         entry = self._market_catalog.get(market)
@@ -102,6 +103,7 @@ class CalendarManifestGenerator:
             status="official",
             sessions=sessions,
             source=source,
+            close_exceptions=close_exceptions,
         )
         path = Path(root) / entry.code.lower() / f"{year}.json"
         self._write_or_check(((path, _render_json(payload)),), check=check)
@@ -148,6 +150,7 @@ class CalendarManifestGenerator:
         closures: Iterable[date],
         source: CalendarSource,
         extra_sessions: Iterable[date] = (),
+        close_exceptions: Mapping[date, time] | None = None,
         check: bool = False,
     ) -> Path:
         closure_dates = frozenset(closures)
@@ -169,6 +172,7 @@ class CalendarManifestGenerator:
             year=year,
             sessions=sessions,
             source=source,
+            close_exceptions=close_exceptions,
             check=check,
         )
 
@@ -271,6 +275,7 @@ def _annual_payload(
     status: str,
     sessions: Iterable[date],
     source: CalendarSource,
+    close_exceptions: Mapping[date, time] | None = None,
     provider: str | None = None,
     provider_version: str | None = None,
 ) -> dict[str, object]:
@@ -283,6 +288,14 @@ def _annual_payload(
         raise CalendarManifestGenerationError(
             f"{market} {year} calendar contains a session outside its year"
         )
+    normalized_close_exceptions = dict(close_exceptions or {})
+    session_dates = frozenset(normalized_sessions)
+    for exception_date in normalized_close_exceptions:
+        if exception_date not in session_dates:
+            raise CalendarManifestGenerationError(
+                f"{market} {year} exceptional close must be a session: "
+                f"{exception_date.isoformat()}"
+            )
     payload: dict[str, object] = {
         "market": market,
         "mic": mic,
@@ -301,6 +314,13 @@ def _annual_payload(
             )
         payload["provider"] = provider
         payload["provider_version"] = provider_version
+    if normalized_close_exceptions:
+        payload["close_exceptions"] = {
+            exception_date.isoformat(): normalized_close_exceptions[
+                exception_date
+            ].isoformat()
+            for exception_date in sorted(normalized_close_exceptions)
+        }
     payload["sessions"] = [session.isoformat() for session in normalized_sessions]
     return payload
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, time
 import json
 import os
 from pathlib import Path
@@ -252,6 +252,51 @@ def test_generator_builds_official_weekday_sessions_from_exchange_closures(
     assert "2027-01-02" not in sessions
     assert "2027-01-03" not in sessions
     assert "2027-01-04" not in sessions
+
+
+def test_generator_preserves_official_exceptional_close_times(
+    tmp_path: Path,
+) -> None:
+    generator = _generator(_ProviderCalendar(()))
+
+    output = generator.import_official_closures(
+        tmp_path,
+        market="KR",
+        year=2027,
+        closures=(date(2027, 1, 1),),
+        close_exceptions={date(2027, 11, 26): time(13, 0)},
+        source=CalendarSource(
+            name="Korea Exchange 2027 market calendar",
+            url="https://global.krx.co.kr/official-2027",
+            checked_at=date(2026, 12, 1),
+        ),
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["close_exceptions"] == {"2027-11-26": "13:00:00"}
+
+
+def test_generator_rejects_exceptional_close_that_is_not_a_session(
+    tmp_path: Path,
+) -> None:
+    generator = _generator(_ProviderCalendar(()))
+
+    with pytest.raises(
+        CalendarManifestGenerationError,
+        match="exceptional close must be a session",
+    ):
+        generator.import_official_closures(
+            tmp_path,
+            market="KR",
+            year=2027,
+            closures=(date(2027, 1, 1),),
+            close_exceptions={date(2027, 1, 2): time(13, 0)},
+            source=CalendarSource(
+                name="Korea Exchange 2027 market calendar",
+                url="https://global.krx.co.kr/official-2027",
+                checked_at=date(2026, 12, 1),
+            ),
+        )
 
 
 def test_generator_imports_explicit_provisional_sessions_with_provenance(

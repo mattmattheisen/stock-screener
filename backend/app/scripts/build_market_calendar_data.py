@@ -107,6 +107,7 @@ def build(
                     market=market,
                     year=year,
                     closures=reviewed.closures_for(market, year),
+                    close_exceptions=reviewed.close_exceptions_for(market, year),
                     source=source,
                     check=check,
                 )
