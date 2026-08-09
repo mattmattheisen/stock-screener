@@ -8,10 +8,13 @@ import pytest
 
 from app.domain.markets.calendar_coverage import CalendarCoverageRegistry
 from app.domain.markets.catalog import get_market_catalog
-from app.scripts.build_market_calendar_data import REVIEWED_OFFICIAL_CLOSURES
+from app.domain.markets.reviewed_calendar_input import ReviewedCalendarInput
 
 
 CALENDAR_ROOT = Path(__file__).resolve().parents[2] / "data" / "market_calendars"
+REVIEWED_INPUT = (
+    CALENDAR_ROOT / "inputs" / "reviewed_official_calendars.json"
+)
 
 OFFICIAL_SOURCE_DOMAINS = {
     "US": "nyse.com",
@@ -126,7 +129,18 @@ def test_every_official_year_has_explicit_reviewed_closure_inputs(
         if annual.status == "official"
     }
 
-    assert set(REVIEWED_OFFICIAL_CLOSURES) == official_years
+    reviewed = ReviewedCalendarInput.load(
+        REVIEWED_INPUT,
+        market_catalog=get_market_catalog(),
+        first_year=2026,
+    )
+    reviewed_years = {
+        (market, year)
+        for market, facts in reviewed.markets.items()
+        for year in facts.closures
+    }
+
+    assert reviewed_years == official_years
 
 
 def test_singapore_provisional_calendar_excludes_fixed_holidays(

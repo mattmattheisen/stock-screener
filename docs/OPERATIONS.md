@@ -360,11 +360,13 @@ Calendar maintenance is an **annual/on-publication** operator responsibility. Th
 Saturday **weekly audit** only validates the checked-in manifests and warns; it
 does not scrape exchange sites or change calendar data.
 
-The source of truth is `backend/data/market_calendars/index.json` plus the annual
-files below it. An `official` annual file is normalized from a published,
-first-party exchange notice and is authoritative at runtime. A `provisional`
-file is generated from the pinned Python calendar provider and exists for
-planning and review through 2030; it does not extend `verified_through`.
+Reviewed official facts live in
+`backend/data/market_calendars/inputs/reviewed_official_calendars.json`. The
+builder validates that file and deterministically compiles it into
+`backend/data/market_calendars/index.json` plus the annual files below it. An
+`official` annual file is authoritative at runtime. A `provisional` file is
+generated from the pinned Python calendar provider and exists for planning and
+review through 2030; it does not extend `verified_through`.
 
 The audit emits the active **180 / 90 / 60 / 30 / expired** warning band. These
 warnings are non-blocking in both the weekly workflow and static-site workflow.
@@ -382,21 +384,19 @@ Run the audit locally from `backend/`:
 
 When a first-party exchange publishes a new calendar:
 
-1. Save the reviewed session dates as a JSON array, one ISO date per entry.
-2. Import and normalize the official year. For example:
+1. In `inputs/reviewed_official_calendars.json`, update the Market's source,
+   `official_through`, and complete weekday-closure array for the new year.
+   Use an explicit empty array when the reviewed publication has no weekday
+   closures.
+2. Compile and review the official year:
 
 ```bash
-../backend/venv/bin/python -m app.scripts.generate_market_calendar_manifests \
-  --market HK --status official --year 2027 \
-  --official-sessions /tmp/hk-2027-sessions.json \
-  --source-name "HKEX 2027 Holiday Schedule" \
-  --source-url "https://www.hkex.com.hk/..." \
-  --checked-at 2026-12-01
+../backend/venv/bin/python -m app.scripts.build_market_calendar_data
 ```
 
-3. Review the normalized annual file, update the Market's source and
-   `verified_through` in `backend/data/market_calendars/index.json`, and advance
-   coverage only through the last date supported by that official publication.
+3. Review the input and generated annual/index diff. Advance coverage only
+   through the last date supported by the official publication; do not hand-edit
+   the generated index or annual files.
 4. Inspect and test the change:
 
 ```bash
@@ -420,9 +420,9 @@ builder also applies reviewed project rules such as Singapore's fixed holidays.
 ```
 
 For an emergency closure, locate and archive the first-party exchange notice,
-remove the closed date from the reviewed official session JSON, re-import that
-year, update its source/check date, run the diff and calendar tests above, then
-publish through the normal review path. If only market-data feeds show a gap,
+add the closed date to that year's reviewed closure array, update the source and
+check date, rebuild, run the diff and calendar tests above, then publish through
+the normal review path. If only market-data feeds show a gap,
 treat **no-bar data** as evidence for investigation, not a closure authority;
 never infer an exchange holiday from provider absence alone.
 
