@@ -17,9 +17,6 @@ from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
-from app.services.static_breadth_eligibility import (
-    static_breadth_eligibility_signature,
-)
 
 
 def _policy(mode: str, target: date):

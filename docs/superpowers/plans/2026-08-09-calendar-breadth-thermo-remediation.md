@@ -254,9 +254,40 @@ Replace the pending verification note below with commands, counts, and results. 
 
 ## Implementation Verification
 
-Verification is deliberately deferred to Task 5 because this document is the
-pre-execution plan. Task 5 records the exact commands, test counts, line counts,
-and calendar-check results before the implementation is declared complete.
+Completed on 2026-08-09 with the main checkout's Python 3.11 virtualenv applied
+to the isolated `codex/calendar-coverage` worktree.
+
+- Focused breadth, static-export, calendar-input, manifest, and audit suites:
+  **98 passed, 19 warnings in 13.22s**.
+- Complete backend unit suite: **5,715 passed, 21 warnings in 472.69s**.
+- `python -m app.scripts.build_market_calendar_data --check`: exited 0 with
+  byte-for-byte-clean generated manifests.
+- `python -m app.scripts.audit_market_calendars --as-of 2026-08-09`: exited 0;
+  emitted the expected nonblocking 180-day warnings for AU, CA, CN, HK, IN, KR,
+  MY, SG, and TW.
+- `ruff check --select F` on every changed breadth/calendar/export Python module:
+  passed after removing one unused test import.
+- `git diff --check`: passed.
+
+Final decomposition measurements:
+
+| Module | Lines |
+|---|---:|
+| `breadth_calculator_service.py` | 813 |
+| `breadth_backfill.py` | 363 |
+| `static_breadth_eligibility.py` | 237 |
+| `static_breadth_history_coordinator.py` | 287 |
+| `build_market_calendar_data.py` | 204 |
+| `reviewed_calendar_input.py` | 197 |
+| `test_breadth_calculator_service.py` | 925 |
+| `test_breadth_backfill.py` | 254 |
+| `test_export_static_site_refresh.py` | 466 |
+| `test_static_breadth_history_coordinator.py` | 802 |
+
+The pre-existing `export_static_site.py` remains above 1,000 lines but decreased
+from 1,530 to 1,352 lines. Its breadth-history feature logic is now a thin
+compatibility wrapper over the 287-line coordinator; unrelated legacy export
+orchestration was intentionally kept outside this remediation's scope.
 
 ## Plan Self-Review
 
