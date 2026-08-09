@@ -106,6 +106,13 @@ def test_classifies_point_in_time_eligibility_and_price_exclusions(universe_sess
         first_date: "point_in_time",
         second_date: "current_active_fallback_v1",
     }
+    assert result.by_date[first_date].candidate_count == 5
+    assert result.by_date[first_date].eligible_symbols == ("DATE_GAP", "READY")
+    assert result.by_date[first_date].universe_policy == "point_in_time"
+    assert (
+        result.by_date[first_date].eligibility_signature
+        == result.eligibility_signatures_by_date[first_date]
+    )
     assert result.unsupported_symbols == ("ABC-W",)
     assert result.unsupported_count == 1
     assert "BECOMES_READY" in result.insufficient_history_symbols

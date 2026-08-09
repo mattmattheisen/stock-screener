@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 import math
 import hashlib
@@ -24,6 +24,15 @@ PRICE_QUERY_CHUNK_SIZE = 500
 
 
 @dataclass(frozen=True, slots=True)
+class StaticBreadthDateEligibility:
+    calculation_date: date
+    candidate_count: int
+    eligible_symbols: tuple[str, ...]
+    universe_policy: str
+    eligibility_signature: str
+
+
+@dataclass(frozen=True, slots=True)
 class StaticBreadthEligibility:
     eligible_symbols_by_date: Mapping[date, tuple[str, ...]]
     candidate_counts_by_date: Mapping[date, int]
@@ -36,6 +45,37 @@ class StaticBreadthEligibility:
     unsupported_symbols: tuple[str, ...]
     insufficient_history_symbols: tuple[str, ...]
     exact_date_gap_symbols: tuple[str, ...]
+    by_date: Mapping[date, StaticBreadthDateEligibility] = field(init=False)
+
+    def __post_init__(self) -> None:
+        expected_dates = set(self.eligible_symbols_by_date)
+        parallel_dates = {
+            "candidate counts": set(self.candidate_counts_by_date),
+            "eligible counts": set(self.eligible_counts_by_date),
+            "universe policies": set(self.universe_policy_by_date),
+            "eligibility signatures": set(self.eligibility_signatures_by_date),
+        }
+        for label, actual_dates in parallel_dates.items():
+            if actual_dates != expected_dates:
+                raise ValueError(f"static breadth {label} dates do not match")
+
+        records: dict[date, StaticBreadthDateEligibility] = {}
+        for calculation_date in sorted(expected_dates):
+            symbols = tuple(self.eligible_symbols_by_date[calculation_date])
+            if self.eligible_counts_by_date[calculation_date] != len(symbols):
+                raise ValueError(
+                    "static breadth eligible count does not match symbols for "
+                    f"{calculation_date.isoformat()}"
+                )
+            signature = self.eligibility_signatures_by_date[calculation_date]
+            records[calculation_date] = StaticBreadthDateEligibility(
+                calculation_date=calculation_date,
+                candidate_count=self.candidate_counts_by_date[calculation_date],
+                eligible_symbols=symbols,
+                universe_policy=self.universe_policy_by_date[calculation_date],
+                eligibility_signature=signature,
+            )
+        object.__setattr__(self, "by_date", MappingProxyType(records))
 
 
 def _valid_ohlc_predicate():
