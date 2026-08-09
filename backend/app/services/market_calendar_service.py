@@ -444,16 +444,38 @@ class MarketCalendarService:
         *,
         mic: str | None = None,
     ) -> bool:
-        market_now = self.market_now(market, now=now, mic=mic)
-        if not self.is_trading_day(market, market_now.date(), mic=mic):
+        normalized = self.normalize_market(market)
+        market_now = self.market_now(normalized, now=now, mic=mic)
+        current_day = market_now.date()
+        coverage = self._require_verified_calculation_date(
+            normalized, current_day, mic=mic
+        )
+        if not self._is_effective_trading_day(
+            normalized, current_day, coverage, mic=mic
+        ):
             return False
-        calendar = self._get_calendar(market, mic=mic)
-        current_session = pd.Timestamp(market_now.date())
+        official = self._official_manifest_for_day(
+            coverage, current_day, mic=mic
+        )
+        if official is not None:
+            close_time = official.close_exceptions.get(
+                current_day,
+                REGULAR_MARKET_CLOSE_TIMES[normalized],
+            )
+            official_close = datetime.combine(
+                current_day,
+                close_time,
+                tzinfo=self.market_timezone(normalized, mic=mic),
+            )
+            if market_now >= official_close:
+                return False
+
+        calendar = self._get_calendar(normalized, mic=mic)
+        current_session = pd.Timestamp(current_day)
         minute_utc = pd.Timestamp(market_now).tz_convert("UTC").floor("min")
         open_on_minute = calendar.is_open_on_minute(minute_utc)
         if open_on_minute is not None:
             return open_on_minute
-
         session_ranges = calendar.session_open_ranges(current_session.date())
         if session_ranges is None:
             return False

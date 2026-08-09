@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from types import MappingProxyType
 
 import pandas as pd
@@ -365,6 +365,38 @@ def test_is_market_open_schedule_fallback_excludes_intraday_break():
     assert service.is_market_open("JP", now=morning_tokyo) is True
     assert service.is_market_open("JP", now=lunch_tokyo) is False
     assert service.is_market_open("JP", now=afternoon_tokyo) is True
+
+
+@pytest.mark.parametrize(
+    ("close_exceptions", "now"),
+    [
+        (
+            {date(2026, 4, 10): time(13, 0)},
+            datetime.fromisoformat("2026-04-10T13:01:00+08:00"),
+        ),
+        (
+            None,
+            datetime.fromisoformat("2026-04-10T15:01:00+08:00"),
+        ),
+    ],
+)
+def test_is_market_open_uses_official_close_when_schedule_is_unavailable(
+    close_exceptions,
+    now,
+):
+    current_day = date(2026, 4, 10)
+    registry = _coverage_registry(
+        market="CN",
+        verified_through=date(2026, 12, 31),
+        official_sessions=(current_day,),
+        close_exceptions=close_exceptions,
+    )
+    service = _service_with_provider(
+        lambda _: _BoundsCalendar(),
+        calendar_coverage_registry=registry,
+    )
+
+    assert service.is_market_open("CN", now=now) is False
 
 
 def test_india_pmc_lookup_uses_provider_specific_calendar_id():
