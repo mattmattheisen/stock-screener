@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime, timedelta
 from importlib import metadata
@@ -10,16 +11,16 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from ..domain.markets.calendar_coverage import (
+    AnnualCalendarManifest,
+    CalendarCoverageRegistry,
+    MarketCalendarCoverage,
+)
 from ..domain.markets.calendar_policy import (
     DEFAULT_CALENDAR_SESSION_OVERRIDES,
     REGULAR_MARKET_CLOSE_TIMES,
     CalendarProvider,
     CalendarSessionOverride,
-)
-from ..domain.markets.calendar_coverage import (
-    AnnualCalendarManifest,
-    CalendarCoverageRegistry,
-    MarketCalendarCoverage,
 )
 from ..domain.markets.catalog import (
     MarketCatalog,
@@ -63,7 +64,7 @@ class MarketCalendarService:
             calendar_coverage_registry
             if calendar_coverage_registry is not None
             else CalendarCoverageRegistry.load(
-                self.CALENDAR_DATA_ROOT,
+                self._configured_calendar_data_root(),
                 market_catalog=self._market_catalog,
             )
         )
@@ -89,6 +90,10 @@ class MarketCalendarService:
             tuple[CalendarProvider, str, str],
             MarketCalendarAdapter,
         ] = {}
+
+    def _configured_calendar_data_root(self) -> Path:
+        configured = os.getenv("MARKET_CALENDAR_DATA_ROOT")
+        return Path(configured).expanduser() if configured else self.CALENDAR_DATA_ROOT
 
     def normalize_market(self, market: str | None) -> str:
         try:

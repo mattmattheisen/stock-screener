@@ -35,8 +35,10 @@ RUN groupadd -r -g 1000 stockscanner && \
 ENV HOME=/app/data
 ENV XDG_CACHE_HOME=/app/data/.cache
 ENV PATH=/opt/venv/bin:$PATH
+ENV MARKET_CALENDAR_DATA_ROOT=/opt/stockscanner/market-calendars
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --chown=stockscanner:stockscanner backend/data/market_calendars/ /opt/stockscanner/market-calendars/
 COPY --chown=stockscanner:stockscanner backend/ .
 
 RUN mkdir -p /app/data/.cache && \

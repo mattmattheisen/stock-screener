@@ -14,7 +14,9 @@
 dist
 build
 backend/venv
-backend/data
+backend/data/*
+!backend/data/market_calendars/
+!backend/data/market_calendars/**
 backend/.pytest_cache
 backend/.mypy_cache
 backend/.ruff_cache
