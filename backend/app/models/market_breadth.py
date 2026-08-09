@@ -45,6 +45,7 @@ class MarketBreadth(Base):
 
     # Metadata
     total_stocks_scanned = Column(Integer, default=0, nullable=False)
+    eligibility_signature = Column(String(64), nullable=True)
     calculation_duration_seconds = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

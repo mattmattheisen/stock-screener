@@ -80,6 +80,25 @@ def test_static_workflow_uses_canonical_weekly_reference_sync_boundary():
     assert "retry_download" not in content
 
 
+def test_static_workflow_validates_calendar_manifests_before_selecting_markets():
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
+        encoding="utf-8"
+    )
+    audit_job = content.split("  calendar-audit:\n", 1)[1].split(
+        "\n  select-markets:", 1
+    )[0]
+    select_job = content.split("  select-markets:\n", 1)[1].split(
+        "\n  ensure_daily_price_release:", 1
+    )[0]
+
+    assert "app.scripts.audit_market_calendars --github-actions" in audit_job
+    assert "app.scripts.build_market_calendar_data --check" in audit_job
+    assert "::warning::Market calendar generation drift detected" in audit_job
+    assert "continue-on-error" not in audit_job
+    assert "needs: calendar-audit" in select_job
+    assert "warning" not in select_job.lower()
+
+
 def test_static_workflow_uses_canonical_rrg_plan_for_restore_and_publish():
     content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(
         encoding="utf-8"

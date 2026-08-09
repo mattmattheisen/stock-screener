@@ -46,7 +46,12 @@ def test_static_breadth_assessment_tolerates_only_pre_warmup_error_dates():
             as_of_date,
         ],
         as_of_date=as_of_date,
-        minimum_stocks_scanned=9,
+        eligible_stocks_by_date={
+            pre_warmup_error_date: 9,
+            covered_date: 9,
+            post_warmup_error_date: 9,
+            as_of_date: 9,
+        },
         scanned_by_date={
             covered_date: 10,
             as_of_date: 10,
@@ -74,7 +79,7 @@ def test_static_breadth_assessment_prioritizes_error_dates_over_persisted_covera
         ),
         dates=[as_of_date],
         as_of_date=as_of_date,
-        minimum_stocks_scanned=8,
+        eligible_stocks_by_date={as_of_date: 8},
         scanned_by_date={as_of_date: 10},
     )
 
@@ -98,7 +103,7 @@ def test_static_breadth_assessment_tolerates_pre_warmup_undercoverage():
         ),
         dates=[pre_warmup_gap_date, as_of_date],
         as_of_date=as_of_date,
-        minimum_stocks_scanned=8,
+        eligible_stocks_by_date={pre_warmup_gap_date: 8, as_of_date: 8},
         scanned_by_date={
             pre_warmup_gap_date: 1,
             as_of_date: 10,
@@ -129,7 +134,12 @@ def test_static_breadth_assessment_rejects_undercoverage_after_warmup():
             as_of_date,
         ],
         as_of_date=as_of_date,
-        minimum_stocks_scanned=8,
+        eligible_stocks_by_date={
+            warmup_date: 8,
+            covered_date: 8,
+            recent_gap_date: 8,
+            as_of_date: 8,
+        },
         scanned_by_date={
             warmup_date: 1,
             covered_date: 10,
@@ -142,7 +152,7 @@ def test_static_breadth_assessment_rejects_undercoverage_after_warmup():
     assert assessment.undercovered_dates == (recent_gap_date,)
     assert assessment.error == (
         "Cache-only breadth backfill has insufficient usable coverage "
-        "(dates=2026-07-30, minimum_scanned=8)"
+        "(scanned/eligible=2026-07-30:1/8)"
     )
 
 
@@ -155,7 +165,7 @@ def test_static_breadth_assessment_keeps_unclassified_errors_hard():
         ),
         dates=[as_of_date],
         as_of_date=as_of_date,
-        minimum_stocks_scanned=9,
+        eligible_stocks_by_date={as_of_date: 9},
         scanned_by_date={},
     )
 
@@ -163,4 +173,53 @@ def test_static_breadth_assessment_keeps_unclassified_errors_hard():
     assert assessment.unclassified_error_count == 1
     assert assessment.error == (
         "Cache-only breadth backfill has errors (errors=1)"
+    )
+
+
+def test_static_breadth_assessment_uses_each_dates_eligible_denominator():
+    first_date = date(2026, 7, 30)
+    as_of_date = date(2026, 7, 31)
+
+    assessment = classify_static_breadth_backfill(
+        stats=_backfill_stats(total_dates=2, processed=2),
+        dates=[first_date, as_of_date],
+        as_of_date=as_of_date,
+        eligible_stocks_by_date={first_date: 4, as_of_date: 9},
+        scanned_by_date={first_date: 4, as_of_date: 8},
+    )
+
+    assert assessment.undercovered_dates == (as_of_date,)
+    assert "2026-07-31:8/9" in assessment.error
+
+
+def test_static_breadth_assessment_rejects_zero_eligible_explicitly():
+    as_of_date = date(2026, 7, 31)
+
+    assessment = classify_static_breadth_backfill(
+        stats=_backfill_stats(processed=0),
+        dates=[as_of_date],
+        as_of_date=as_of_date,
+        eligible_stocks_by_date={as_of_date: 0},
+        scanned_by_date={as_of_date: 0},
+    )
+
+    assert assessment.zero_eligible_dates == (as_of_date,)
+    assert assessment.error == (
+        "Static breadth has zero eligible stocks (dates=2026-07-31)"
+    )
+
+
+def test_calculation_errors_take_priority_over_zero_eligible():
+    as_of_date = date(2026, 7, 31)
+
+    assessment = classify_static_breadth_backfill(
+        stats=_backfill_stats(error_stocks=2),
+        dates=[as_of_date],
+        as_of_date=as_of_date,
+        eligible_stocks_by_date={as_of_date: 0},
+        scanned_by_date={as_of_date: 0},
+    )
+
+    assert assessment.error == (
+        "Cache-only breadth backfill has calculation errors (error_stocks=2)"
     )

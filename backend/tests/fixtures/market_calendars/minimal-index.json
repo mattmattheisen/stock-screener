@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-08",
+  "provisional_through": "2030-12-31",
+  "markets": {
+    "KR": {
+      "mic": "XKRX",
+      "verified_through": "2026-12-31",
+      "source": {
+        "name": "Korea Exchange market calendar",
+        "url": "https://global.krx.co.kr/contents/GLB/05/0501/0501060000/GLB0501060000.jsp",
+        "checked_at": "2026-08-08"
+      },
+      "years": {
+        "2026": "kr/2026.json",
+        "2027": "kr/2027.provisional.json",
+        "2028": "kr/2028.provisional.json",
+        "2029": "kr/2029.provisional.json",
+        "2030": "kr/2030.provisional.json"
+      }
+    }
+  }
+}

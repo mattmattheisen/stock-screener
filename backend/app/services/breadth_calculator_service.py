@@ -7,22 +7,20 @@ monthly/quarterly performance indicators.
 """
 import logging
 import math
-from collections import deque
 from typing import Dict, Mapping, Optional, List
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 import pandas as pd
 from sqlalchemy.orm import Session
 
 from ..models.stock_universe import StockUniverse
 from ..models.market_breadth import MarketBreadth
-from ..domain.providers.price_symbol_support import split_supported_price_symbols
 from .breadth_coverage import (
     BreadthCalculationResult,
     BreadthCoverageReport,
     BreadthOutcomeCounter,
-    BreadthOutcomeReport,
     BreadthPriceCoverageAccumulator,
 )
+from .breadth_backfill import BreadthBackfillExecutor, BreadthBackfillPlan
 from .derived_data_execution_policy import (
     DerivedDataExecutionMode,
     DerivedDataExecutionPolicy,
@@ -192,13 +190,10 @@ class BreadthCalculatorService:
         cache_only: bool | None = None,
         exclude_unsupported_price_symbols: bool = False,
         required_as_of_date: date | None = None,
+        eligible_symbols_by_date: Mapping[date, tuple[str, ...]] | None = None,
+        eligibility_signatures_by_date: Mapping[date, str] | None = None,
     ) -> Dict:
-        """
-        Calculate and persist breadth for an entire historical range.
-
-        Price history is loaded once per symbol batch, then reused for every
-        requested trading date in chronological order.
-        """
+        """Calculate and persist breadth for an entire historical range."""
         if cache_only is not None:
             policy = DerivedDataExecutionPolicy(
                 mode=(
@@ -215,183 +210,33 @@ class BreadthCalculatorService:
             calendar_service = get_market_calendar_service()
             trading_dates = [
                 current_date
-                for current_date in pd.date_range(start=start_date, end=end_date, freq="D").date
+                for current_date in pd.date_range(
+                    start=start_date,
+                    end=end_date,
+                    freq="D",
+                ).date
                 if calendar_service.is_trading_day(self.market, current_date)
             ]
 
-        ordered_dates = sorted(trading_dates)
-        if not ordered_dates:
+        plan = BreadthBackfillPlan.from_legacy(
+            dates=trading_dates,
+            eligible_symbols_by_date=eligible_symbols_by_date,
+            eligibility_signatures_by_date=eligibility_signatures_by_date,
+        )
+        if not plan.dates:
             return {
-                'total_dates': 0,
-                'processed': 0,
-                'errors': 0,
-                'error_dates': [],
+                "total_dates": 0,
+                "processed": 0,
+                "errors": 0,
+                "error_dates": [],
             }
 
-        start_time = datetime.now()
-        active_stocks = self.db.query(StockUniverse).filter(
-            StockUniverse.is_active == True,
-            StockUniverse.market == self.market,
-        ).all()
-        skipped_unsupported_symbols: list[str] = []
-        if exclude_unsupported_price_symbols:
-            supported_symbols, skipped_unsupported_symbols = split_supported_price_symbols(
-                [stock.symbol for stock in active_stocks]
-            )
-            supported_symbol_set = set(supported_symbols)
-            active_stocks = [
-                stock
-                for stock in active_stocks
-                if stock.symbol in supported_symbol_set
-            ]
-        logger.info(
-            "Backfilling breadth for %s trading days across %s active stocks",
-            len(ordered_dates),
-            len(active_stocks),
-        )
-        if skipped_unsupported_symbols:
-            logger.info(
-                "Skipping %s unsupported Yahoo price symbols in breadth backfill",
-                len(skipped_unsupported_symbols),
-            )
-
-        metrics_by_date = {calc_date: self._empty_metrics() for calc_date in ordered_dates}
-        outcomes_by_date = {
-            calc_date: BreadthOutcomeCounter()
-            for calc_date in ordered_dates
-        }
-        price_coverage = BreadthPriceCoverageAccumulator()
-        batch_size = 500
-        total_stocks = len(active_stocks)
-
-        for i in range(0, total_stocks, batch_size):
-            batch = active_stocks[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            total_batches = (total_stocks + batch_size - 1) // batch_size
-            logger.info(
-                "Backfill batch %s/%s (%s stocks)",
-                batch_num,
-                total_batches,
-                len(batch),
-            )
-
-            batch_symbols = [stock.symbol for stock in batch]
-            cache_load_kwargs = {}
-            if required_as_of_date is not None:
-                cache_load_kwargs["required_as_of_date"] = required_as_of_date
-            price_data_by_symbol, batch_cache_miss_symbols = self._load_price_data_for_batch(
-                batch_symbols=batch_symbols,
-                cache_only=policy.cache_only,
-                **cache_load_kwargs,
-            )
-            price_coverage.record_batch(
-                batch_symbols,
-                batch_cache_miss_symbols,
-            )
-
-            for stock in batch:
-                try:
-                    price_history = price_data_by_symbol.get(stock.symbol)
-                    if price_history is None or price_history.empty:
-                        for calc_date in ordered_dates:
-                            outcomes_by_date[calc_date].record_cache_miss()
-                        continue
-
-                    stock_metrics_by_date = self._calculate_stock_metrics_by_date_from_prices(
-                        prices_df=price_history,
-                        calculation_dates=ordered_dates,
-                    )
-                    for calc_date in ordered_dates:
-                        daily_metrics = metrics_by_date[calc_date]
-                        stock_metrics = stock_metrics_by_date.get(calc_date)
-                        if stock_metrics is None:
-                            outcomes_by_date[calc_date].record_insufficient()
-                            continue
-                        self._apply_stock_metrics(daily_metrics, stock_metrics)
-                        outcomes_by_date[calc_date].record_scanned()
-                except Exception as e:
-                    logger.warning("Error processing %s in breadth backfill: %s", stock.symbol, e)
-                    for calc_date in ordered_dates:
-                        outcomes_by_date[calc_date].record_error()
-
-        prior_counts = self._get_prior_breadth_counts(ordered_dates[0], limit=10)
-        existing_counts = self._get_existing_breadth_counts_by_date(
-            ordered_dates[0],
-            ordered_dates[-1],
-        )
-        rolling_counts = deque(prior_counts, maxlen=10)
-
-        processed_dates: list[date] = []
-        error_dates: list[str] = []
-
-        shared_price_coverage = price_coverage.report()
-        requested_dates = set(ordered_dates)
-        timeline_dates = sorted(set(existing_counts.keys()) | requested_dates)
-        for calc_date in timeline_dates:
-            if calc_date in requested_dates:
-                metrics = metrics_by_date[calc_date]
-                metrics.update(
-                    BreadthCoverageReport.from_parts(
-                        shared_price_coverage,
-                        outcomes_by_date[calc_date].report(),
-                    ).to_daily_dict()
-                )
-                ratios = self._calculate_ratios_from_counts(list(rolling_counts))
-                metrics['ratio_5day'] = ratios['ratio_5day']
-                metrics['ratio_10day'] = ratios['ratio_10day']
-
-                if metrics['total_stocks_scanned'] > 0:
-                    processed_dates.append(calc_date)
-                    rolling_counts.append({
-                        'stocks_up_4pct': metrics['stocks_up_4pct'],
-                        'stocks_down_4pct': metrics['stocks_down_4pct'],
-                    })
-                else:
-                    error_dates.append(calc_date.strftime('%Y-%m-%d'))
-                continue
-
-            rolling_counts.append(existing_counts[calc_date])
-
-        if processed_dates:
-            total_duration_seconds = (datetime.now() - start_time).total_seconds()
-            duration_per_day = round(total_duration_seconds / len(processed_dates), 2)
-            for calc_date in processed_dates:
-                metrics_by_date[calc_date]['calculation_duration_seconds'] = duration_per_day
-
-            self._store_breadth_records(
-                {
-                    calc_date: metrics_by_date[calc_date]
-                    for calc_date in processed_dates
-                }
-            )
-
-        result = {
-            'total_dates': len(ordered_dates),
-            'processed': len(processed_dates),
-            'errors': len(error_dates),
-            'error_dates': error_dates,
-        }
-        if exclude_unsupported_price_symbols:
-            result.update({
-                "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
-                "unsupported_symbols_sample": (
-                    sorted(set(skipped_unsupported_symbols))[:20]
-                ),
-            })
-        if policy.cache_only:
-            aggregate_outcomes = sum(
-                (
-                    counter.report()
-                    for counter in outcomes_by_date.values()
-                ),
-                start=BreadthOutcomeReport(),
-            )
-            overall_report = BreadthCoverageReport.from_parts(
-                shared_price_coverage,
-                aggregate_outcomes,
-            )
-            result.update(overall_report.to_backfill_dict())
-        return result
+        return BreadthBackfillExecutor(self).execute(
+            plan,
+            policy=policy,
+            exclude_unsupported_price_symbols=exclude_unsupported_price_symbols,
+            required_as_of_date=required_as_of_date,
+        ).to_legacy_dict()
 
     def _calculate_stock_metrics_by_date_from_prices(
         self,
@@ -872,6 +717,9 @@ class BreadthCalculatorService:
             existing_record.stocks_up_13pct_34days = metrics['stocks_up_13pct_34days']
             existing_record.stocks_down_13pct_34days = metrics['stocks_down_13pct_34days']
             existing_record.total_stocks_scanned = metrics['total_stocks_scanned']
+            existing_record.eligibility_signature = metrics.get(
+                "eligibility_signature"
+            )
             existing_record.calculation_duration_seconds = duration_seconds
             logger.debug(
                 "Updated existing breadth record for %s %s",
@@ -895,6 +743,7 @@ class BreadthCalculatorService:
                 stocks_up_13pct_34days=metrics['stocks_up_13pct_34days'],
                 stocks_down_13pct_34days=metrics['stocks_down_13pct_34days'],
                 total_stocks_scanned=metrics['total_stocks_scanned'],
+                eligibility_signature=metrics.get("eligibility_signature"),
                 calculation_duration_seconds=duration_seconds,
             )
             self.db.add(breadth_record)
@@ -936,6 +785,9 @@ class BreadthCalculatorService:
                 existing_record.stocks_up_13pct_34days = metrics['stocks_up_13pct_34days']
                 existing_record.stocks_down_13pct_34days = metrics['stocks_down_13pct_34days']
                 existing_record.total_stocks_scanned = metrics['total_stocks_scanned']
+                existing_record.eligibility_signature = metrics.get(
+                    "eligibility_signature"
+                )
                 existing_record.calculation_duration_seconds = metrics.get('calculation_duration_seconds')
             else:
                 self.db.add(MarketBreadth(
@@ -954,6 +806,7 @@ class BreadthCalculatorService:
                     stocks_up_13pct_34days=metrics['stocks_up_13pct_34days'],
                     stocks_down_13pct_34days=metrics['stocks_down_13pct_34days'],
                     total_stocks_scanned=metrics['total_stocks_scanned'],
+                    eligibility_signature=metrics.get("eligibility_signature"),
                     calculation_duration_seconds=metrics.get('calculation_duration_seconds'),
                 ))
 

@@ -1,0 +1,14 @@
+{
+  "market": "KR",
+  "mic": "XKRX",
+  "year": 2030,
+  "status": "provisional",
+  "source": {
+    "name": "exchange-calendars generated schedule",
+    "url": "https://github.com/gerrymanoim/exchange_calendars",
+    "checked_at": "2026-08-08"
+  },
+  "provider": "exchange_calendars",
+  "provider_version": "4.11.1",
+  "sessions": ["2030-01-02"]
+}

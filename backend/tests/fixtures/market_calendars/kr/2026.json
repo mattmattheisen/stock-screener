@@ -1,0 +1,13 @@
+{
+  "market": "KR",
+  "mic": "XKRX",
+  "year": 2026,
+  "status": "official",
+  "source": {
+    "name": "Korea Exchange market calendar",
+    "url": "https://global.krx.co.kr/contents/GLB/05/0501/0501060000/GLB0501060000.jsp",
+    "checked_at": "2026-08-08"
+  },
+  "sessions": ["2026-01-02", "2026-12-30"],
+  "close_exceptions": {"2026-12-30": "15:00:00"}
+}

@@ -11,15 +11,12 @@ from typing import Any, Literal, Mapping, Sequence
 from app.config import settings
 from app.database import SessionLocal
 from app.domain.markets import market_registry
-from app.domain.providers.price_symbol_support import split_supported_price_symbols
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
 from app.infra.db.models.feature_store import FeatureRunPointer
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
-from app.models.market_breadth import MarketBreadth
-from app.models.stock_universe import StockUniverse
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
@@ -37,13 +34,12 @@ from app.services.static_daily_price_refresh_service import (
     StaticDailyPriceRefreshService,
     static_daily_price_refresh_batch_size as _static_daily_price_refresh_batch_size,
 )
-from app.services.static_breadth_assessment import (
-    classify_static_breadth_backfill,
-    static_breadth_backfill_needs_scan_counts,
-    static_breadth_row_has_accepted_coverage,
+from app.services.static_breadth_eligibility import (
+    classify_static_breadth_eligibility,
 )
-from app.services.static_market_coverage_policy import (
-    static_breadth_minimum_validated_scan_count,
+from app.services.static_breadth_history_coordinator import (
+    StaticBreadthHistoryCoordinator,
+    StaticBreadthHistoryRequest,
 )
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
@@ -630,192 +626,6 @@ def _ensure_group_rank_history(
         market=market,
         formula_version=formula_version,
     )
-
-
-def _ensure_breadth_history(
-    *,
-    as_of_date: date,
-    market: str = STATIC_DEFAULT_MARKET,
-    min_trading_days: int = STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS,
-    lookback_days: int = STATIC_BREADTH_HISTORY_LOOKBACK_DAYS,
-) -> dict[str, Any]:
-    """Backfill recent breadth history so static snapshots include multi-day context."""
-    normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
-    start_date = as_of_date - timedelta(days=lookback_days)
-    desired_dates = _generate_trading_dates(start_date, as_of_date, market=normalized_market)
-    target_dates = desired_dates[-min_trading_days:] if min_trading_days > 0 else desired_dates
-    if not target_dates:
-        return {
-            "status": "skipped",
-            "market": normalized_market,
-            "as_of_date": as_of_date.isoformat(),
-            "lookback_start_date": start_date.isoformat(),
-            "target_trading_days": 0,
-            "recomputed_dates": 0,
-        }
-
-    with SessionLocal() as db:
-        existing_rows = (
-            db.query(MarketBreadth)
-            .filter(
-                MarketBreadth.date >= target_dates[0],
-                MarketBreadth.date <= as_of_date,
-                MarketBreadth.market == normalized_market,
-            )
-            .all()
-        )
-        existing_by_date = {row.date: row for row in existing_rows}
-        existing_dates = set(existing_by_date)
-        missing_dates = [calc_date for calc_date in target_dates if calc_date not in existing_dates]
-        supported_symbol_count = _static_breadth_supported_symbol_count(
-            db,
-            market=normalized_market,
-        )
-        minimum_validated_stocks = static_breadth_minimum_validated_scan_count(
-            supported_symbol_count,
-            market=normalized_market,
-        )
-        if supported_symbol_count <= 0:
-            incomplete_existing_dates = list(target_dates)
-        else:
-            incomplete_existing_dates = [
-                calc_date
-                for calc_date in target_dates
-                if (
-                    calc_date in existing_by_date
-                    and not static_breadth_row_has_accepted_coverage(
-                        existing_by_date[calc_date].total_stocks_scanned,
-                        minimum_stocks_scanned=minimum_validated_stocks,
-                    )
-                )
-            ]
-        repair_dates = sorted(set(missing_dates + incomplete_existing_dates))
-        recompute_dates = _static_breadth_recompute_dates(
-            target_dates=target_dates,
-            repair_dates=repair_dates,
-            as_of_date=as_of_date,
-        )
-
-        if (
-            len(recompute_dates) == 1
-            and as_of_date in existing_dates
-            and as_of_date not in incomplete_existing_dates
-        ):
-            print(
-                f"[static-breadth] Existing breadth history already covers the last "
-                f"{len(target_dates)} trading days through {as_of_date}.",
-                flush=True,
-            )
-            return {
-                "status": "skipped",
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "target_trading_days": len(target_dates),
-                "missing_dates": 0,
-                "recomputed_dates": 0,
-                "validated_existing_dates": len(target_dates),
-                "target_symbols": supported_symbol_count,
-                "minimum_stocks_scanned": minimum_validated_stocks,
-            }
-
-        print(
-            f"[static-breadth] Recomputing {len(recompute_dates)} dates "
-            f"({len(missing_dates)} missing) to ensure {len(target_dates)} trading-day history "
-            f"through {as_of_date}.",
-            flush=True,
-        )
-        stats = BreadthCalculatorService(
-            db,
-            get_price_cache(),
-            market=normalized_market,
-        ).backfill_range(
-            start_date=recompute_dates[0],
-            end_date=recompute_dates[-1],
-            trading_dates=recompute_dates,
-            cache_only=True,
-            exclude_unsupported_price_symbols=True,
-            required_as_of_date=as_of_date,
-        )
-        scanned_by_date: dict[date, int] = {}
-        if static_breadth_backfill_needs_scan_counts(
-            stats,
-            minimum_stocks_scanned=minimum_validated_stocks,
-        ):
-            backfill_rows = (
-                db.query(MarketBreadth)
-                .filter(
-                    MarketBreadth.date.in_(target_dates),
-                    MarketBreadth.market == normalized_market,
-                )
-                .all()
-            )
-            scanned_by_date = {
-                row.date: int(row.total_stocks_scanned or 0)
-                for row in backfill_rows
-            }
-        assessment = classify_static_breadth_backfill(
-            stats=stats,
-            dates=target_dates,
-            as_of_date=as_of_date,
-            minimum_stocks_scanned=minimum_validated_stocks,
-            scanned_by_date=scanned_by_date,
-        )
-        stats.update(assessment.diagnostics())
-        stats.update(
-            {
-                "status": assessment.status,
-                "market": normalized_market,
-                "as_of_date": as_of_date.isoformat(),
-                "lookback_start_date": start_date.isoformat(),
-                "target_trading_days": len(target_dates),
-                "missing_dates": len(missing_dates),
-                "incomplete_existing_dates": len(incomplete_existing_dates),
-                "recomputed_dates": len(recompute_dates),
-            }
-        )
-        if assessment.error:
-            stats["error"] = assessment.error
-        return stats
-
-
-def _static_breadth_supported_symbol_count(db, *, market: str) -> int:
-    symbols = [
-        symbol
-        for symbol, in db.query(StockUniverse.symbol)
-        .filter(
-            StockUniverse.is_active.is_(True),
-            StockUniverse.market == market,
-        )
-        .all()
-    ]
-    supported_symbols, _unsupported_symbols = split_supported_price_symbols(symbols)
-    return len(supported_symbols)
-
-
-def _static_breadth_recompute_dates(
-    *,
-    target_dates: Sequence[date],
-    repair_dates: Sequence[date],
-    as_of_date: date,
-) -> list[date]:
-    recompute_dates = set(repair_dates)
-    index_by_date = {
-        calc_date: index
-        for index, calc_date in enumerate(target_dates)
-    }
-    for repair_date in repair_dates:
-        repair_index = index_by_date.get(repair_date)
-        if repair_index is None:
-            continue
-        affected_end_index = min(
-            len(target_dates),
-            repair_index + STATIC_BREADTH_RATIO_RECOMPUTE_TRADING_DAYS + 1,
-        )
-        recompute_dates.update(target_dates[repair_index:affected_end_index])
-
-    recompute_dates.add(as_of_date)
-    return sorted(recompute_dates)
 
 
 def _static_breadth_ready_for_exposure(result: Any) -> bool:
@@ -1499,6 +1309,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     for warning in (*refresh_warnings, *result.warnings):
         print(f"  - warning: {warning}")
     return 0
+
+
+def _ensure_breadth_history(
+    *,
+    as_of_date: date,
+    market: str = STATIC_DEFAULT_MARKET,
+    min_trading_days: int = STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS,
+    lookback_days: int = STATIC_BREADTH_HISTORY_LOOKBACK_DAYS,
+) -> dict[str, Any]:
+    """Backfill recent breadth history through the canonical coordinator."""
+    coordinator = StaticBreadthHistoryCoordinator(
+        session_factory=SessionLocal,
+        trading_dates=lambda start, end, normalized_market: _generate_trading_dates(
+            start,
+            end,
+            market=normalized_market,
+        ),
+        eligibility_classifier=classify_static_breadth_eligibility,
+        calculator_factory=lambda db, price_cache, normalized_market: (
+            BreadthCalculatorService(
+                db,
+                price_cache,
+                market=normalized_market,
+            )
+        ),
+        price_cache_factory=get_price_cache,
+        message_sink=lambda message: print(
+            f"[static-breadth] {message}",
+            flush=True,
+        ),
+    )
+    return coordinator.ensure(
+        StaticBreadthHistoryRequest(
+            market=market,
+            as_of_date=as_of_date,
+            min_trading_days=min_trading_days,
+            lookback_days=lookback_days,
+        )
+    ).as_dict()
 
 
 if __name__ == "__main__":

@@ -354,6 +354,80 @@ gh workflow run static-site.yml \
 
 The JSON map is per Market; omitted Markets remain on `balanced-horizon-percentile-v2`, allowing an isolated rollback without changing other current or fallback artifacts. Verify live/static metadata says `legacy-linear-v1` for the restored Market. Retain balanced rows for diagnosis; rollback changes pointers, not history. A later return to balanced static output must use a newly validated live activation and omit that Market from `rs_formula_overrides`.
 
+## Market Calendar Maintenance
+
+Calendar maintenance is an **annual/on-publication** operator responsibility. The
+Saturday **weekly audit** only validates the checked-in manifests and warns; it
+does not scrape exchange sites or change calendar data.
+
+Reviewed official facts live in
+`backend/data/market_calendars/inputs/reviewed_official_calendars.json`. The
+builder validates that file and deterministically compiles it into
+`backend/data/market_calendars/index.json` plus the annual files below it. An
+`official` annual file is authoritative at runtime. A `provisional` file is
+generated from the pinned Python calendar provider and exists for planning and
+review through 2030; it does not extend `verified_through`.
+
+The audit emits the active **180 / 90 / 60 / 30 / expired** warning band. These
+warnings are non-blocking in both the weekly workflow and static-site workflow.
+Runtime access hard-fails only when the requested calculation date is later than
+that Market's `verified_through`; historical lookbacks before the checked-in
+years remain provider-backed.
+
+Run the audit locally from `backend/`:
+
+```bash
+../backend/venv/bin/python -m app.scripts.audit_market_calendars
+../backend/venv/bin/python -m app.scripts.audit_market_calendars \
+  --as-of 2026-08-08 --github-actions
+```
+
+When a first-party exchange publishes a new calendar:
+
+1. In `inputs/reviewed_official_calendars.json`, update the Market's source,
+   `official_through`, complete weekday-closure array, and any shortened
+   sessions under `close_exceptions` for the new year. Exceptional close values
+   are ISO times in the exchange's local timezone. Use an explicit empty array
+   when the reviewed publication has no weekday closures; the optional
+   `close_exceptions` year may be omitted when it has no shortened sessions.
+2. Compile and review the official year:
+
+```bash
+../backend/venv/bin/python -m app.scripts.build_market_calendar_data
+```
+
+3. Review the input and generated annual/index diff. Advance coverage only
+   through the last date supported by the official publication; do not hand-edit
+   the generated index or annual files.
+4. Inspect and test the change:
+
+```bash
+git diff -- backend/data/market_calendars
+../backend/venv/bin/python -m app.scripts.audit_market_calendars
+../backend/venv/bin/pytest tests/unit/domain/markets/test_calendar_coverage.py \
+  tests/unit/test_market_calendar_data.py \
+  tests/unit/test_market_calendar_service.py -q
+```
+
+Regenerate a Market's provisional years after a pinned provider upgrade, then
+inspect the diff. Select a start year after that Market's last official file
+(the generator refuses to overwrite official years). The repository-wide
+builder also applies reviewed project rules such as Singapore's fixed holidays.
+`--check` is the CI drift check and makes no changes:
+
+```bash
+../backend/venv/bin/python -m app.scripts.generate_market_calendar_manifests \
+  --market HK --status provisional --start-year 2027 --through-year 2030
+../backend/venv/bin/python -m app.scripts.build_market_calendar_data --check
+```
+
+For an emergency closure, locate and archive the first-party exchange notice,
+add the closed date to that year's reviewed closure array, update the source and
+check date, rebuild, run the diff and calendar tests above, then publish through
+the normal review path. If only market-data feeds show a gap,
+treat **no-bar data** as evidence for investigation, not a closure authority;
+never infer an exchange holiday from provider absence alone.
+
 ## Common Recovery Paths
 
 ### Bootstrap Is Slow
