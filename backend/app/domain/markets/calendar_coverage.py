@@ -213,6 +213,13 @@ def _load_market_coverage(
         raise CalendarManifestError(
             f"{market}.verified_through exceeds its last official year"
         )
+    for year in range(official_years[0], verified_through.year + 1):
+        annual = annual_by_year.get(year)
+        if annual is None or annual.status != "official":
+            raise CalendarManifestError(
+                f"{market}.verified_through requires an official calendar "
+                f"manifest for {year}"
+            )
     if provisional_through.year not in annual_by_year:
         raise CalendarManifestError(
             f"{market} has no annual manifest through {provisional_through.year}"

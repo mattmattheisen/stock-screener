@@ -75,6 +75,35 @@ def test_registry_rejects_verified_through_after_last_official_year(
         )
 
 
+def test_registry_rejects_provisional_gap_before_verified_horizon(
+    tmp_path: Path,
+) -> None:
+    root = _copy_fixture(tmp_path)
+
+    def promote_2028(payload) -> None:
+        payload["status"] = "official"
+        payload.pop("provider")
+        payload.pop("provider_version")
+
+    _mutate_json(root / "kr" / "2028.provisional.json", promote_2028)
+    _mutate_json(
+        root / "minimal-index.json",
+        lambda payload: payload["markets"]["KR"].update(
+            {"verified_through": "2028-12-31"}
+        ),
+    )
+
+    with pytest.raises(
+        CalendarManifestError,
+        match="official calendar manifest for 2027",
+    ):
+        CalendarCoverageRegistry.load(
+            root,
+            index_name="minimal-index.json",
+            market_catalog=_kr_catalog(),
+        )
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
