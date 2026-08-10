@@ -4,15 +4,15 @@ from types import MappingProxyType
 import pandas as pd
 import pytest
 
-from app.domain.markets.calendar_policy import (
-    CalendarProvider,
-    CalendarSessionOverride,
-)
 from app.domain.markets.calendar_coverage import (
     AnnualCalendarManifest,
     CalendarCoverageRegistry,
     CalendarSource,
     MarketCalendarCoverage,
+)
+from app.domain.markets.calendar_policy import (
+    CalendarProvider,
+    CalendarSessionOverride,
 )
 from app.domain.markets.catalog import get_market_catalog
 from app.services import market_calendar_service as calendar_module
@@ -309,6 +309,23 @@ def test_market_calendar_service_supports_mic_specific_fact_lookup():
     )
     assert service.market_timezone("IN", mic="XBOM").key == bombay_facts.timezone
     assert service.default_currency("IN", mic="XBOM") == bombay_facts.default_currency
+
+
+def test_calendar_data_root_env_overrides_default(monkeypatch, tmp_path):
+    repository_calendar_root = MarketCalendarService.CALENDAR_DATA_ROOT
+    monkeypatch.setattr(
+        MarketCalendarService,
+        "CALENDAR_DATA_ROOT",
+        tmp_path / "missing-default",
+    )
+    monkeypatch.setenv(
+        "MARKET_CALENDAR_DATA_ROOT",
+        str(repository_calendar_root),
+    )
+
+    service = MarketCalendarService()
+
+    assert service.is_trading_day("US", date(2026, 1, 2)) is True
 
 
 def test_last_completed_trading_day_before_close_returns_previous_session():
