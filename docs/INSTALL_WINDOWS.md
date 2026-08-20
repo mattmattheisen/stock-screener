@@ -1,165 +1,212 @@
 # Windows Installation
 
-> Archived deployment path: Windows desktop packaging is no longer part of the supported mainline deployment model. Keep this guide only for historical reference while the repository converges on the server-only path.
+Docker Desktop is the recommended way to run StockScreenClaude on Windows. It provides the same PostgreSQL, Redis, API, worker, scheduler, and frontend topology used by supported server deployments.
 
-Three options for running StockScreenClaude on Windows, from simplest to most flexible.
+The former Windows desktop installer and portable application are archived and are no longer built from the main branch.
 
-## Option 1: Download the Installer (Recommended)
-
-The easiest way to get started. No development tools required.
-
-1. Go to [GitHub Releases](../../releases)
-2. Download `StockScanner-Setup.exe` from the latest release
-3. Run the installer and follow the prompts
-4. Launch **StockScanner** from the Start Menu or desktop shortcut
-
-The app opens in your default browser at `http://127.0.0.1:8765`. Everything runs locally on your machine.
-
-**What gets installed:**
-- App files under `%LOCALAPPDATA%\StockScanner`
-- Local application state under `%LOCALAPPDATA%\StockScanner`
-- No Redis or Celery required (desktop mode handles everything in-process)
-
-**First launch:** The app seeds a starter universe from bundled CSV data so you can start scanning immediately. Regular refresh runs replace the starter baseline with live data over time.
-
-> A portable zip (`StockScanner-Portable.zip`) is also available if you prefer not to install.
-
-## Option 2: Build the Desktop Bundle
-
-Use this if you want to build the installer yourself from source.
+## Recommended: Docker Desktop
 
 ### Prerequisites
-- Python 3.11
-- Node.js 18+
-- PowerShell
-- Inno Setup 6 (optional, for the `.exe` installer)
 
-### Build Steps
+- Windows 10 or 11 with WSL2 enabled
+- [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) using Linux containers
+- Git for Windows, including Git Bash
+- Python 3.11 or newer on `PATH` for the market-aware Compose wrapper
 
-```powershell
-# Build the frontend
-cd .\frontend
-npm ci
-$env:VITE_API_URL = "/api"
-npm run build
-Remove-Item Env:VITE_API_URL
+### Install
 
-# Build the PyInstaller bundle
-cd ..
-py -3.11 -m venv .\backend\venv
-.\backend\venv\Scripts\Activate.ps1
-pip install -r .\backend\requirements-desktop.txt
-pyinstaller .\backend\desktop\StockScanner.spec --noconfirm --clean
-```
-
-### Artifacts
-- One-folder bundle: `dist\StockScanner\StockScanner.exe`
-- Optional installer: `dist\installer\StockScanner-Setup.exe` (see below)
-
-### Verify the Build
+Clone the repository and open PowerShell in the repository root:
 
 ```powershell
-Start-Process -FilePath .\dist\StockScanner\StockScanner.exe -ArgumentList "--no-browser","--port","8765"
-python .\backend\desktop\smoke_test.py --base-url http://127.0.0.1:8765
-.\dist\StockScanner\StockScanner.exe --stop
+Copy-Item .env.docker.example .env
+notepad .env
 ```
 
-### Create the Installer (Optional)
+At minimum, set these values in `.env`:
+
+```dotenv
+SERVER_AUTH_PASSWORD=choose-a-long-random-password
+ENABLED_MARKETS=US
+```
+
+API keys are optional unless you enable the corresponding chatbot or data-provider features.
+
+Start the complete stack through the market-aware Compose wrapper:
 
 ```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" .\backend\desktop\windows_installer.iss
+$env:STOCKSCREEN_PYTHON = "python"
+bash ./scripts/docker-compose-enabled-markets.sh up -d
 ```
 
-## Option 3: Source Deployment (Full Stack)
+If Python is installed under a different command or path, set `STOCKSCREEN_PYTHON` to that executable instead.
 
-Use this when you want the full backend + frontend + worker stack on a Windows host, with Redis, Celery, and all background tasks.
+Open [http://localhost](http://localhost) and sign in with `SERVER_AUTH_PASSWORD`.
+
+The wrapper starts only the market workers selected by `ENABLED_MARKETS`. For example, changing the value to `US,HK` and running the command again creates the US and Hong Kong market workers while retaining the shared services.
+
+### Common Docker Commands
+
+Run these commands from the repository root:
+
+```powershell
+# Show service status
+$env:STOCKSCREEN_PYTHON = "python"
+bash ./scripts/docker-compose-enabled-markets.sh ps
+
+# Follow logs
+bash ./scripts/docker-compose-enabled-markets.sh logs -f
+
+# Apply configuration or image changes
+bash ./scripts/docker-compose-enabled-markets.sh up -d
+
+# Stop and remove the stack
+bash ./scripts/docker-compose-enabled-markets.sh down
+```
+
+Application state is stored under `./data` and in Docker volumes. Removing containers with `down` does not delete named volumes; do not add `--volumes` unless you intend to delete the PostgreSQL database.
+
+For reverse proxies, release images, HTTPS, backups, and upgrades, continue with the [Docker deployment guide](INSTALL_DOCKER.md).
+
+## Advanced: Native PowerShell Deployment
+
+Use this path only when Docker Desktop is unavailable or when you need to operate each service directly. Native deployment requires you to maintain PostgreSQL, Redis, the API, Celery workers, Celery Beat, and a frontend web server independently.
 
 ### Prerequisites
+
 - Python 3.11
-- Node.js 18+
-- Redis reachable from Windows (via Docker Desktop, WSL2, or a local service)
+- Node.js 18 or newer
+- PostgreSQL reachable from Windows
+- Redis reachable from Windows
+- PowerShell 5.1 or newer
+
+Redis can run in WSL2, as a Windows service, or in a standalone Docker container. The backend and every Celery process must use the same PostgreSQL and Redis configuration.
 
 ### Backend Setup
+
+From the repository root:
 
 ```powershell
 py -3.11 -m venv .\backend\venv
 .\backend\venv\Scripts\Activate.ps1
 pip install -r .\backend\requirements.txt
 Copy-Item .\backend\.env.example .\backend\.env
+notepad .\backend\.env
 ```
 
-Edit `backend\.env` with your API keys and a PostgreSQL `DATABASE_URL`.
+Configure at least:
 
-### Start the Backend
+```dotenv
+DATABASE_URL=postgresql://user:password@localhost/stockscanner
+REDIS_HOST=localhost
+REDIS_PORT=6379
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/1
+SERVER_AUTH_PASSWORD=choose-a-long-random-password
+ENABLED_MARKETS=US
+```
+
+### Start the API
+
+In one PowerShell window:
 
 ```powershell
-cd .\backend
+Set-Location .\backend
 .\venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### Start Celery Workers (Separate PowerShell Windows)
+The API startup applies the current database migrations.
+
+### Start Celery Workers
+
+In a second PowerShell window:
 
 ```powershell
-cd .\backend
-.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q celery -n general@$env:COMPUTERNAME
-.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q data_fetch -n datafetch@$env:COMPUTERNAME
-.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q user_scans -n userscans@$env:COMPUTERNAME
-.\venv\Scripts\celery -A app.celery_app beat --loglevel=info
+Set-Location .\backend
+.\start_celery.ps1
 ```
+
+The launcher reads `ENABLED_MARKETS`, validates it against the backend market catalog, and starts the current queue topology:
+
+- one general worker for `celery`
+- one concurrency-one global worker for the enabled `data_fetch_*` queues
+- one safety-net worker for `user_scans_shared`
+- one `market_jobs_<market>` worker per enabled market
+- one `user_scans_<market>` worker per enabled market
+
+To override the configured markets for one run:
+
+```powershell
+.\start_celery.ps1 -EnabledMarkets "US,HK"
+```
+
+Keep the `datafetch-global@%h` worker name. The backend uses that prefix during startup to inspect stale locks across all market scopes.
+
+### Start Celery Beat
+
+In a third PowerShell window:
+
+```powershell
+Set-Location .\backend
+.\venv\Scripts\python -m celery -A app.celery_app beat --loglevel=info
+```
+
+Run only one Beat scheduler for a deployment, or scheduled work will be submitted more than once.
 
 ### Build and Serve the Frontend
 
 ```powershell
-cd .\frontend
+Set-Location .\frontend
 npm ci
 npm run build
 ```
 
-Serve `frontend\dist` with IIS, Caddy, or another static file server and reverse proxy `/api` to `http://127.0.0.1:8000`.
-
-## Desktop Runtime Notes
-
-### Bootstrap Options
-
-By default, desktop mode skips heavy full-universe refresh for fast first-run startup. To enable the heavier bootstrap:
-
-```powershell
-$env:DESKTOP_BOOTSTRAP_REFRESH_UNIVERSE = "true"
-$env:DESKTOP_BOOTSTRAP_FUNDAMENTALS_LIMIT = "25"
-.\dist\StockScanner\StockScanner.exe
-```
-
-### Launcher Arguments
-
-| Argument | Description |
-|----------|-------------|
-| `--no-browser` | Start without opening a browser window |
-| `--port 8765` | Use a custom port |
-| `--stop` | Stop a running desktop instance |
-
-### Key Files
-
-| File | Purpose |
-|------|---------|
-| `backend/desktop/launcher.py` | Desktop app launcher |
-| `backend/desktop/stop.py` | Stop helper |
-| `backend/desktop/smoke_test.py` | Post-build verification |
-| `backend/desktop/windows_installer.iss` | Inno Setup installer script |
-| `backend/desktop/StockScanner.spec` | PyInstaller spec for Windows |
+Serve `frontend\dist` with IIS, Caddy, or another static web server. Route `/api` to `http://127.0.0.1:8000`. For local frontend development, use `npm run dev` instead.
 
 ## Troubleshooting
 
-### PowerShell blocks virtualenv activation
+### PowerShell blocks virtual environment or worker scripts
+
+Allow local scripts for the current PowerShell process only:
+
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\backend\venv\Scripts\Activate.ps1
 ```
 
-### Redis not available (Source Deployment)
-Install Redis via one of:
-- **Docker Desktop:** `docker run -d -p 6379:6379 redis:7-alpine`
-- **WSL2:** `sudo apt install redis-server && redis-server`
-- **Windows Redis:** Download from [tporadowski/redis](https://github.com/tporadowski/redis/releases)
+### A worker exits immediately
 
-### App shows empty data on first launch
-This is normal. The starter payload provides a minimal dataset. Run a scan or wait for the background refresh to populate data from live sources.
+Confirm that:
+
+- PostgreSQL and Redis are running and reachable.
+- `backend\.env` contains the connection settings shown above.
+- `backend\venv` exists and contains the installed requirements.
+- every value in `ENABLED_MARKETS` is a supported market code.
+- no other worker on the host uses the same Celery node name.
+
+The PowerShell launcher stops the other workers it started if any worker exits unexpectedly. Correct the reported error and restart the launcher.
+
+### A data-fetch lock appears stuck
+
+Locks normally release in task cleanup and also expire after the configured TTL. Before forcing a release, verify that no data-fetch task is still running.
+
+After signing in, inspect:
+
+```text
+GET /api/v1/data-fetch/status
+```
+
+If the reported task is definitely no longer running, an authenticated administrator can use:
+
+```text
+POST /api/v1/data-fetch/force-release-lock
+```
+
+Force release is unsafe while a task is active because it permits overlapping provider work. The `datafetch-global@%h` worker also checks heartbeat-backed stale locks when it starts.
+
+### Docker Desktop cannot start the stack
+
+Check that Docker Desktop is using Linux containers and that WSL2 integration is enabled. Then inspect resolved services and logs:
+
+```powershell
+bash ./scripts/docker-compose-enabled-markets.sh config --services
+bash ./scripts/docker-compose-enabled-markets.sh logs --tail 200
+```

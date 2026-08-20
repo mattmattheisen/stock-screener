@@ -71,6 +71,19 @@ def test_local_celery_script_consumes_every_supported_market_queue():
     assert "case \"$MARKET_UPPER\"" not in script
 
 
+def test_windows_celery_script_uses_current_market_scoped_worker_topology():
+    script = (ROOT / "backend" / "start_celery.ps1").read_text(encoding="utf-8")
+
+    assert "from app.tasks.market_queues import SUPPORTED_MARKETS" in script
+    assert "from app.tasks.market_queues import all_data_fetch_queues" in script
+    assert "datafetch-global@%h" in script
+    assert "user_scans_shared" in script
+    assert '"market_jobs_$marketLower"' in script
+    assert '"user_scans_$marketLower"' in script
+    assert '"data_fetch"' not in script
+    assert '"user_scans"' not in script
+
+
 def test_enabled_market_compose_wrapper_reads_env_files_and_preserves_profiles():
     script = (ROOT / "scripts" / "docker-compose-enabled-markets.sh").read_text(encoding="utf-8")
 
