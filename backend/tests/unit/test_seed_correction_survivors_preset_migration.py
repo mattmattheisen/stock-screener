@@ -185,3 +185,26 @@ def test_downgrade_preserves_a_user_edited_seeded_row():
     engine.dispose()
 
     assert remaining == [("Correction Survivors", "My edited survivor screen")]
+
+
+def test_downgrade_preserves_a_user_reordered_seeded_row():
+    engine = sa.create_engine("sqlite:///:memory:")
+    _make_filter_presets_table(engine)
+    migration = _load_migration()
+
+    with engine.begin() as connection:
+        _run(migration, connection, "upgrade")
+        connection.execute(
+            sa.text(
+                "UPDATE filter_presets SET position = 42 "
+                "WHERE name = 'Correction Survivors'"
+            )
+        )
+        _run(migration, connection, "downgrade")
+        remaining = connection.execute(
+            sa.text("SELECT name, position FROM filter_presets")
+        ).all()
+
+    engine.dispose()
+
+    assert remaining == [("Correction Survivors", 42)]

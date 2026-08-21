@@ -124,6 +124,7 @@ def _audit_table_ref() -> sa.Table:
         _AUDIT_TABLE_NAME,
         metadata,
         sa.Column("filter_preset_id", sa.Integer, primary_key=True),
+        sa.Column("seed_position", sa.Integer, nullable=False),
     )
 
 
@@ -157,6 +158,7 @@ def _seed_preset(bind) -> None:
         op.create_table(
             _AUDIT_TABLE_NAME,
             sa.Column("filter_preset_id", sa.Integer, primary_key=True),
+            sa.Column("seed_position", sa.Integer, nullable=False),
         )
 
     if existing_id is not None:
@@ -176,7 +178,12 @@ def _seed_preset(bind) -> None:
         )
     )
     inserted_id = int(result.inserted_primary_key[0])
-    bind.execute(_audit_table_ref().insert().values(filter_preset_id=inserted_id))
+    bind.execute(
+        _audit_table_ref().insert().values(
+            filter_preset_id=inserted_id,
+            seed_position=next_position,
+        )
+    )
 
 
 def _create_indexes() -> None:
@@ -201,18 +208,21 @@ def _delete_unchanged_seed(bind) -> None:
 
     table = _filter_presets_table()
     audit = _audit_table_ref()
-    inserted_ids = bind.execute(sa.select(audit.c.filter_preset_id)).scalars().all()
+    audited_rows = bind.execute(
+        sa.select(audit.c.filter_preset_id, audit.c.seed_position)
+    ).all()
     preset = CORRECTION_SURVIVORS_PRESET
-    if inserted_ids:
+    for inserted_id, seed_position in audited_rows:
         bind.execute(
             table.delete().where(
                 sa.and_(
-                    table.c.id.in_(inserted_ids),
+                    table.c.id == inserted_id,
                     table.c.name == preset["name"],
                     table.c.description == preset["description"],
                     table.c.filters == _build_filters_payload(),
                     table.c.sort_by == preset["sort_by"],
                     table.c.sort_order == preset["sort_order"],
+                    table.c.position == seed_position,
                 )
             )
         )
