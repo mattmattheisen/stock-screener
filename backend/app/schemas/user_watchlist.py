@@ -4,6 +4,7 @@ from typing import Literal, Optional, List, Dict
 from datetime import datetime
 
 from .common import PriceChangeBounds
+from .opportunity_state import OpportunityStateResponse
 
 
 # ================= Watchlist Schemas =================
@@ -190,6 +191,10 @@ class WatchlistStewardshipItem(BaseModel):
     days_until_earnings: Optional[int] = None
     theme_support: Optional[str] = None
     reasons: List[str] = []
+    correction_survivor: Optional[bool] = None
+    resilience_score: Optional[float] = None
+    action_state: Optional[str] = None
+    opportunity_state: Optional[OpportunityStateResponse] = None
 
 
 class WatchlistStewardshipResponse(BaseModel):

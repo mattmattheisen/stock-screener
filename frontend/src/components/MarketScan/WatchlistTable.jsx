@@ -22,6 +22,8 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import RSSparkline from '../Scan/RSSparkline';
 import PriceSparkline from '../Scan/PriceSparkline';
+import ActionStateBadge from '../shared/ActionStateBadge';
+import OpportunityEvidenceDrawer from '../shared/OpportunityEvidenceDrawer';
 import PriceChangeBar from './PriceChangeBar';
 import { removeItem } from '../../api/userWatchlists';
 
@@ -37,6 +39,7 @@ const PRICE_PERIODS = [
 
 function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, onOpenChart }) {
   const [hoveredRow, setHoveredRow] = useState(null);
+  const [opportunityRow, setOpportunityRow] = useState(null);
   const queryClient = useQueryClient();
 
   const removeMutation = useMutation({
@@ -65,14 +68,16 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
   }
 
   return (
-    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 'calc(100vh - 180px)' }}>
-      <Table size="small" stickyHeader>
-        <TableHead>
-          <TableRow sx={{ '& th': { py: 0.5, fontSize: '0.75rem' } }}>
+    <>
+      <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 'calc(100vh - 180px)' }}>
+        <Table size="small" stickyHeader>
+          <TableHead>
+            <TableRow sx={{ '& th': { py: 0.5, fontSize: '0.75rem' } }}>
             <TableCell width={28} sx={{ bgcolor: 'background.paper', px: 0.5 }}></TableCell>
             <TableCell sx={{ bgcolor: 'background.paper', width: 55, maxWidth: 55, px: 0.5 }}>Symbol</TableCell>
             <TableCell sx={{ bgcolor: 'background.paper', width: 150, maxWidth: 150, px: 0.5 }}>Company</TableCell>
-            <TableCell sx={{ bgcolor: 'background.paper', width: 110, px: 0.5 }}>Status</TableCell>
+            <TableCell sx={{ bgcolor: 'background.paper', width: 110, px: 0.5 }}>Stewardship</TableCell>
+            <TableCell align="center" sx={{ bgcolor: 'background.paper', width: 110 }}>Action</TableCell>
             <TableCell align="center" sx={{ bgcolor: 'background.paper', width: 60 }}>Score Δ</TableCell>
             <TableCell align="center" sx={{ bgcolor: 'background.paper', width: 60 }}>RS Δ</TableCell>
             <TableCell align="center" sx={{ bgcolor: 'background.paper', width: 80 }}>Earnings</TableCell>
@@ -92,10 +97,10 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
                 {period.label}
               </TableCell>
             ))}
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {items.map((stock) => {
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {items.map((stock) => {
             const stewardship = stewardshipBySymbol[stock.symbol] || {};
             return (
               <TableRow
@@ -162,6 +167,17 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
                   />
                 </TableCell>
                 <TableCell align="center">
+                  <ActionStateBadge
+                    state={stewardship.action_state}
+                    onClick={stewardship.opportunity_state
+                      ? (event) => {
+                        event.stopPropagation();
+                        setOpportunityRow({ ...stock, ...stewardship });
+                      }
+                      : undefined}
+                  />
+                </TableCell>
+                <TableCell align="center">
                   <Typography variant="caption">{stewardship.score_delta?.toFixed?.(1) ?? '-'}</Typography>
                 </TableCell>
                 <TableCell align="center">
@@ -211,10 +227,17 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
                 })}
               </TableRow>
             );
-          })}
-        </TableBody>
-      </Table>
-    </TableContainer>
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      <OpportunityEvidenceDrawer
+        open={Boolean(opportunityRow)}
+        row={opportunityRow}
+        onClose={() => setOpportunityRow(null)}
+        opportunityTelemetrySurface="watchlist"
+      />
+    </>
   );
 }
 

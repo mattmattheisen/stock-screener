@@ -9,6 +9,10 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.domain.scanning.opportunity_state import (
+    opportunity_result_from_projection,
+    overlay_stewardship_state,
+)
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse
@@ -27,6 +31,12 @@ from app.utils.market_hours import eastern_day_bounds_utc, to_eastern_date
 
 SUPPORTED_THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 THEME_SUPPORT_LOOKBACK_DAYS = 7
+OPPORTUNITY_PROJECTION_KEYS = (
+    "correction_survivor",
+    "resilience_score",
+    "action_state",
+    "opportunity_state",
+)
 
 
 def _round_or_none(value: float | None, digits: int = 4) -> float | None:
@@ -60,6 +70,28 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _overlaid_opportunity_projection(
+    current_row: StockFeatureDaily,
+    *,
+    stewardship_status: str,
+    prior_run_available: bool,
+) -> dict[str, object]:
+    details = current_row.details_json or {}
+    if "opportunity_state" not in details:
+        return {}
+
+    current_result = opportunity_result_from_projection(
+        {key: details.get(key) for key in OPPORTUNITY_PROJECTION_KEYS}
+    )
+    if current_result is None:
+        return {}
+    return overlay_stewardship_state(
+        current_result,
+        stewardship_status=stewardship_status,
+        prior_run_available=prior_run_available,
+    ).projection()
 
 
 def _compute_regime_label(breadth: MarketBreadth | None, latest_run: FeatureRun | None, as_of_date: date) -> str:
@@ -455,6 +487,11 @@ class WatchlistStewardshipService:
             days_until_earnings=days_until_earnings,
             theme_support=theme_support,
             reasons=_dedupe(reasons),
+            **_overlaid_opportunity_projection(
+                current_row,
+                stewardship_status=status,
+                prior_run_available=previous_row is not None,
+            ),
         )
 
     def _theme_support_label(
