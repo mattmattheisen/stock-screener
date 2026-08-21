@@ -9,6 +9,7 @@ import {
   Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import { recordOpportunityEvidenceOpen } from '../../features/opportunityState/opportunityTelemetry';
 import ActionStateBadge from './ActionStateBadge';
 
 const NOT_AVAILABLE = 'Not available';
@@ -76,7 +77,13 @@ function EvidenceList({ values, formatItem = formatCode }) {
   );
 }
 
-function OpportunityEvidenceDrawer({ open, row, onClose, onEvidenceOpen }) {
+function OpportunityEvidenceDrawer({
+  open,
+  row,
+  onClose,
+  onEvidenceOpen,
+  opportunityTelemetrySurface,
+}) {
   const wasOpen = useRef(false);
   const hasRow = isRecord(row);
   const isOpen = Boolean(open && hasRow);
@@ -84,9 +91,13 @@ function OpportunityEvidenceDrawer({ open, row, onClose, onEvidenceOpen }) {
   useEffect(() => {
     if (isOpen && !wasOpen.current) {
       onEvidenceOpen?.(row);
+      if (opportunityTelemetrySurface) {
+        const evidence = isRecord(row.opportunity_state) ? row.opportunity_state : {};
+        void recordOpportunityEvidenceOpen(evidence.market, opportunityTelemetrySurface);
+      }
     }
     wasOpen.current = isOpen;
-  }, [isOpen, onEvidenceOpen, row]);
+  }, [isOpen, onEvidenceOpen, opportunityTelemetrySurface, row]);
 
   if (!hasRow) return null;
 

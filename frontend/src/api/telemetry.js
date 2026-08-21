@@ -42,3 +42,8 @@ export const acknowledgeAlert = async (alertId, acknowledgedBy) => {
   );
   return response.data;
 };
+
+/** Record one privacy-safe live opportunity-evidence open. */
+export const postOpportunityEvidenceOpen = async (market, surface) => {
+  await apiClient.post('/v1/telemetry/opportunity/evidence-open', { market, surface });
+};

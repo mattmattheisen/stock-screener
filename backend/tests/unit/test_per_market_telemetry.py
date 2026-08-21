@@ -29,6 +29,7 @@ from app.services.telemetry.schema import (
     completeness_distribution_payload,
     extraction_success_payload,
     freshness_lag_payload,
+    opportunity_state_payload,
     universe_drift_payload,
     benchmark_age_payload,
 )
@@ -77,6 +78,35 @@ class TestSchemaPayloads:
             assert b in p["bucket_counts"]
         assert p["bucket_counts"]["75-90"] == 5
         assert p["bucket_counts"]["0-25"] == 0
+
+    # Catches accidental row-level or watchlist data entering the durable snapshot payload.
+    def test_opportunity_payload_contains_only_aggregate_counts(self):
+        payload = opportunity_state_payload(
+            run_id=42,
+            rows_total=100,
+            survivor_count=12,
+            action_state_counts={"setup_ready": 3, "data_limited": 4},
+        )
+
+        assert payload == {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": 42,
+            "rows_total": 100,
+            "survivor_count": 12,
+            "action_state_counts": {
+                "exit_risk": 0,
+                "deteriorating": 0,
+                "event_risk": 0,
+                "extended": 0,
+                "data_limited": 4,
+                "setup_ready": 3,
+                "watch": 0,
+            },
+            "unknown_input_rate": pytest.approx(0.04),
+        }
+        serialized = json.dumps(payload).lower()
+        for sensitive_key in ("symbol", "watchlist", "evidence"):
+            assert sensitive_key not in serialized
 
 
 class TestCompletenessBucketing:
@@ -164,6 +194,23 @@ class TestRedisHotPath:
         assert not any(" " in k for k in all_incr_keys)
         assert all("bad:tag" not in k for k in all_incr_keys)
 
+    # Catches symbol/watchlist data being added to the Redis counter dimension.
+    def test_opportunity_evidence_open_persists_only_the_surface_dimension(self):
+        client = MagicMock()
+        pipe = MagicMock()
+        client.pipeline.return_value = pipe
+        telemetry = self._telemetry(client)
+
+        telemetry.record_opportunity_evidence_open("US", surface="watchlist")
+
+        pipe.incr.assert_called_once()
+        key = pipe.incr.call_args.args[0]
+        assert ":opportunity_evidence_open:us:watchlist:" in key
+        assert "symbol" not in key.lower()
+        assert "nvda" not in key.lower()
+        pipe.expire.assert_called_once()
+        pipe.execute.assert_called_once()
+
     def test_records_silently_when_redis_unavailable(self):
         # No redis, no session — must never raise.
         telemetry = PerMarketTelemetry(
@@ -175,6 +222,136 @@ class TestRedisHotPath:
         telemetry.record_universe_drift("HK", current_size=100, prior_size=90)
         telemetry.record_extraction(None, language="en", success=True)
         telemetry.record_completeness("HK", bucket_counts={"0-25": 1}, symbols_total=1)
+        telemetry.record_opportunity_evidence_open("US", surface="scan")
+
+
+# ---------------------------------------------------------------------------
+# Opportunity-state DB aggregation
+# ---------------------------------------------------------------------------
+class TestOpportunityStateAggregation:
+    # Catches per-row loading, nested-key reads, state omissions, and sensitive payload leakage.
+    def test_aggregates_top_level_opportunity_keys_in_one_database_read(
+        self, db_session
+    ):
+        from datetime import date
+
+        from sqlalchemy import event
+
+        from app.database import SessionLocal, engine
+        from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+
+        run = FeatureRun(
+            as_of_date=date(2026, 8, 21),
+            run_type="daily_snapshot",
+            status="published",
+        )
+        db_session.add(run)
+        db_session.flush()
+        db_session.add_all(
+            [
+                StockFeatureDaily(
+                    run_id=run.id,
+                    symbol="ALPHA",
+                    as_of_date=run.as_of_date,
+                    details_json={
+                        "correction_survivor": True,
+                        "action_state": "setup_ready",
+                        "opportunity_state": {"private": "must-not-leak"},
+                    },
+                ),
+                StockFeatureDaily(
+                    run_id=run.id,
+                    symbol="BETA",
+                    as_of_date=run.as_of_date,
+                    details_json={
+                        "correction_survivor": True,
+                        "action_state": "data_limited",
+                    },
+                ),
+                StockFeatureDaily(
+                    run_id=run.id,
+                    symbol="GAMMA",
+                    as_of_date=run.as_of_date,
+                    details_json={
+                        "correction_survivor": False,
+                        "action_state": "watch",
+                    },
+                ),
+                StockFeatureDaily(
+                    run_id=run.id,
+                    symbol="LEGACY",
+                    as_of_date=run.as_of_date,
+                    details_json={},
+                ),
+            ]
+        )
+        db_session.commit()
+
+        select_statements = []
+
+        def capture_select(_conn, _cursor, statement, _parameters, _context, _executemany):
+            if statement.lstrip().upper().startswith("SELECT") and "stock_feature_daily" in statement:
+                select_statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", capture_select)
+        client = MagicMock()
+        try:
+            telemetry = PerMarketTelemetry(
+                redis_client_factory=lambda: client,
+                session_factory=SessionLocal,
+            )
+            emit_pg = MagicMock()
+            telemetry._emit_pg = emit_pg
+            telemetry.record_opportunity_state_from_db("US", run.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_select)
+
+        assert len(select_statements) == 1
+        client.set.assert_called_once()
+        gauge_payload = json.loads(client.set.call_args.args[1])
+        assert gauge_payload["run_id"] == run.id
+        assert gauge_payload["rows_total"] == 4
+        assert gauge_payload["survivor_count"] == 2
+        assert gauge_payload["action_state_counts"] == {
+            "exit_risk": 0,
+            "deteriorating": 0,
+            "event_risk": 0,
+            "extended": 0,
+            "data_limited": 1,
+            "setup_ready": 1,
+            "watch": 1,
+        }
+        assert gauge_payload["unknown_input_rate"] == pytest.approx(0.25)
+
+        emit_pg.assert_called_once()
+        assert emit_pg.call_args.kwargs["market"] == "US"
+        assert emit_pg.call_args.kwargs["metric_key"] == MetricKey.OPPORTUNITY_STATE
+        event_payload = emit_pg.call_args.kwargs["payload"]
+        assert event_payload == gauge_payload
+        serialized = json.dumps(event_payload).lower()
+        for sensitive_value in (
+            "symbol",
+            "watchlist",
+            "opportunity_state",
+            "alpha",
+            "beta",
+            "gamma",
+            "legacy",
+            "must-not-leak",
+        ):
+            assert sensitive_value not in serialized
+
+    # Catches observability failures escaping into the publication path.
+    def test_opportunity_database_aggregation_is_best_effort(self):
+        db = MagicMock()
+        db.query.side_effect = RuntimeError("database unavailable")
+        telemetry = PerMarketTelemetry(
+            redis_client_factory=lambda: None,
+            session_factory=lambda: db,
+        )
+
+        assert telemetry.record_opportunity_state_from_db("US", 42) is None
+        db.close.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +393,7 @@ class TestMarketSummary:
 
     def test_market_summary_handles_empty_redis(self):
         client = MagicMock()
-        client.mget.return_value = [None, None, None, None, None]
+        client.mget.return_value = [None, None, None, None, None, None]
         client.scan_iter.return_value = iter([])
         telemetry = self._telemetry(client)
 
@@ -233,7 +410,7 @@ class TestMarketSummary:
         """
         client = MagicMock()
         # Gauges all empty; we only care about the extraction scan/mget path.
-        client.mget.return_value = [None, None, None, None, None]
+        client.mget.return_value = [None, None, None, None, None, None]
 
         # The scan_iter pattern under inspection — must scan SHARED scope,
         # not the per-market scope, so capture the actual pattern.

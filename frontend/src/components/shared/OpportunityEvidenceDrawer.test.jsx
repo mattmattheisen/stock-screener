@@ -1,6 +1,11 @@
 import { screen } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
+import { recordOpportunityEvidenceOpen } from '../../features/opportunityState/opportunityTelemetry';
 import OpportunityEvidenceDrawer from './OpportunityEvidenceDrawer';
+
+vi.mock('../../features/opportunityState/opportunityTelemetry', () => ({
+  recordOpportunityEvidenceOpen: vi.fn().mockResolvedValue(undefined),
+}));
 
 const OPPORTUNITY_ROW = {
   action_state: 'setup_ready',
@@ -26,6 +31,10 @@ const OPPORTUNITY_ROW = {
 };
 
 describe('OpportunityEvidenceDrawer', () => {
+  beforeEach(() => {
+    recordOpportunityEvidenceOpen.mockClear();
+  });
+
   // Catches a drawer coupled to chart bundles or full Setup Engine evidence instead of compact persisted evidence.
   it('renders compact evidence without chart or setup payloads', () => {
     renderWithProviders(<OpportunityEvidenceDrawer open row={OPPORTUNITY_ROW} onClose={vi.fn()} />);
@@ -90,5 +99,48 @@ describe('OpportunityEvidenceDrawer', () => {
     );
 
     expect(onEvidenceOpen).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['scan', 'daily', 'watchlist'])(
+    'records one privacy-safe %s event per closed-to-open transition',
+    (surface) => {
+      const { rerender } = renderWithProviders(
+        <OpportunityEvidenceDrawer
+          open={false}
+          row={OPPORTUNITY_ROW}
+          onClose={vi.fn()}
+          opportunityTelemetrySurface={surface}
+        />,
+      );
+
+      rerender(
+        <OpportunityEvidenceDrawer
+          open
+          row={OPPORTUNITY_ROW}
+          onClose={vi.fn()}
+          opportunityTelemetrySurface={surface}
+        />,
+      );
+      rerender(
+        <OpportunityEvidenceDrawer
+          open
+          row={OPPORTUNITY_ROW}
+          onClose={vi.fn()}
+          opportunityTelemetrySurface={surface}
+        />,
+      );
+
+      expect(recordOpportunityEvidenceOpen).toHaveBeenCalledOnce();
+      expect(recordOpportunityEvidenceOpen).toHaveBeenCalledWith('US', surface);
+    },
+  );
+
+  // Catches static callers accidentally emitting live usage telemetry.
+  it('does not record evidence telemetry when the live surface is omitted', () => {
+    renderWithProviders(
+      <OpportunityEvidenceDrawer open row={OPPORTUNITY_ROW} onClose={vi.fn()} />,
+    );
+
+    expect(recordOpportunityEvidenceOpen).not.toHaveBeenCalled();
   });
 });

@@ -3,7 +3,12 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
+import { recordOpportunityEvidenceOpen } from '../../features/opportunityState/opportunityTelemetry';
 import WatchlistTable from './WatchlistTable';
+
+vi.mock('../../features/opportunityState/opportunityTelemetry', () => ({
+  recordOpportunityEvidenceOpen: vi.fn().mockResolvedValue(undefined),
+}));
 
 const watchlistData = {
   id: 1,
@@ -67,6 +72,10 @@ const renderTable = (onOpenChart = vi.fn()) => ({
 });
 
 describe('WatchlistTable', () => {
+  beforeEach(() => {
+    recordOpportunityEvidenceOpen.mockClear();
+  });
+
   // Catches the existing stewardship label being replaced instead of shown beside Action State.
   it('shows stewardship and Action State as separate columns and opens shared evidence', async () => {
     const user = userEvent.setup();
@@ -80,6 +89,8 @@ describe('WatchlistTable', () => {
 
     expect(screen.getByText('Resilience score')).toBeInTheDocument();
     expect(screen.getByText('91.5')).toBeInTheDocument();
+    expect(recordOpportunityEvidenceOpen).toHaveBeenCalledOnce();
+    expect(recordOpportunityEvidenceOpen).toHaveBeenCalledWith('US', 'watchlist');
     expect(onOpenChart).not.toHaveBeenCalled();
   });
 

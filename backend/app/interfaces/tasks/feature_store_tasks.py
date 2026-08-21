@@ -947,6 +947,19 @@ def build_daily_snapshot(
         )
 
     if result.status == "published":
+        try:
+            from app.services.telemetry import get_telemetry
+
+            get_telemetry().record_opportunity_state_from_db(
+                effective_market,
+                result.run_id,
+            )
+        except Exception:
+            logger.debug(
+                "Opportunity telemetry failed for published feature run %d",
+                result.run_id,
+                exc_info=True,
+            )
         if skip_ibd_metadata_enrichment:
             metadata_refresh_stats = {
                 "status": "skipped",

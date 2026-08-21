@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
+import { recordOpportunityEvidenceOpen } from '../../features/opportunityState/opportunityTelemetry';
 import DailyMarketSnapshotTab from './DailyMarketSnapshotTab';
 
 const getDailySnapshot = vi.fn();
@@ -16,6 +17,10 @@ vi.mock('../../api/marketScan', () => ({
 
 vi.mock('../../api/scans', () => ({
   getScanResults: (...args) => getScanResults(...args),
+}));
+
+vi.mock('../../features/opportunityState/opportunityTelemetry', () => ({
+  recordOpportunityEvidenceOpen: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../Scan/PriceSparkline', () => ({
@@ -152,6 +157,7 @@ describe('DailyMarketSnapshotTab', () => {
     getScanResults.mockReset();
     chartModalSpy.mockReset();
     correctionPanelSpy.mockReset();
+    recordOpportunityEvidenceOpen.mockClear();
     getDailySnapshot.mockResolvedValue(snapshotPayload());
     getScanResults.mockResolvedValue({ total: 1, results: [liveRow] });
   });
@@ -295,6 +301,7 @@ describe('DailyMarketSnapshotTab', () => {
             resilience_score: 95,
             action_state: 'setup_ready',
             opportunity_state: {
+              market: 'US',
               passed_checks: ['leadership_gate'],
               failed_checks: [],
               warnings: [],
@@ -330,6 +337,8 @@ describe('DailyMarketSnapshotTab', () => {
     const user = userEvent.setup();
     await user.click(within(panel).getByText('Setup Ready'));
     expect(await screen.findByText('daily persisted evidence')).toBeInTheDocument();
+    expect(recordOpportunityEvidenceOpen).toHaveBeenCalledOnce();
+    expect(recordOpportunityEvidenceOpen).toHaveBeenCalledWith('US', 'daily');
   });
 
   it('renders a valid live zero-survivor result', async () => {

@@ -243,6 +243,90 @@ class PerMarketTelemetry:
         if success:
             self._incr_counter(MetricKey.EXTRACTION_SUCCESS, m, f"{lang}:success")
 
+    def record_opportunity_evidence_open(
+        self, market: Optional[str], *, surface: str
+    ) -> None:
+        """Increment a symbol-free daily usage counter for one live surface."""
+        m = normalize_market(market)
+        self._incr_counter(MetricKey.OPPORTUNITY_EVIDENCE_OPEN, m, surface)
+
+    def record_opportunity_state_from_db(
+        self, market: Optional[str], run_id: int
+    ) -> None:
+        """Aggregate and emit one symbol-free opportunity snapshot.
+
+        The feature rows are reduced server-side in one query. Only top-level
+        JSON projection keys participate; symbols, nested evidence, and user
+        watchlist data are never selected or added to the payload.
+        """
+        from sqlalchemy import case, func
+
+        from .schema import OPPORTUNITY_ACTION_STATES, opportunity_state_payload
+
+        m = normalize_market(market)
+        try:
+            db = self._session()
+        except Exception as exc:
+            logger.debug(
+                "telemetry: session unavailable (%s); skipping opportunity snapshot",
+                exc,
+            )
+            return
+
+        try:
+            from ...infra.db.models.feature_store import StockFeatureDaily
+
+            details = StockFeatureDaily.details_json
+            action_state = details["action_state"].as_string()
+            correction_survivor = details["correction_survivor"].as_boolean()
+            aggregates = [
+                func.count().label("rows_total"),
+                func.coalesce(
+                    func.sum(
+                        case((correction_survivor.is_(True), 1), else_=0)
+                    ),
+                    0,
+                ).label("survivor_count"),
+            ]
+            aggregates.extend(
+                func.coalesce(
+                    func.sum(case((action_state == state, 1), else_=0)),
+                    0,
+                ).label(f"state_{state}")
+                for state in OPPORTUNITY_ACTION_STATES
+            )
+            row = (
+                db.query(*aggregates)
+                .select_from(StockFeatureDaily)
+                .filter(StockFeatureDaily.run_id == int(run_id))
+                .one()
+            )
+        except Exception as exc:
+            logger.debug("telemetry: opportunity snapshot DB query failed (%s)", exc)
+            return
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        counts = {
+            state: int(row[index + 2] or 0)
+            for index, state in enumerate(OPPORTUNITY_ACTION_STATES)
+        }
+        payload = opportunity_state_payload(
+            run_id=run_id,
+            rows_total=int(row[0] or 0),
+            survivor_count=int(row[1] or 0),
+            action_state_counts=counts,
+        )
+        self._set_gauge(MetricKey.OPPORTUNITY_STATE, m, payload)
+        self._emit_pg(
+            market=m,
+            metric_key=MetricKey.OPPORTUNITY_STATE,
+            payload=payload,
+        )
+
     def record_completeness_from_db(self, market: Optional[str]) -> None:
         """Compute and emit the completeness distribution by querying the DB.
 
@@ -439,6 +523,7 @@ class PerMarketTelemetry:
         MetricKey.BENCHMARK_AGE,
         MetricKey.COMPLETENESS_DISTRIBUTION,
         MetricKey.FIELD_COVERAGE,
+        MetricKey.OPPORTUNITY_STATE,
     )
 
     def market_summary(self, market: Optional[str]) -> Dict[str, Any]:
@@ -474,6 +559,7 @@ class PerMarketTelemetry:
 
         out[MetricKey.COMPLETENESS_DISTRIBUTION] = gauges[MetricKey.COMPLETENESS_DISTRIBUTION]
         out[MetricKey.FIELD_COVERAGE] = gauges[MetricKey.FIELD_COVERAGE]
+        out[MetricKey.OPPORTUNITY_STATE] = gauges[MetricKey.OPPORTUNITY_STATE]
         # Extraction is recorded under SHARED scope (the meaningful dimension is
         # language, not market), so every per-market summary surfaces the same
         # global counters. Pass SHARED explicitly rather than ``m`` — otherwise

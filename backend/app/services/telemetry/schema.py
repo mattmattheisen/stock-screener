@@ -25,6 +25,44 @@ class MetricKey:
     EXTRACTION_SUCCESS = "extraction_success"
     COMPLETENESS_DISTRIBUTION = "completeness_distribution"
     FIELD_COVERAGE = "field_coverage"
+    OPPORTUNITY_STATE = "opportunity_state"
+    OPPORTUNITY_EVIDENCE_OPEN = "opportunity_evidence_open"
+
+
+# Fixed v1 action-state order. Keeping the telemetry schema explicit avoids
+# importing the scan-policy dependency graph into this foundation module.
+OPPORTUNITY_ACTION_STATES = (
+    "exit_risk",
+    "deteriorating",
+    "event_risk",
+    "extended",
+    "data_limited",
+    "setup_ready",
+    "watch",
+)
+
+
+def opportunity_state_payload(
+    *,
+    run_id: int,
+    rows_total: int,
+    survivor_count: int,
+    action_state_counts: Dict[str, int],
+) -> Dict[str, Any]:
+    """Build a symbol-free aggregate snapshot for one published feature run."""
+    counts = {
+        state: int(action_state_counts.get(state, 0))
+        for state in OPPORTUNITY_ACTION_STATES
+    }
+    total = int(rows_total)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": int(run_id),
+        "rows_total": total,
+        "survivor_count": int(survivor_count),
+        "action_state_counts": counts,
+        "unknown_input_rate": counts["data_limited"] / total if total else 0.0,
+    }
 
 
 def freshness_lag_payload(
