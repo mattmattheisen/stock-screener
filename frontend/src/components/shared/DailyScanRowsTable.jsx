@@ -127,7 +127,7 @@ function DailyScanRowsTable({
                   tabIndex={rowChartEnabled ? 0 : -1}
                   onClick={() => handleRowOpen(row.symbol)}
                   onKeyDown={(event) => {
-                    if (!rowChartEnabled) return;
+                    if (!rowChartEnabled || event.target !== event.currentTarget) return;
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
                       handleRowOpen(row.symbol);

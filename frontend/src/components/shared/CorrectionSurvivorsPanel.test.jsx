@@ -137,4 +137,31 @@ describe('CorrectionSurvivorsPanel', () => {
 
     expect(onOpenChart).not.toHaveBeenCalled();
   });
+
+  // Catches Enter/Space bubbling from the interactive badge into the row's
+  // keyboard chart handler before the badge opens persisted evidence.
+  it.each([
+    ['Enter', '{Enter}'],
+    ['Space', ' '],
+  ])('opens evidence without chart navigation when the action badge receives %s', async (_keyName, key) => {
+    const onOpenChart = vi.fn();
+    renderWithProviders(
+      <CorrectionSurvivorsPanel
+        summary={completeSummary}
+        posture={null}
+        onOpenChart={onOpenChart}
+        navigationSymbols={['FIRST', 'SECOND']}
+      />,
+    );
+
+    const actionBadge = screen.getByRole('button', { name: 'Setup Ready' });
+    actionBadge.focus();
+    expect(actionBadge).toHaveFocus();
+
+    const user = userEvent.setup();
+    await user.keyboard(key);
+
+    expect(await screen.findByRole('heading', { name: 'Opportunity evidence' })).toBeInTheDocument();
+    expect(onOpenChart).not.toHaveBeenCalled();
+  });
 });
