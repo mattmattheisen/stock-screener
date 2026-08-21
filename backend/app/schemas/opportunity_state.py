@@ -16,6 +16,7 @@ class OpportunityStateResponse(BaseModel):
     passed_checks: list[str] = Field(default_factory=list)
     failed_checks: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    score_pillars: dict[str, float | None] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
     data_availability: dict[str, str] = Field(default_factory=dict)
     action_reasons: list[str] = Field(default_factory=list)

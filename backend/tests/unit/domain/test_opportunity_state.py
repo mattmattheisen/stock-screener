@@ -63,6 +63,19 @@ def test_complete_survivor_has_exact_score_and_setup_ready_state():
     assert result.action_state is ActionState.SETUP_READY
 
 
+def test_complete_survivor_persists_the_five_canonical_score_pillars():
+    """Break caught: a persisted row omits its backend-calculated pillar totals."""
+    projection = evaluate_opportunity_state(complete_inputs()).projection()
+
+    assert projection["opportunity_state"]["score_pillars"] == {
+        "benchmark_leadership": 20.0,
+        "multi_horizon_rs": 17.0,
+        "trend_integrity": 20.0,
+        "structure_tightness": 20.0,
+        "liquidity_freshness": 20.0,
+    }
+
+
 @pytest.mark.parametrize(
     ("changes", "expected"),
     [
@@ -322,6 +335,13 @@ def test_projection_round_trip_preserves_typed_state():
 
     assert restored == original
     assert restored.action_state is ActionState.SETUP_READY
+    assert restored.score_pillars == {
+        "benchmark_leadership": 20.0,
+        "multi_horizon_rs": 17.0,
+        "trend_integrity": 20.0,
+        "structure_tightness": 20.0,
+        "liquidity_freshness": 20.0,
+    }
 
 
 def test_absent_legacy_projection_is_ignored():

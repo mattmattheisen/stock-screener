@@ -56,6 +56,13 @@ OPPORTUNITY_EVIDENCE = {
     "passed_checks": ["benchmark_leadership", "trend_integrity"],
     "failed_checks": [],
     "warnings": [],
+    "score_pillars": {
+        "benchmark_leadership": 20.0,
+        "multi_horizon_rs": 17.0,
+        "trend_integrity": 20.0,
+        "structure_tightness": 20.0,
+        "liquidity_freshness": 20.0,
+    },
     "metrics": {"benchmark_relative_return_65d": 0.083},
     "data_availability": {"features": "available"},
     "action_reasons": ["survivor", "setup_ready"],
@@ -383,6 +390,13 @@ class TestQueryRunAsScanResults:
         assert response.opportunity_state is not None
         assert response.opportunity_state.schema_version == 1
         assert response.opportunity_state.policy_version == "correction-survivors-v1"
+        assert response.opportunity_state.score_pillars == {
+            "benchmark_leadership": 20.0,
+            "multi_horizon_rs": 17.0,
+            "trend_integrity": 20.0,
+            "structure_tightness": 20.0,
+            "liquidity_freshness": 20.0,
+        }
         assert response.opportunity_state.metrics == {
             "benchmark_relative_return_65d": 0.083
         }

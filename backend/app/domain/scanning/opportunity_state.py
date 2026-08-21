@@ -40,9 +40,17 @@ _EVIDENCE_KEYS = (
     "passed_checks",
     "failed_checks",
     "warnings",
+    "score_pillars",
     "metrics",
     "data_availability",
     "action_reasons",
+)
+_SCORE_PILLAR_KEYS = (
+    "benchmark_leadership",
+    "multi_horizon_rs",
+    "trend_integrity",
+    "structure_tightness",
+    "liquidity_freshness",
 )
 
 
@@ -101,6 +109,7 @@ class OpportunityInputs:
 class OpportunityStateResult:
     correction_survivor: bool
     resilience_score: float | None
+    score_pillars: dict[str, float | None]
     action_state: ActionState
     passed_checks: tuple[str, ...]
     failed_checks: tuple[str, ...]
@@ -128,6 +137,7 @@ class OpportunityStateResult:
             "passed_checks": list(self.passed_checks),
             "failed_checks": list(self.failed_checks),
             "warnings": list(self.warnings),
+            "score_pillars": dict(self.score_pillars),
             "metrics": dict(self.metrics),
             "data_availability": dict(self.data_availability),
             "action_reasons": list(self.action_reasons),
@@ -164,7 +174,8 @@ def evaluate_opportunity_state(inputs: OpportunityInputs) -> OpportunityStateRes
     )
     benchmark_is_future = _benchmark_is_future(inputs)
     required_complete = _required_evidence_complete(inputs, benchmark_is_future)
-    score = _resilience_score(inputs, benchmark_is_future)
+    score_pillars = _score_pillars(inputs, benchmark_is_future)
+    score = _resilience_score(score_pillars)
 
     leadership_gate = _leadership_gate(inputs)
     trend_gate = _trend_gate(inputs, hard_invalidation)
@@ -201,6 +212,7 @@ def evaluate_opportunity_state(inputs: OpportunityInputs) -> OpportunityStateRes
     return OpportunityStateResult(
         correction_survivor=correction_survivor,
         resilience_score=score,
+        score_pillars=score_pillars,
         action_state=action_state,
         passed_checks=tuple(passed_checks),
         failed_checks=tuple(failed_checks),
@@ -244,6 +256,7 @@ def opportunity_result_from_projection(
     return OpportunityStateResult(
         correction_survivor=correction_survivor,
         resilience_score=resilience_score,
+        score_pillars=_score_pillar_mapping(evidence.get("score_pillars")),
         action_state=action_state,
         passed_checks=_string_tuple(evidence.get("passed_checks"), "passed_checks"),
         failed_checks=_string_tuple(evidence.get("failed_checks"), "failed_checks"),
@@ -326,29 +339,53 @@ def _required_evidence_complete(inputs: OpportunityInputs, benchmark_is_future: 
     )
 
 
-def _resilience_score(inputs: OpportunityInputs, benchmark_is_future: bool) -> float | None:
+def _score_pillars(
+    inputs: OpportunityInputs, benchmark_is_future: bool
+) -> dict[str, float | None]:
     if benchmark_is_future or not _score_inputs_known(inputs):
-        return None
+        return {key: None for key in _SCORE_PILLAR_KEYS}
 
     hard_invalidation = _hard_invalidation(
         inputs.invalidation_flags, inputs.invalidation_evidence_available
     )
-    leadership = (12 if inputs.benchmark_relative_return_65d > 0 else 0) + (
-        8 if inputs.rs_line_new_high or inputs.rs_line_blue_dot else 0
+    leadership = float(
+        (12 if inputs.benchmark_relative_return_65d > 0 else 0)
+        + (8 if inputs.rs_line_new_high or inputs.rs_line_blue_dot else 0)
     )
-    multi_horizon = 10 * _clamp(inputs.rs_rating_1m) / 100 + 10 * _clamp(inputs.rs_rating_3m) / 100
-    trend = 8 * (inputs.stage in (1, 2)) + 8 * bool(inputs.ma_alignment) + 4 * (not hard_invalidation)
-    structure = (
+    multi_horizon = (
+        10 * _clamp(inputs.rs_rating_1m) / 100
+        + 10 * _clamp(inputs.rs_rating_3m) / 100
+    )
+    trend = float(
+        8 * (inputs.stage in (1, 2))
+        + 8 * bool(inputs.ma_alignment)
+        + 4 * (not hard_invalidation)
+    )
+    structure = float(
         8 * bool(inputs.pattern_primary)
         + 4 * bool(inputs.squeeze)
         + 3 * (inputs.tight_closes_count >= 3)
         + 3 * (inputs.quiet_days_count >= 3)
         + 2 * (inputs.volume_vs_50d <= inputs.volume_dry_up_max)
     )
-    tradability = 10 * bool(inputs.liquidity_passes) + 10 * (
-        inputs.feature_status == "complete" and inputs.is_scannable is True
+    tradability = float(
+        10 * bool(inputs.liquidity_passes)
+        + 10 * (inputs.feature_status == "complete" and inputs.is_scannable is True)
     )
-    return round(leadership + multi_horizon + trend + structure + tradability, 1)
+    return {
+        "benchmark_leadership": leadership,
+        "multi_horizon_rs": multi_horizon,
+        "trend_integrity": trend,
+        "structure_tightness": structure,
+        "liquidity_freshness": tradability,
+    }
+
+
+def _resilience_score(score_pillars: Mapping[str, float | None]) -> float | None:
+    values = tuple(score_pillars[key] for key in _SCORE_PILLAR_KEYS)
+    if any(value is None for value in values):
+        return None
+    return round(sum(values), 1)
 
 
 def _score_inputs_known(inputs: OpportunityInputs) -> bool:
@@ -555,6 +592,15 @@ def _string_mapping(value: object, name: str) -> dict[str, str]:
     if not all(isinstance(item, str) for item in mapping.values()):
         raise ValueError(f"{name} values must be strings")
     return dict(mapping)
+
+
+def _score_pillar_mapping(value: object) -> dict[str, float | None]:
+    mapping = _mapping(value, "score_pillars")
+    _require_keys(mapping, _SCORE_PILLAR_KEYS, "score_pillars")
+    return {
+        key: _optional_number(mapping[key], f"score_pillars.{key}")
+        for key in _SCORE_PILLAR_KEYS
+    }
 
 
 def _optional_string(value: object, name: str) -> str | None:
