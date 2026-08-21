@@ -123,6 +123,28 @@ class DailySnapshotLeaders(BaseModel):
     rows: List[ScanResultItem]
 
 
+class DailySnapshotActionStateCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    exit_risk: int
+    deteriorating: int
+    event_risk: int
+    extended: int
+    data_limited: int
+    setup_ready: int
+    watch: int
+
+
+class DailySnapshotCorrectionSurvivors(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool
+    complete: bool
+    count: int
+    counts_by_action_state: DailySnapshotActionStateCounts
+    rows: list[ScanResultItem]
+
+
 class DailySnapshotTopGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -189,6 +211,7 @@ class DailySnapshotResponse(BaseModel):
     freshness: DailySnapshotFreshness
     key_markets: List[KeyMarketEntry]
     market_health_exposure: Optional[MarketHealthExposure] = None
+    correction_survivors: DailySnapshotCorrectionSurvivors
     top_candidates: DailySnapshotTopCandidates
     leaders: DailySnapshotLeaders
     top_groups: List[DailySnapshotTopGroup]

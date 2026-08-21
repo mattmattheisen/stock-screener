@@ -22,6 +22,7 @@ from app.domain.markets.catalog import get_market_catalog
 from app.domain.relative_strength import GROUP_AVG_RS_FIELDS
 from app.domain.scanning.default_filters import resolve_default_scan_filters
 from app.domain.scanning.filter_expression_model import QuerySpec
+from app.domain.scanning.opportunity_state import ActionState
 from app.infra.serialization import json_safe
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
@@ -38,9 +39,10 @@ from app.use_cases.scanning.get_scan_results import GetScanResultsQuery
 
 logger = logging.getLogger(__name__)
 
-DAILY_SNAPSHOT_SCHEMA_VERSION = 3
+DAILY_SNAPSHOT_SCHEMA_VERSION = 4
 DAILY_SNAPSHOT_CACHE_TTL_SECONDS = 600
 DAILY_SNAPSHOT_TOP_RESULTS = 20
+ACTION_STATE_VALUES = tuple(state.value for state in ActionState)
 LEADERS_MAX_GROUP_RANK = 40
 LEADERS_MIN_RS_RATING = 80
 TOP_GROUPS_LIMIT = 10
@@ -253,24 +255,83 @@ def _query_scan_rows(
     use_case: Any,
     scan_id: str,
     filters: FilterSpec,
-) -> list[dict[str, Any]]:
+    sort: SortSpec | None = None,
+    per_page: int = DAILY_SNAPSHOT_TOP_RESULTS,
+    include_sparklines: bool = True,
+) -> tuple[list[dict[str, Any]], int]:
     query = GetScanResultsQuery(
         scan_id=scan_id,
         query_spec=QuerySpec.from_filter_spec(
             filters,
-            sort=SortSpec(field="composite_score", order=SortOrder.DESC),
-            page=PageSpec(page=1, per_page=DAILY_SNAPSHOT_TOP_RESULTS),
+            sort=sort
+            or SortSpec(field="composite_score", order=SortOrder.DESC),
+            page=PageSpec(page=1, per_page=per_page),
         ),
-        include_sparklines=True,
+        include_sparklines=include_sparklines,
         include_setup_payload=False,
     )
     result = use_case.execute(uow, query)
-    return [
+    rows = [
         ScanResultItem.from_domain(item, include_setup_payload=False).model_dump(
             mode="json"
         )
         for item in result.page.items
     ]
+    return rows, result.page.total
+
+
+def _empty_correction_survivor_summary(*, available: bool) -> dict[str, Any]:
+    return {
+        "available": available,
+        "complete": available,
+        "count": 0,
+        "counts_by_action_state": {state: 0 for state in ACTION_STATE_VALUES},
+        "rows": [],
+    }
+
+
+def _build_correction_survivor_summary(
+    *,
+    scan: Scan | None,
+    uow: Any,
+    scan_results_use_case: Any,
+) -> dict[str, Any]:
+    if scan is None:
+        return _empty_correction_survivor_summary(available=False)
+
+    survivor_filters = FilterSpec().add_boolean("correction_survivor", True)
+    rows, count = _query_scan_rows(
+        uow=uow,
+        use_case=scan_results_use_case,
+        scan_id=scan.scan_id,
+        filters=survivor_filters,
+        sort=SortSpec(field="resilience_score", order=SortOrder.DESC),
+        per_page=DAILY_SNAPSHOT_TOP_RESULTS,
+        include_sparklines=True,
+    )
+
+    counts_by_action_state: dict[str, int] = {}
+    for state in ACTION_STATE_VALUES:
+        state_filters = FilterSpec()
+        state_filters.add_boolean("correction_survivor", True)
+        state_filters.add_categorical("action_state", (state,))
+        _, state_count = _query_scan_rows(
+            uow=uow,
+            use_case=scan_results_use_case,
+            scan_id=scan.scan_id,
+            filters=state_filters,
+            per_page=1,
+            include_sparklines=False,
+        )
+        counts_by_action_state[state] = state_count
+
+    return {
+        "available": True,
+        "complete": True,
+        "count": count,
+        "counts_by_action_state": counts_by_action_state,
+        "rows": rows,
+    }
 
 
 def _build_top_groups(
@@ -354,7 +415,7 @@ def build_daily_snapshot_payload(
     if scan is not None:
         candidate_filters = FilterSpec()
         candidate_filters.add_range("volume", min_volume, None)
-        top_candidates = _query_scan_rows(
+        top_candidates, _ = _query_scan_rows(
             uow=uow,
             use_case=scan_results_use_case,
             scan_id=scan.scan_id,
@@ -365,12 +426,18 @@ def build_daily_snapshot_payload(
         leader_filters.add_range("volume", min_volume, None)
         leader_filters.add_range("rs_rating", LEADERS_MIN_RS_RATING, None)
         leader_filters.add_range("ibd_group_rank", None, LEADERS_MAX_GROUP_RANK)
-        leaders = _query_scan_rows(
+        leaders, _ = _query_scan_rows(
             uow=uow,
             use_case=scan_results_use_case,
             scan_id=scan.scan_id,
             filters=leader_filters,
         )
+
+    correction_survivors = _build_correction_survivor_summary(
+        scan=scan,
+        uow=uow,
+        scan_results_use_case=scan_results_use_case,
+    )
 
     anchor_date = _snapshot_anchor_date(scan)
     market_entry = get_market_catalog().get(normalized)
@@ -407,6 +474,7 @@ def build_daily_snapshot_payload(
         "freshness": freshness,
         "key_markets": key_markets,
         "market_health_exposure": market_health_exposure,
+        "correction_survivors": correction_survivors,
         "top_candidates": {
             "min_dollar_volume": min_volume,
             "rows": top_candidates,
