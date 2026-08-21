@@ -47,13 +47,15 @@ class InvalidationFlag:
     message: str | None = None
     severity: Literal["low", "medium", "high"] | None = None
     detail: str | None = None
-    is_hard: bool | None = None
+    is_hard: bool = False
 
     def __post_init__(self) -> None:
         if not self.code:
             raise ValueError("InvalidationFlag.code is required")
         if not is_snake_case(self.code):
             raise ValueError("InvalidationFlag.code must be snake_case")
+        if not isinstance(self.is_hard, bool):
+            raise ValueError("InvalidationFlag.is_hard must be bool")
         severity = self.severity
         if severity is None:
             severity = "high" if self.is_hard else "medium"
@@ -71,6 +73,7 @@ class InvalidationFlag:
             code=self.code,
             message=str(self.message),
             severity=cast(Literal["low", "medium", "high"], self.severity),
+            is_hard=self.is_hard,
         )
 
 
@@ -119,6 +122,7 @@ class ExplainPayload:
                     continue
                 raw_message = str(flag.get("message") or "").strip()
                 raw_severity = str(flag.get("severity") or "").strip().lower()
+                raw_is_hard = flag.get("is_hard", False)
                 if raw_severity not in {"low", "medium", "high"}:
                     raw_severity = "medium"
                 message = raw_message or raw_code.replace("_", " ")
@@ -127,6 +131,7 @@ class ExplainPayload:
                         code=raw_code,
                         message=message,
                         severity=cast(Literal["low", "medium", "high"], raw_severity),
+                        is_hard=raw_is_hard if isinstance(raw_is_hard, bool) else False,
                     )
                 )
                 continue
@@ -145,6 +150,7 @@ class ExplainPayload:
                     code=code,
                     message=message,
                     severity="medium",
+                    is_hard=False,
                 )
             )
 

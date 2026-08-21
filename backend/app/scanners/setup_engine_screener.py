@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import date
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -48,6 +47,7 @@ from app.scanners.criteria.rs_resolution import (
     resolve_stock_rs,
 )
 from app.domain.scanning.ports import CanonicalStockRsSource
+from app.domain.scanning.opportunity_state import normalize_event_date
 from app.scanners.criteria.stage_analysis import quick_stage_check
 from app.scanners.setup_engine_scanner import build_setup_engine_payload
 
@@ -241,11 +241,12 @@ class SetupEngineScanner(BaseStockScreener):
         adtv_series = dollar_volume.rolling(50, min_periods=50).mean()
         adtv_usd = float(adtv_series.iloc[-1]) if not pd.isna(adtv_series.iloc[-1]) else None
 
-        next_earnings_date = None
-        if data.fundamentals and isinstance(data.fundamentals, dict):
-            raw_earnings = data.fundamentals.get("next_earnings_date")
-            if isinstance(raw_earnings, date):
-                next_earnings_date = raw_earnings
+        fundamentals = data.fundamentals if isinstance(data.fundamentals, dict) else {}
+        event_date = normalize_event_date(
+            fundamentals.get("next_earnings_date"),
+            key_present="next_earnings_date" in fundamentals,
+        )
+        next_earnings_date = event_date.value if event_date.available else None
 
         reference_date = price_data.index[-1].date()
 

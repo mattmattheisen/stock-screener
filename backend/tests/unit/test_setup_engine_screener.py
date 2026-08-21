@@ -365,6 +365,20 @@ class TestTimingObservability:
 class TestOperationalFlagsIntegration:
     """SE-E7: Operational invalidation flags wired through full pipeline."""
 
+    def test_iso_earnings_date_triggers_event_flag(self):
+        """A persisted ISO earnings date is evaluated against the latest price bar."""
+        data = _make_stock_data(num_days=350)
+        data.fundamentals = {"next_earnings_date": "2026-08-25"}
+        data.price_data.index = data.price_data.index[:-1].append(
+            pd.DatetimeIndex(["2026-08-21"])
+        )
+        scanner = SetupEngineScanner()
+
+        result = scanner.scan_stock("TEST", data, {})
+
+        flags = result.details["setup_engine"]["explain"]["invalidation_flags"]
+        assert next(flag for flag in flags if flag["code"] == "earnings_soon")["is_hard"] is False
+
     def test_low_liquidity_flag_in_full_pipeline(self):
         """Synthetic stock with tiny volume should trigger low_liquidity flag."""
         num_days = 350

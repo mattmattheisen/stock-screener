@@ -77,6 +77,7 @@ class InvalidationFlagPayload(TypedDict):
     code: str
     message: str
     severity: Literal["low", "medium", "high"]
+    is_hard: bool
 
 
 class SetupEngineExplain(TypedDict):
@@ -852,6 +853,7 @@ def validate_setup_engine_payload(payload: Mapping[str, Any]) -> list[str]:
                 code = flag.get("code")
                 message = flag.get("message")
                 severity = flag.get("severity")
+                is_hard = flag.get("is_hard")
                 if not isinstance(code, str) or not is_snake_case(code):
                     errors.append(
                         f"explain.invalidation_flags[{idx}].code must be snake_case string"
@@ -863,6 +865,10 @@ def validate_setup_engine_payload(payload: Mapping[str, Any]) -> list[str]:
                 if severity not in valid_severities:
                     errors.append(
                         f"explain.invalidation_flags[{idx}].severity must be one of: low, medium, high"
+                    )
+                if not isinstance(is_hard, bool):
+                    errors.append(
+                        f"explain.invalidation_flags[{idx}].is_hard must be bool"
                     )
 
     candidates = payload.get("candidates")

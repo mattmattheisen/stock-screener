@@ -289,5 +289,6 @@ class TestToPayload:
                 "code": "too_extended",
                 "message": "too extended",
                 "severity": "medium",
+                "is_hard": False,
             }
         ]
