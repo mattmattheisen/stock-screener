@@ -434,6 +434,35 @@ class FakeStockDataProvider(StockDataProvider):
 # ---------------------------------------------------------------------------
 
 
+def with_test_opportunity_projection(result: dict) -> dict:
+    """Make a fake non-error scanner payload satisfy the orchestrator contract."""
+    payload = dict(result)
+    if payload.get("result_status") == "error" or "error" in payload:
+        return payload
+    payload.setdefault("correction_survivor", False)
+    payload.setdefault("resilience_score", None)
+    payload.setdefault("action_state", "data_limited")
+    payload.setdefault(
+        "opportunity_state",
+        {
+            "schema_version": 1,
+            "policy_version": "correction-survivors-v1",
+            "as_of_date": None,
+            "market": "US",
+            "mic": None,
+            "benchmark_symbol": None,
+            "benchmark_as_of_date": None,
+            "passed_checks": [],
+            "failed_checks": ["required_evidence"],
+            "warnings": [],
+            "metrics": {},
+            "data_availability": {"required_evidence": "incomplete"},
+            "action_reasons": ["test_fixture"],
+        },
+    )
+    return payload
+
+
 class FakeScanner:
     """Fake StockScanner (satisfies Protocol) with configurable results.
 
@@ -455,14 +484,16 @@ class FakeScanner:
         pre_fetched_data: object | None = None,
     ) -> dict:
         self.calls.append(symbol)
-        return self._results.get(
-            symbol,
-            {
-                "composite_score": 75.0,
-                "rating": "Buy",
-                "passes_template": True,
-                "current_price": 100.0,
-            },
+        return with_test_opportunity_projection(
+            self._results.get(
+                symbol,
+                {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                },
+            )
         )
 
 

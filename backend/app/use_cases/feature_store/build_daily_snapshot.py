@@ -61,6 +61,14 @@ from app.use_cases.feature_store.publish_run import (
 logger = logging.getLogger(__name__)
 
 MAX_FAILURE_DIAGNOSTIC_SAMPLES = 50
+OPPORTUNITY_PROJECTION_KEYS = frozenset(
+    {
+        "correction_survivor",
+        "resilience_score",
+        "action_state",
+        "opportunity_state",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +155,22 @@ def _extract_data_errors(result: object) -> dict[str, str]:
 def _format_exception(exc: Exception) -> str:
     """Format an exception for bounded per-symbol diagnostics."""
     return f"{exc.__class__.__name__}: {exc}"
+
+
+def _assert_chunk_opportunity_projections(rows: Sequence[FeatureRowWrite]) -> None:
+    """Refuse to checkpoint non-error rows missing materialized policy fields."""
+    omissions: list[str] = []
+    for row in rows:
+        details = row.details
+        present = set(details) if isinstance(details, Mapping) else set()
+        missing = sorted(OPPORTUNITY_PROJECTION_KEYS - present)
+        if missing:
+            omissions.append(f"{row.symbol}: {', '.join(missing)}")
+    if omissions:
+        raise RuntimeError(
+            "Non-error snapshot rows are missing the opportunity projection: "
+            + "; ".join(omissions)
+        )
 
 
 def _serialize_universe_definition(universe_def: object) -> dict[str, object]:
@@ -806,6 +830,7 @@ class BuildDailyFeatureSnapshotUseCase:
 
             # 3c — Persist chunk (checkpoint)
             if chunk_rows:
+                _assert_chunk_opportunity_projections(chunk_rows)
                 uow.feature_store.upsert_snapshot_rows(run_id, chunk_rows)
             uow.commit()
 

@@ -706,6 +706,128 @@ class TestScanOrchestratorErrorPaths:
 
 
 class TestScanOrchestratorDataFlow:
+    def test_materializes_opportunity_projection_after_local_dollar_volume(self):
+        """Break caught: persisting a scan row before the opportunity projection is attached."""
+        stock_data = _make_stock_data("TEST", n_days=260)
+        stock_data.market = "US"
+        stock_data.exchange = "NASDAQ"
+        stock_data.benchmark_symbol = "SPY"
+        stock_data.fundamentals = {
+            "avg_volume": 2_000_000,
+            "next_earnings_date": None,
+        }
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        class FakeMinervini(RecordingScreener):
+            def __init__(self) -> None:
+                super().__init__(
+                    name="minervini",
+                    score=90.0,
+                    passes=True,
+                    details={
+                        "rs_rating_1m": 90.0,
+                        "rs_rating_3m": 85.0,
+                        "stage": 2,
+                        "ma_alignment": True,
+                    },
+                )
+
+        class FakeSetupEngine(RecordingScreener):
+            def __init__(self) -> None:
+                super().__init__(
+                    name="setup_engine",
+                    score=90.0,
+                    passes=True,
+                    details={
+                        "setup_engine": {
+                            "pattern_primary": "vcp",
+                            "bb_squeeze": True,
+                            "tight_closes_count": 3,
+                            "quiet_days_10d": 3,
+                            "volume_vs_50d": 0.7,
+                            "rs_vs_spy_65d": 0.08,
+                            "rs_line_new_high": True,
+                            "rs_line_blue_dot": False,
+                            "setup_ready": True,
+                            "in_early_zone": True,
+                            "extended_from_pivot": False,
+                            "explain": {"invalidation_flags": []},
+                        }
+                    },
+                )
+
+        registry.register(FakeMinervini)
+        registry.register(FakeSetupEngine)
+        orchestrator = ScanOrchestrator(data_provider=provider, registry=registry)
+
+        result = orchestrator.scan_stock_multi(
+            "TEST",
+            ["minervini", "setup_engine"],
+            criteria={
+                "setup_engine_parameters": {
+                    "volume_vs_50d_max_for_ready": 0.75,
+                }
+            },
+        )
+
+        assert result["avg_dollar_volume"] == 200_000_000
+        assert result["correction_survivor"] is True
+        assert result["resilience_score"] is not None
+        assert result["action_state"] == "setup_ready"
+        assert result["opportunity_state"]["metrics"]["volume_dry_up_max"] == 0.75
+
+    def test_policy_error_degrades_one_row_without_turning_scan_into_error(
+        self, monkeypatch
+    ):
+        """Break caught: one policy exception aborting the symbol instead of persisting safe evidence."""
+        stock_data = _make_stock_data("TEST", n_days=260)
+        stock_data.market = "US"
+        stock_data.exchange = "NASDAQ"
+        stock_data.benchmark_symbol = "SPY"
+        stock_data.fundamentals = {"next_earnings_date": None}
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+        registry.register(make_fake_screener_class("alpha", 75.0, True))
+        orchestrator = ScanOrchestrator(data_provider=provider, registry=registry)
+
+        def fail_policy(*_args, **_kwargs):
+            raise RuntimeError("sensitive policy detail")
+
+        monkeypatch.setattr(
+            "app.scanners.scan_orchestrator.build_opportunity_projection",
+            fail_policy,
+        )
+
+        result = orchestrator.scan_stock_multi("TEST", ["alpha"])
+
+        assert result["result_status"] == "ok"
+        assert result["action_state"] == "data_limited"
+        assert result["opportunity_state"]["action_reasons"] == [
+            "opportunity_policy_error"
+        ]
+        assert "sensitive policy detail" not in str(result["opportunity_state"])
+
+    def test_insufficient_history_row_has_explicit_data_limited_projection(self):
+        """Break caught: persisting an insufficient row without the four-field contract."""
+        stock_data = _make_stock_data("TEST", n_days=20)
+        stock_data.market = "HK"
+        stock_data.exchange = "HKEX"
+        stock_data.benchmark_symbol = "^HSI"
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+        registry.register(make_fake_screener_class("ipo", 75.0, True))
+        orchestrator = ScanOrchestrator(data_provider=provider, registry=registry)
+
+        result = orchestrator.scan_stock_multi("TEST", ["ipo"])
+
+        assert result["result_status"] == "insufficient_history"
+        assert result["correction_survivor"] is False
+        assert result["resilience_score"] is None
+        assert result["action_state"] == "data_limited"
+        assert result["opportunity_state"]["market"] == "HK"
+        assert result["opportunity_state"]["mic"] == "XHKG"
+
     def test_merged_requirements_request_benchmark_for_row_rs_fields(self):
         stock_data = _make_stock_data("TEST", n_days=260)
         provider = FakeDataProvider({"TEST": stock_data})

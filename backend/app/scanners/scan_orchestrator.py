@@ -10,6 +10,12 @@ import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
+from app.analysis.patterns.config import (
+    DEFAULT_SETUP_ENGINE_PARAMETERS,
+    SetupEngineParameters,
+    build_setup_engine_parameters,
+)
+
 from .base_screener import (
     BaseStockScreener,
     DataRequirements,
@@ -40,6 +46,10 @@ from app.domain.scanning.ports import (
     MarketRsReader,
     MarketRsResolution,
     StockDataProvider,
+)
+from app.services.opportunity_state_service import (
+    build_data_limited_projection,
+    build_opportunity_projection,
 )
 
 logger = logging.getLogger(__name__)
@@ -532,6 +542,9 @@ class ScanOrchestrator:
             overall_rating = adjustment.rating.value
 
             # 8. Combine results
+            opportunity_parameters = build_setup_engine_parameters(
+                (criteria or {}).get("setup_engine_parameters")
+            )
             combined_result = self._combine_results(
                 symbol,
                 stock_data,
@@ -554,6 +567,7 @@ class ScanOrchestrator:
                 composite_reason=composite_reason,
                 quality_downgrade_reason=adjustment.reason,
                 field_completeness_score=completeness,
+                opportunity_parameters=opportunity_parameters,
             )
             if data_status == "insufficient_history":
                 for key, value in partial_history_metrics(stock_data).items():
@@ -583,6 +597,7 @@ class ScanOrchestrator:
         composite_reason: str | None = None,
         quality_downgrade_reason: Optional[str] = None,
         field_completeness_score: Optional[int] = None,
+        opportunity_parameters: SetupEngineParameters = DEFAULT_SETUP_ENGINE_PARAMETERS,
     ) -> Dict:
         """
         Combine all screener results into a single result dict.
@@ -891,6 +906,21 @@ class ScanOrchestrator:
                 current_price,
             )
 
+        try:
+            opportunity_projection = build_opportunity_projection(
+                result,
+                stock_data,
+                opportunity_parameters,
+            )
+        except Exception:
+            logger.exception("Opportunity policy assembly failed for %s", symbol)
+            opportunity_projection = build_data_limited_projection(
+                result,
+                stock_data,
+                "opportunity_policy_error",
+            )
+        result.update(opportunity_projection)
+
         return result
 
     def _error_result(self, symbol: str, error: str) -> Dict:
@@ -965,4 +995,7 @@ class ScanOrchestrator:
             if stock_data.fundamentals.get("industry"):
                 result["gics_industry"] = stock_data.fundamentals["industry"]
         result.update(partial_history_metrics(stock_data))
+        result.update(
+            build_data_limited_projection(result, stock_data, "insufficient_data")
+        )
         return result
