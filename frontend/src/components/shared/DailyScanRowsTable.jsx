@@ -13,6 +13,7 @@ import {
 
 import PriceSparkline from '../Scan/PriceSparkline';
 import RSSparkline from '../Scan/RSSparkline';
+import ActionStateBadge from './ActionStateBadge';
 import TickerCell from '../common/TickerCell';
 import { getGroupRankColor } from '../../utils/colorUtils';
 import { formatLocalCurrency } from '../../utils/formatUtils';
@@ -45,6 +46,9 @@ function DailyScanRowsTable({
   priceSparklineWidth = 137,
   priceSparklineInnerWidth = 86,
   testId,
+  scoreField = 'composite_score',
+  showActionState = false,
+  onOpenOpportunity = null,
 }) {
   const isChartEnabled = (symbol) => (
     Boolean(onOpenChart) && (chartEnabledSymbols == null || chartEnabledSymbols.has(symbol))
@@ -54,7 +58,7 @@ function DailyScanRowsTable({
       onOpenChart(symbol, navigationSymbols);
     }
   };
-  const colSpan = 8 + (showRs ? 1 : 0) + (showRating ? 1 : 0);
+  const colSpan = 8 + (showRs ? 1 : 0) + (showRating ? 1 : 0) + (showActionState ? 1 : 0);
 
   return (
     <Paper
@@ -88,6 +92,7 @@ function DailyScanRowsTable({
             <TableRow>
               <TableCell align="center">Symbol</TableCell>
               <TableCell align="center">Score</TableCell>
+              {showActionState ? <TableCell align="center">Action</TableCell> : null}
               {showRs ? <TableCell align="center">RS</TableCell> : null}
               <TableCell align="center">Price</TableCell>
               <TableCell align="center">MCap</TableCell>
@@ -133,7 +138,20 @@ function DailyScanRowsTable({
                   <TableCell align="center">
                     <TickerCell symbol={row.symbol} companyName={row.company_name} align="center" />
                   </TableCell>
-                  <TableCell align="center">{formatNumber(row.composite_score, 1)}</TableCell>
+                  <TableCell align="center">{formatNumber(row?.[scoreField], 1)}</TableCell>
+                  {showActionState ? (
+                    <TableCell align="center">
+                      <ActionStateBadge
+                        state={row.action_state}
+                        onClick={row.opportunity_state && onOpenOpportunity
+                          ? (event) => {
+                            event.stopPropagation();
+                            onOpenOpportunity(row);
+                          }
+                          : undefined}
+                      />
+                    </TableCell>
+                  ) : null}
                   {showRs ? <TableCell align="center">{formatNumber(row.rs_rating, 0)}</TableCell> : null}
                   <TableCell align="center">{formatLocalCurrency(row.current_price, row.currency)}</TableCell>
                   <TableCell align="center">

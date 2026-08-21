@@ -31,13 +31,16 @@ import { MARKET_CAP_OPTIONS } from '../../features/scan/components/filterPanel/c
 import { applyScanFilterDefaults } from '../../features/scan/defaultFilters';
 import { filterStaticScanRows, sortStaticScanRows } from '../scanClient';
 import DailyScanRowsTable from '../../components/shared/DailyScanRowsTable';
+import CorrectionSurvivorsPanel from '../../components/shared/CorrectionSurvivorsPanel';
 import MarketHealthExposure from '../../components/MarketScan/MarketHealthExposure';
 import { buildFiltersFromPreset } from '../hooks/usePresetScreens';
 import { formatSnapshotFreshnessLabel } from '../../utils/snapshotFreshness';
+import { buildCorrectionSurvivorSummary } from '../../features/opportunityState/correctionSurvivorSummary';
 
 const EMPTY_RESULTS = [];
 const DEFAULT_TOP_RESULTS = 20;
 const LEADERS_SCREEN_ID = 'leaders_in_leading_groups';
+const CORRECTION_SURVIVORS_SCREEN_ID = 'correction_survivors';
 
 const formatNumber = (value, digits = 0) => {
   if (value == null) return '-';
@@ -67,18 +70,26 @@ function StaticHomePage() {
       const rowsBySymbol = new Map(
         (scanManifest.initial_rows || []).map((row) => [row.symbol, row])
       );
-      const chunkPayloads = await Promise.all(
+      const chunkResults = await Promise.allSettled(
         (scanManifest.chunks || []).map((chunk) => fetchStaticJson(chunk.path))
       );
-      chunkPayloads.forEach((payload) => {
+      const successfulChunks = chunkResults
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => result.value);
+      successfulChunks.forEach((payload) => {
         (payload.rows || []).forEach((row) => {
           rowsBySymbol.set(row.symbol, row);
         });
       });
+      const failedChunks = chunkResults.filter((result) => result.status === 'rejected');
+      const rowsTotal = Number(scanManifest.rows_total);
       return {
         rows: Array.from(rowsBySymbol.values()),
         defaultFilters: scanManifest.default_filters || {},
         presetScreens: scanManifest.preset_screens || [],
+        complete: failedChunks.length === 0
+          && Number.isFinite(rowsTotal)
+          && rowsBySymbol.size >= rowsTotal,
       };
     },
     enabled: Boolean(marketEntry.pages?.scan?.path),
@@ -125,6 +136,32 @@ function StaticHomePage() {
       leadingGroupScreen.sort_order
     ).slice(0, DEFAULT_TOP_RESULTS);
   }, [leadingGroupScreen, scanRows]);
+  const opportunityStateEnabled = marketEntry.features?.opportunity_state === true;
+  const correctionSurvivorsScreen = useMemo(() => {
+    if (!opportunityStateEnabled) return null;
+    return scanBundleQuery.data?.presetScreens?.find(
+      (screen) => screen.id === CORRECTION_SURVIVORS_SCREEN_ID
+    ) ?? null;
+  }, [opportunityStateEnabled, scanBundleQuery.data?.presetScreens]);
+  const correctionSurvivorRows = useMemo(() => {
+    if (!opportunityStateEnabled || !correctionSurvivorsScreen) return EMPTY_RESULTS;
+    return sortStaticScanRows(
+      filterStaticScanRows(scanRows, buildFiltersFromPreset(correctionSurvivorsScreen)),
+      correctionSurvivorsScreen.sort_by,
+      correctionSurvivorsScreen.sort_order,
+    );
+  }, [correctionSurvivorsScreen, opportunityStateEnabled, scanRows]);
+  const correctionSurvivorSummary = useMemo(() => {
+    if (!opportunityStateEnabled) return null;
+    return buildCorrectionSurvivorSummary(correctionSurvivorRows, {
+      complete: Boolean(correctionSurvivorsScreen) && scanBundleQuery.data?.complete === true,
+    });
+  }, [
+    correctionSurvivorRows,
+    correctionSurvivorsScreen,
+    opportunityStateEnabled,
+    scanBundleQuery.data?.complete,
+  ]);
 
   const chartEntries = useMemo(() => chartIndexQuery.data?.symbols || [], [chartIndexQuery.data]);
   const chartEnabledSymbols = useMemo(() => new Set(chartEntries.map((e) => e.symbol)), [chartEntries]);
@@ -135,6 +172,13 @@ function StaticHomePage() {
   const leadingGroupNavigationSymbols = useMemo(
     () => leadingGroupRows.map((r) => r.symbol).filter((s) => chartEnabledSymbols.has(s)),
     [leadingGroupRows, chartEnabledSymbols],
+  );
+  const correctionSurvivorNavigationSymbols = useMemo(
+    () => correctionSurvivorRows
+      .slice(0, DEFAULT_TOP_RESULTS)
+      .map((row) => row.symbol)
+      .filter((symbol) => chartEnabledSymbols.has(symbol)),
+    [chartEnabledSymbols, correctionSurvivorRows],
   );
   const leadingGroupMinVolume = leadingGroupScreen?.filters?.minVolume;
   const leadingGroupSubtitle = leadingGroupMinVolume == null
@@ -268,6 +312,16 @@ function StaticHomePage() {
       </Grid>
 
       <MarketHealthExposure exposure={home?.market_health_exposure} />
+
+      {opportunityStateEnabled ? (
+        <CorrectionSurvivorsPanel
+          summary={correctionSurvivorSummary}
+          posture={home?.market_health_exposure}
+          chartEnabledSymbols={chartEnabledSymbols}
+          navigationSymbols={correctionSurvivorNavigationSymbols}
+          onOpenChart={handleRowClick}
+        />
+      ) : null}
 
       <DailyScanRowsTable
         testId="top-scan-candidates-section"

@@ -11,6 +11,7 @@ const useStaticChartIndex = vi.fn();
 const useStaticMarket = vi.fn();
 const modalSpy = vi.fn();
 const priceSparklineSpy = vi.fn();
+const correctionPanelSpy = vi.fn();
 
 vi.mock('../dataClient', () => ({
   fetchStaticJson: (...args) => fetchStaticJson(...args),
@@ -20,6 +21,7 @@ vi.mock('../dataClient', () => ({
     display_name: manifest.markets[selectedMarket].display_name,
     pages: manifest.markets[selectedMarket].pages,
     assets: manifest.markets[selectedMarket].assets,
+    features: manifest.markets[selectedMarket].features,
   }),
 }));
 
@@ -48,6 +50,22 @@ vi.mock('../../components/Scan/PriceSparkline', () => ({
 vi.mock('../../components/Scan/RSSparkline', () => ({
   default: () => <span data-testid="rs-sparkline" />,
 }));
+
+vi.mock('../../components/MarketScan/MarketHealthExposure', () => ({
+  default: () => <div data-testid="market-health-exposure" />,
+}));
+
+vi.mock('../../components/shared/CorrectionSurvivorsPanel', async () => {
+  const actual = await vi.importActual('../../components/shared/CorrectionSurvivorsPanel');
+  return {
+    ...actual,
+    default: (props) => {
+      correctionPanelSpy(props);
+      const ActualPanel = actual.default;
+      return <ActualPanel {...props} />;
+    },
+  };
+});
 
 const manifest = {
   markets: {
@@ -79,6 +97,18 @@ const makeLeadersPresetScreen = (minVolume = 100_000_000) => ({
   sort_order: 'desc',
 });
 
+const makeCorrectionSurvivorsPresetScreen = (overrides = {}) => ({
+  id: 'correction_survivors',
+  name: 'Correction Survivors',
+  short_name: 'Survivors',
+  description: 'Persisted correction survivors',
+  tier: 1,
+  filters: { correctionSurvivor: true },
+  sort_by: 'resilience_score',
+  sort_order: 'desc',
+  ...overrides,
+});
+
 const makeLeaderRow = (index, overrides = {}) => ({
   symbol: `LEAD${String(index).padStart(2, '0')}`,
   company_name: `Leader ${index}`,
@@ -105,6 +135,8 @@ describe('StaticHomePage', () => {
     vi.clearAllMocks();
     modalSpy.mockClear();
     priceSparklineSpy.mockClear();
+    correctionPanelSpy.mockClear();
+    delete manifest.markets.US.features;
     useStaticManifest.mockReturnValue({
       data: manifest,
       isLoading: false,
@@ -136,6 +168,7 @@ describe('StaticHomePage', () => {
       top_groups: [],
     };
     scanManifestPayload = {
+      rows_total: 3,
       default_filters: { minVolume: 100_000_000 },
       initial_rows: [
         {
@@ -489,5 +522,129 @@ describe('StaticHomePage', () => {
         navigationSymbols: ['LEAD01', 'LEAD02'],
       });
     });
+  });
+
+  it('follows changed manifest preset membership and ordering for the static survivor panel', async () => {
+    manifest.markets.US.features = { opportunity_state: true };
+    homePayload.market_health_exposure = {
+      date: '2026-08-21',
+      stance: 'Confirmed Uptrend',
+      benchmark_symbol: 'SPY',
+    };
+    scanManifestPayload.rows_total = 3;
+    scanManifestPayload.initial_rows = [
+      {
+        ...makeLeaderRow(1),
+        symbol: 'MANIFEST-SECOND',
+        composite_score: 20,
+        correction_survivor: false,
+        resilience_score: 99,
+        action_state: 'watch',
+        opportunity_state: {},
+      },
+    ];
+    scanManifestPayload.chunks = [{ path: 'markets/us/scan/chunks/chunk-0001.json' }];
+    scanManifestPayload.preset_screens = [
+      makeLeadersPresetScreen(),
+      makeCorrectionSurvivorsPresetScreen({
+        // Deliberately change both membership and sort semantics. The home
+        // panel must follow this exported definition, not its ID or title.
+        filters: { correctionSurvivor: false },
+        sort_by: 'composite_score',
+        sort_order: 'asc',
+      }),
+    ];
+    scanChunkPayload.rows = [
+      {
+        ...makeLeaderRow(2),
+        symbol: 'MANIFEST-FIRST',
+        composite_score: 10,
+        correction_survivor: false,
+        resilience_score: 70,
+        action_state: 'setup_ready',
+        opportunity_state: {
+          passed_checks: ['leadership_gate'],
+          failed_checks: [],
+          warnings: [],
+          action_reasons: ['static persisted evidence'],
+        },
+      },
+      {
+        ...makeLeaderRow(3),
+        symbol: 'HARDCODED-ONLY',
+        composite_score: 1,
+        correction_survivor: true,
+        resilience_score: 100,
+        action_state: 'exit_risk',
+        opportunity_state: {},
+      },
+    ];
+
+    renderWithProviders(<StaticHomePage />);
+
+    const panel = await screen.findByTestId('correction-survivors-panel');
+    expect(within(panel).getByText('Total survivors: 2')).toBeInTheDocument();
+    expect(within(panel).getByText('Setup Ready: 1')).toBeInTheDocument();
+    expect(within(panel).getByText('Watch: 1')).toBeInTheDocument();
+    expect(within(panel).getByText('Confirmed Uptrend')).toBeInTheDocument();
+    expect(within(panel).getByText('2026-08-21 · SPY')).toBeInTheDocument();
+    const survivorRows = within(panel).getAllByRole('row').slice(1);
+    expect(survivorRows[0]).toHaveTextContent('MANIFEST-FIRST');
+    expect(survivorRows[1]).toHaveTextContent('MANIFEST-SECOND');
+    expect(within(panel).queryByText('HARDCODED-ONLY')).not.toBeInTheDocument();
+    expect(correctionPanelSpy.mock.calls.at(-1)?.[0]).not.toHaveProperty('opportunityTelemetrySurface');
+
+    const user = userEvent.setup();
+    await user.click(within(panel).getByText('Setup Ready'));
+    expect(await screen.findByText('static persisted evidence')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['false', { opportunity_state: false }],
+  ])('hides the static survivor panel when the market capability is %s', async (_label, features) => {
+    if (features) manifest.markets.US.features = features;
+    scanManifestPayload.preset_screens.push(makeCorrectionSurvivorsPresetScreen());
+
+    renderWithProviders(<StaticHomePage />);
+
+    expect(await screen.findByText('Top Scan Candidates')).toBeInTheDocument();
+    expect(screen.queryByTestId('correction-survivors-panel')).not.toBeInTheDocument();
+    expect(correctionPanelSpy).not.toHaveBeenCalled();
+  });
+
+  it('retains successful home sections but marks survivor data incomplete after a chunk failure', async () => {
+    manifest.markets.US.features = { opportunity_state: true };
+    scanManifestPayload.rows_total = 4;
+    scanManifestPayload.preset_screens.push(makeCorrectionSurvivorsPresetScreen());
+    scanManifestPayload.chunks.push({ path: 'markets/us/scan/chunks/chunk-failed.json' });
+
+    renderWithProviders(<StaticHomePage />);
+
+    expect(await screen.findByText('0700.HK')).toBeInTheDocument();
+    expect(screen.getByText('Top Scan Candidates')).toBeInTheDocument();
+    expect(screen.getByText('Leaders in Leading Groups')).toBeInTheDocument();
+    expect(screen.getByText('Survivor data incomplete')).toBeInTheDocument();
+    expect(screen.queryByText('No correction survivors in this snapshot.')).not.toBeInTheDocument();
+  });
+
+  it('renders a complete static zero result distinctly from unavailable data', async () => {
+    manifest.markets.US.features = { opportunity_state: true };
+    scanManifestPayload.preset_screens.push(makeCorrectionSurvivorsPresetScreen());
+
+    renderWithProviders(<StaticHomePage />);
+
+    expect(await screen.findByText('No correction survivors in this snapshot.')).toBeInTheDocument();
+    expect(screen.getByText('Total survivors: 0')).toBeInTheDocument();
+    expect(screen.queryByText('Survivor data incomplete')).not.toBeInTheDocument();
+  });
+
+  it('marks the static survivor summary incomplete when capability exists without its preset', async () => {
+    manifest.markets.US.features = { opportunity_state: true };
+
+    renderWithProviders(<StaticHomePage />);
+
+    expect(await screen.findByText('Survivor data incomplete')).toBeInTheDocument();
+    expect(screen.queryByText('No correction survivors in this snapshot.')).not.toBeInTheDocument();
   });
 });
