@@ -11,6 +11,7 @@
   },
   "fields": [
     {"field": "composite_score", "kind": "range", "sortable": true, "legacy_key": "compositeScore", "builder": {"label": "Composite score", "category": "Scores"}},
+    {"field": "resilience_score", "kind": "range", "sortable": true, "builder": {"label": "Resilience score", "category": "Opportunity"}},
     {"field": "minervini_score", "kind": "range", "sortable": true, "legacy_key": "minerviniScore", "builder": {"label": "Minervini score", "category": "Scores"}},
     {"field": "canslim_score", "kind": "range", "sortable": true, "legacy_key": "canslimScore", "builder": {"label": "CANSLIM score", "category": "Scores"}},
     {"field": "ipo_score", "kind": "range", "sortable": true, "legacy_key": "ipoScore"},
@@ -79,6 +80,8 @@
     {"field": "gics_sector", "kind": "categorical", "filter_kinds": ["categorical", "text"], "api_filter_kinds": ["categorical"], "sortable": true, "builder": {"label": "GICS sector", "category": "Classification", "option_source": "gics_sectors"}},
     {"field": "market", "kind": "categorical", "builder": {"label": "Market", "category": "Classification", "options": ["US", "HK", "IN", "JP", "KR", "TW", "CN", "CA", "DE", "SG", "AU", "MY"]}},
     {"field": "se_pattern_primary", "kind": "categorical", "sortable": true, "builder": {"label": "Setup pattern", "category": "Setups", "options": ["cup_with_handle", "double_bottom", "high_tight_flag", "first_pullback", "vcp", "three_weeks_tight", "nr7_inside_day"]}},
+    {"field": "action_state", "kind": "categorical", "sortable": true, "builder": {"label": "Action state", "category": "Opportunity", "options": ["exit_risk", "deteriorating", "event_risk", "extended", "data_limited", "setup_ready", "watch"]}},
+    {"field": "correction_survivor", "kind": "boolean", "sortable": true, "legacy_key": "correctionSurvivor", "builder": {"label": "Correction survivor", "category": "Opportunity"}},
     {"field": "vcp_detected", "kind": "boolean", "legacy_key": "vcpDetected", "builder": {"label": "VCP detected", "category": "Setups"}},
     {"field": "vcp_ready_for_breakout", "kind": "boolean", "legacy_key": "vcpReady", "builder": {"label": "VCP ready", "category": "Setups"}},
     {"field": "ma_alignment", "kind": "boolean", "legacy_key": "maAlignment", "builder": {"label": "MA alignment", "category": "Technicals"}},

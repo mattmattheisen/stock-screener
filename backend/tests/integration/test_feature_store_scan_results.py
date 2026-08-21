@@ -13,11 +13,13 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.database import Base
 from app.domain.common.query import (
+    BooleanFilter,
     CategoricalFilter,
     FilterSpec,
     PageSpec,
@@ -39,8 +41,41 @@ from app.infra.db.models.feature_store import (
 )
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.models.stock_universe import StockUniverse
+from app.schemas.scanning import ScanResultItem
 
 AS_OF = date(2026, 2, 17)
+
+OPPORTUNITY_EVIDENCE = {
+    "schema_version": 1,
+    "policy_version": "correction-survivors-v1",
+    "as_of_date": "2026-02-17",
+    "market": "US",
+    "mic": "XNAS",
+    "benchmark_symbol": "SPY",
+    "benchmark_as_of_date": "2026-02-17",
+    "passed_checks": ["benchmark_leadership", "trend_integrity"],
+    "failed_checks": [],
+    "warnings": [],
+    "metrics": {"benchmark_relative_return_65d": 0.083},
+    "data_availability": {"features": "available"},
+    "action_reasons": ["survivor", "setup_ready"],
+}
+
+
+@pytest.mark.parametrize(
+    "invalid_evidence",
+    [
+        {**OPPORTUNITY_EVIDENCE, "schema_version": 2},
+        {**OPPORTUNITY_EVIDENCE, "policy_version": "future-policy"},
+    ],
+)
+def test_http_contract_rejects_unknown_opportunity_versions(invalid_evidence):
+    with pytest.raises(ValidationError):
+        ScanResultItem(
+            symbol="VERSIONED",
+            rating="Watch",
+            opportunity_state=invalid_evidence,
+        )
 
 
 @pytest.fixture
@@ -98,6 +133,14 @@ def seeded_session(session):
                 "passes_template": True,
                 "from_52w_high_pct": -5.0,
                 "above_52w_low_pct": 45.0,
+                "correction_survivor": True,
+                "resilience_score": 84.0,
+                "action_state": "setup_ready",
+                "opportunity_state": OPPORTUNITY_EVIDENCE,
+                "setup_engine": {
+                    "explain": {"summary": "full setup evidence"},
+                    "candidates": [{"pattern": "vcp"}],
+                },
             },
         ),
         StockFeatureDaily(
@@ -123,6 +166,13 @@ def seeded_session(session):
                 "screeners_total": 2,
                 "adr_percent": 1.8,
                 "passes_template": True,
+                "correction_survivor": False,
+                "resilience_score": 84.0,
+                "action_state": "watch",
+                "opportunity_state": {
+                    **OPPORTUNITY_EVIDENCE,
+                    "action_reasons": ["watch"],
+                },
             },
         ),
         StockFeatureDaily(
@@ -312,6 +362,86 @@ class TestQueryRunAsScanResults:
         assert ef["passes_template"] is True
         assert ef["week_52_high_distance"] == -5.0
         assert ef["week_52_low_distance"] == 45.0
+
+    def test_feature_row_maps_compact_opportunity_contract(self, seeded_session):
+        rows = SqlFeatureStoreRepository(seeded_session).query_all_as_scan_results(
+            1,
+            FilterExpression(),
+            SortSpec(field="symbol", order=SortOrder.ASC),
+            include_sparklines=False,
+            include_setup_payload=False,
+        )
+
+        item = next(row for row in rows if row.symbol == "AAPL")
+        response = ScanResultItem.from_domain(item, include_setup_payload=False)
+
+        assert "se_explain" not in item.extended_fields
+        assert "se_candidates" not in item.extended_fields
+        assert response.correction_survivor is True
+        assert response.resilience_score == 84.0
+        assert response.action_state == "setup_ready"
+        assert response.opportunity_state is not None
+        assert response.opportunity_state.schema_version == 1
+        assert response.opportunity_state.policy_version == "correction-survivors-v1"
+        assert response.opportunity_state.metrics == {
+            "benchmark_relative_return_65d": 0.083
+        }
+        assert response.se_explain is None
+        assert response.se_candidates is None
+
+    def test_legacy_feature_row_keeps_not_computed_nulls(self, seeded_session):
+        page = SqlFeatureStoreRepository(seeded_session).query_run_as_scan_results(
+            1,
+            QuerySpec(),
+        )
+
+        item = next(row for row in page.items if row.symbol == "GOOGL")
+        response = ScanResultItem.from_domain(item)
+
+        assert response.correction_survivor is None
+        assert response.resilience_score is None
+        assert response.action_state is None
+        assert response.opportunity_state is None
+
+    def test_filters_correction_survivors_from_top_level_feature_json(
+        self, seeded_session
+    ):
+        expression = FilterExpression(
+            required_conditions=(BooleanFilter("correction_survivor", True),)
+        )
+
+        page = SqlFeatureStoreRepository(seeded_session).query_run_as_scan_results(
+            1,
+            QuerySpec(expression=expression),
+        )
+
+        assert [item.symbol for item in page.items] == ["AAPL"]
+
+    def test_filters_action_state_from_top_level_feature_json(self, seeded_session):
+        expression = FilterExpression(
+            required_conditions=(
+                CategoricalFilter("action_state", ("setup_ready",)),
+            )
+        )
+
+        page = SqlFeatureStoreRepository(seeded_session).query_run_as_scan_results(
+            1,
+            QuerySpec(expression=expression),
+        )
+
+        assert [item.symbol for item in page.items] == ["AAPL"]
+
+    def test_sorts_resilience_desc_with_nulls_last_and_symbol_tiebreak(
+        self, seeded_session
+    ):
+        page = SqlFeatureStoreRepository(seeded_session).query_run_as_scan_results(
+            1,
+            QuerySpec(
+                sort=SortSpec(field="resilience_score", order=SortOrder.DESC),
+            ),
+        )
+
+        assert [item.symbol for item in page.items] == ["AAPL", "MSFT", "GOOGL"]
 
     def test_range_filter_on_json_field(self, seeded_session):
         """Range filter on rs_rating (JSON field) works correctly."""

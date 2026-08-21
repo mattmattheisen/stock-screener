@@ -10,6 +10,7 @@ export const buildDefaultScanFilters = () => ({
   advUsd: { min: null, max: null },
   markets: [],
   compositeScore: { min: null, max: null },
+  correctionSurvivor: null,
   minerviniScore: { min: null, max: null },
   canslimScore: { min: null, max: null },
   ipoScore: { min: null, max: null },

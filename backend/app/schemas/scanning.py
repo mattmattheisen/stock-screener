@@ -19,6 +19,7 @@ from ..infra.serialization import (
     normalize_string_list,
     sanitize_sparkline,
 )
+from .opportunity_state import OpportunityStateResponse
 from .universe import UniverseDefinition
 
 
@@ -163,6 +164,13 @@ class ScanResultItem(BaseModel):
     composite_score: Optional[float] = None
     rating: str
     matched_groups: List[MatchedGroup] = Field(default_factory=list)
+
+    # Persisted correction-survivor policy projection. Missing values mean the
+    # row predates this versioned computation and must not be inferred.
+    correction_survivor: bool | None = None
+    resilience_score: float | None = None
+    action_state: str | None = None
+    opportunity_state: OpportunityStateResponse | None = None
 
     # Individual screener scores
     minervini_score: Optional[float] = None
@@ -325,6 +333,10 @@ class ScanResultItem(BaseModel):
                 MatchedGroup(id=group.id, name=group.name)
                 for group in getattr(item, "matched_groups", ())
             ],
+            correction_survivor=ef.get("correction_survivor"),
+            resilience_score=ef.get("resilience_score"),
+            action_state=ef.get("action_state"),
+            opportunity_state=ef.get("opportunity_state"),
             # Individual screener scores
             minervini_score=ef.get("minervini_score"),
             canslim_score=ef.get("canslim_score"),

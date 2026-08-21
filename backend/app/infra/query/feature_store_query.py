@@ -114,6 +114,10 @@ _FIELD_BINDINGS = column_bindings({
     "ma_alignment": ("ma_alignment",),
     "stage_name": ("stage_name",),
     "passes_template": ("passes_template",),
+    # Correction-survivor opportunity projection
+    "correction_survivor": ("correction_survivor",),
+    "resilience_score": ("resilience_score",),
+    "action_state": ("action_state",),
     # Pocket Pivot / Power Trend
     "pocket_pivot": ("pocket_pivot",),
     "power_trend": ("power_trend",),

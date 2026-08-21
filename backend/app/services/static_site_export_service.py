@@ -73,7 +73,7 @@ from app.wiring.bootstrap import (
 
 logger = logging.getLogger(__name__)
 
-SCAN_BUNDLE_SCHEMA_VERSION = "static-scan-v1"
+SCAN_BUNDLE_SCHEMA_VERSION = "static-scan-v2"
 CHART_BUNDLE_SCHEMA_VERSION = "static-charts-v1"
 SCAN_CHUNK_SIZE = 1000
 STATIC_CHART_LIMIT = 200
@@ -462,6 +462,7 @@ class StaticSiteExportService:
             ),
             "features": {
                 "scan": True,
+                "opportunity_state": True,
                 "breadth": bool(breadth_payload.get("available", True)),
                 "groups": bool(groups_payload.get("available", False)),
                 "rrg": rrg_available,
@@ -787,6 +788,7 @@ class StaticSiteExportService:
 
         manifest = {
             "schema_version": SCAN_BUNDLE_SCHEMA_VERSION,
+            "features": {"opportunity_state": True},
             "generated_at": generated_at,
             "as_of_date": run.as_of_date.isoformat(),
             "run_id": run.id,
@@ -877,7 +879,13 @@ class StaticSiteExportService:
         }
 
     def _serialize_scan_row(self, row) -> dict[str, Any]:
-        item = ScanResultItem.from_domain(row, include_setup_payload=False).model_dump(mode="json")
+        item = ScanResultItem.from_domain(
+            row,
+            include_setup_payload=False,
+        ).model_dump(
+            mode="json",
+            exclude={"se_explain", "se_candidates"},
+        )
         extended = row.extended_fields or {}
         item.update(
             {

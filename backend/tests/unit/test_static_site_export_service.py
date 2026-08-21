@@ -488,10 +488,12 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert manifest["default_market"] == "US"
     assert manifest["supported_markets"] == ["US"]
     assert manifest["features"]["charts"] is True
+    assert manifest["features"]["opportunity_state"] is True
     assert manifest["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["assets"]["charts"]["path"] == "charts/index.json"
     assert manifest["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
     assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
+    assert manifest["markets"]["US"]["features"]["opportunity_state"] is True
     assert manifest["markets"]["US"]["assets"]["charts"]["path"] == "charts/index.json"
     assert manifest["markets"]["US"]["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
     assert manifest["markets"]["US"]["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
@@ -756,6 +758,8 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     second_chunk = json.loads((tmp_path / "scan" / "chunks" / "chunk-0002.json").read_text(encoding="utf-8"))
 
     assert manifest["chunk_size"] == 3
+    assert manifest["schema_version"] == "static-scan-v2"
+    assert manifest["features"] == {"opportunity_state": True}
     assert manifest["rows_total"] == 5
     assert manifest["default_filters"] == {"minVolume": 100_000_000}
     leaders_screen = next(
@@ -769,6 +773,7 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     assert [row["symbol"] for row in manifest["preview_rows"]] == ["SYM0", "SYM2", "SYM4"]
     assert [chunk["count"] for chunk in manifest["chunks"]] == [3, 2]
     assert [row["symbol"] for row in first_chunk["rows"]] == ["SYM0", "SYM1", "SYM2"]
+    assert first_chunk["schema_version"] == "static-scan-v2"
     assert [row["symbol"] for row in second_chunk["rows"]] == ["SYM3", "SYM4"]
 
 
@@ -1148,6 +1153,51 @@ def test_serialize_scan_row_preserves_young_ipo_partial_metrics(service_and_sess
     assert payload["adr_percent"] == 10.0
     assert payload["rs_rating_1m"] == 50.0
     assert payload["rs_rating"] is None
+
+
+def test_serialize_scan_row_preserves_compact_opportunity_evidence_only(
+    service_and_session_factory,
+):
+    service, _session_factory = service_and_session_factory
+    evidence = {
+        "schema_version": 1,
+        "policy_version": "correction-survivors-v1",
+        "as_of_date": "2026-08-21",
+        "market": "US",
+        "mic": "XNAS",
+        "benchmark_symbol": "SPY",
+        "benchmark_as_of_date": "2026-08-21",
+        "passed_checks": ["benchmark_leadership"],
+        "failed_checks": [],
+        "warnings": [],
+        "metrics": {"benchmark_relative_return_65d": 0.083},
+        "data_availability": {"features": "available"},
+        "action_reasons": ["survivor", "setup_ready"],
+    }
+    row = SimpleNamespace(
+        symbol="READY",
+        composite_score=91.0,
+        rating="Strong Buy",
+        current_price=101.0,
+        screeners_run=["minervini", "setup_engine"],
+        extended_fields={
+            "correction_survivor": True,
+            "resilience_score": 84.0,
+            "action_state": "setup_ready",
+            "opportunity_state": evidence,
+            "se_explain": {"summary": "full setup evidence"},
+            "se_candidates": [{"pattern": "vcp"}],
+        },
+    )
+
+    payload = service._serialize_scan_row(row)  # noqa: SLF001
+
+    assert payload["correction_survivor"] is True
+    assert payload["resilience_score"] == 84.0
+    assert payload["action_state"] == "setup_ready"
+    assert payload["opportunity_state"] == evidence
+    assert "se_explain" not in payload
+    assert "se_candidates" not in payload
 
 
 def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):

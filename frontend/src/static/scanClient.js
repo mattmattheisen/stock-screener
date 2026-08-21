@@ -45,7 +45,10 @@ export const sortStaticScanRows = (
   return [...rows].sort((left, right) => {
     const leftValue = getSortValue(left, sortBy);
     const rightValue = getSortValue(right, sortBy);
-    if (sortBy === 'composite_score' && sortOrder === 'desc') {
+    if (
+      ['composite_score', 'resilience_score'].includes(sortBy)
+      && sortOrder === 'desc'
+    ) {
       if (leftValue == null && rightValue != null) {
         return 1;
       }
@@ -53,7 +56,9 @@ export const sortStaticScanRows = (
         return -1;
       }
     }
-    const comparison = compareValues(leftValue, rightValue);
+    const comparison = sortBy === 'resilience_score'
+      ? Number(leftValue) - Number(rightValue)
+      : compareValues(leftValue, rightValue);
     if (comparison !== 0) {
       return comparison * direction;
     }

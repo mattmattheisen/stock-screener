@@ -13,7 +13,14 @@ from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
 )
-from app.domain.scanning.filter_spec import QuerySpec
+from app.domain.scanning.filter_spec import (
+    BooleanFilter,
+    CategoricalFilter,
+    FilterExpression,
+    QuerySpec,
+    SortOrder,
+    SortSpec,
+)
 from app.domain.scanning.ports import ScanResultRsAudit
 from app.infra.db.models.relative_strength import MarketRsFormulaPointer
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
@@ -54,6 +61,133 @@ def _base_raw_result() -> dict:
         "screeners_run": ["minervini", "ipo"],
         "details": {"screeners": {}},
     }
+
+
+def _opportunity_projection(
+    *, survivor: bool, score: float, action_state: str
+) -> dict:
+    return {
+        "correction_survivor": survivor,
+        "resilience_score": score,
+        "action_state": action_state,
+        "opportunity_state": {
+            "schema_version": 1,
+            "policy_version": "correction-survivors-v1",
+            "as_of_date": "2026-08-21",
+            "market": "US",
+            "mic": "XNAS",
+            "benchmark_symbol": "SPY",
+            "benchmark_as_of_date": "2026-08-21",
+            "passed_checks": ["benchmark_leadership"],
+            "failed_checks": [],
+            "warnings": [],
+            "metrics": {"benchmark_relative_return_65d": 0.083},
+            "data_availability": {"features": "available"},
+            "action_reasons": [action_state],
+        },
+    }
+
+
+def _seed_opportunity_scan_rows(session: Session) -> SqlScanResultRepository:
+    session.add_all(
+        [
+            ScanResult(
+                scan_id="scan-opportunity",
+                symbol="ALPHA",
+                composite_score=80.0,
+                rating="Buy",
+                details=_opportunity_projection(
+                    survivor=True,
+                    score=84.0,
+                    action_state="setup_ready",
+                ),
+            ),
+            ScanResult(
+                scan_id="scan-opportunity",
+                symbol="BETA",
+                composite_score=90.0,
+                rating="Watch",
+                details=_opportunity_projection(
+                    survivor=False,
+                    score=84.0,
+                    action_state="watch",
+                ),
+            ),
+            ScanResult(
+                scan_id="scan-opportunity",
+                symbol="LEGACY",
+                composite_score=99.0,
+                rating="Watch",
+                details={},
+            ),
+        ]
+    )
+    session.commit()
+    return SqlScanResultRepository(session)
+
+
+def test_legacy_repository_maps_opportunity_contract_and_preserves_old_row_nulls(
+    session: Session,
+):
+    repo = _seed_opportunity_scan_rows(session)
+
+    page = repo.query("scan-opportunity", QuerySpec())
+    responses = {
+        item.symbol: ScanResultItem.from_domain(item)
+        for item in page.items
+    }
+
+    assert responses["ALPHA"].correction_survivor is True
+    assert responses["ALPHA"].resilience_score == 84.0
+    assert responses["ALPHA"].action_state == "setup_ready"
+    assert responses["ALPHA"].opportunity_state is not None
+    assert (
+        responses["ALPHA"].opportunity_state.policy_version
+        == "correction-survivors-v1"
+    )
+    assert responses["LEGACY"].correction_survivor is None
+    assert responses["LEGACY"].resilience_score is None
+    assert responses["LEGACY"].action_state is None
+    assert responses["LEGACY"].opportunity_state is None
+
+
+def test_legacy_repository_filters_correction_survivors(session: Session):
+    repo = _seed_opportunity_scan_rows(session)
+    expression = FilterExpression(
+        required_conditions=(BooleanFilter("correction_survivor", True),)
+    )
+
+    page = repo.query("scan-opportunity", QuerySpec(expression=expression))
+
+    assert [item.symbol for item in page.items] == ["ALPHA"]
+
+
+def test_legacy_repository_filters_action_state(session: Session):
+    repo = _seed_opportunity_scan_rows(session)
+    expression = FilterExpression(
+        required_conditions=(
+            CategoricalFilter("action_state", ("setup_ready",)),
+        )
+    )
+
+    page = repo.query("scan-opportunity", QuerySpec(expression=expression))
+
+    assert [item.symbol for item in page.items] == ["ALPHA"]
+
+
+def test_legacy_repository_sorts_resilience_desc_nulls_last_then_symbol(
+    session: Session,
+):
+    repo = _seed_opportunity_scan_rows(session)
+
+    page = repo.query(
+        "scan-opportunity",
+        QuerySpec(
+            sort=SortSpec(field="resilience_score", order=SortOrder.DESC),
+        ),
+    )
+
+    assert [item.symbol for item in page.items] == ["ALPHA", "BETA", "LEGACY"]
 
 
 def test_persist_orchestrator_results_enriches_reference_fields(session: Session):

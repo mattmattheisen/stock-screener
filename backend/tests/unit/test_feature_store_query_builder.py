@@ -106,6 +106,29 @@ class TestJsonSortNumericConsistency:
         assert "vcp_pivot" in _JSON_SORT_NUMERIC
 
 
+class TestOpportunityFieldCoverage:
+    EXPECTED_PATHS = {
+        "correction_survivor": ("correction_survivor",),
+        "resilience_score": ("resilience_score",),
+        "action_state": ("action_state",),
+    }
+
+    def test_both_adapters_bind_top_level_opportunity_fields(self):
+        legacy_paths = _json_field_map(srq._FIELD_BINDINGS)
+
+        for field, path in self.EXPECTED_PATHS.items():
+            assert _JSON_FIELD_MAP[field] == path
+            assert legacy_paths[field] == path
+
+    def test_both_adapters_sort_resilience_as_numeric_json(self):
+        legacy_numeric = _json_sort_numeric(srq._FIELD_BINDINGS)
+
+        assert "resilience_score" in _JSON_SORT_NUMERIC
+        assert "resilience_score" in legacy_numeric
+        assert "action_state" not in _JSON_SORT_NUMERIC
+        assert "correction_survivor" not in _JSON_SORT_NUMERIC
+
+
 class TestParityWithScanResultQuery:
     """Verify se_* fields are identical between both query builders."""
 
