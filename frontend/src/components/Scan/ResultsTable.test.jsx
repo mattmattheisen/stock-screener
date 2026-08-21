@@ -1,7 +1,13 @@
 import { fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../../test/renderWithProviders';
-import { fullSeRow, nullSeRow, mixedSeRow } from '../../test/fixtures/setupEngineFixtures';
+import {
+  fullSeRow,
+  legacyOpportunityRow,
+  mixedSeRow,
+  nullSeRow,
+  opportunityRow,
+} from '../../test/fixtures/setupEngineFixtures';
 import ResultsTable from './ResultsTable';
 
 /*
@@ -74,6 +80,110 @@ describe('ResultsTable', () => {
 
     expect(screen.queryByText('Growth')).not.toBeInTheDocument();
     expect(screen.getByText('Momentum')).toBeInTheDocument();
+  });
+
+  describe('opportunity state columns', () => {
+    // Catches badge click bubbling into the existing row chart action or a drawer coupled to chart data.
+    it('opens opportunity evidence without opening the chart', async () => {
+      const onOpenChart = vi.fn();
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ResultsTable
+          {...defaultProps}
+          results={[opportunityRow]}
+          onOpenChart={onOpenChart}
+        />,
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Setup Ready' }));
+
+      expect(screen.getByRole('presentation')).toHaveTextContent('Resilience score');
+      expect(screen.getByRole('presentation')).toHaveTextContent('84.0');
+      expect(onOpenChart).not.toHaveBeenCalled();
+    });
+
+    // Catches legacy rows becoming misleadingly actionable when compact evidence was never persisted.
+    it('renders legacy rows as non-interactive Not computed', () => {
+      renderWithProviders(
+        <ResultsTable {...defaultProps} results={[legacyOpportunityRow]} />,
+      );
+
+      expect(screen.getByText('Not computed')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Not computed' })).not.toBeInTheDocument();
+    });
+
+    // Catches capability gating that leaves headers/cells behind and a width increase when disabled.
+    it('hides opportunity columns and preserves the legacy table width when disabled', () => {
+      renderWithProviders(
+        <ResultsTable
+          {...defaultProps}
+          results={[opportunityRow]}
+          showOpportunityState={false}
+        />,
+      );
+
+      expect(screen.queryByText('Res')).not.toBeInTheDocument();
+      expect(screen.queryByText('Action')).not.toBeInTheDocument();
+      expect(screen.queryByText('Setup Ready')).not.toBeInTheDocument();
+      expect(screen.getByRole('table')).toHaveStyle({ minWidth: '2673px' });
+    });
+
+    // Catches wrong column placement, widths, or missing server-sort integration.
+    it('renders adjacent sortable 48px resilience and 105px action columns', async () => {
+      const onSortChange = vi.fn();
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ResultsTable
+          {...defaultProps}
+          results={[opportunityRow]}
+          onSortChange={onSortChange}
+        />,
+      );
+
+      const headers = screen.getAllByRole('columnheader');
+      const resilienceHeader = screen.getByText('Res').closest('th');
+      const actionHeader = screen.getByText('Action').closest('th');
+      const pivotHeader = screen.getByText('Pvt$').closest('th');
+      expect(headers.indexOf(resilienceHeader)).toBe(headers.indexOf(pivotHeader) + 1);
+      expect(headers.indexOf(actionHeader)).toBe(headers.indexOf(resilienceHeader) + 1);
+      expect(resilienceHeader).toHaveStyle({ width: '48px', minWidth: '48px', maxWidth: '48px' });
+      expect(actionHeader).toHaveStyle({ width: '105px', minWidth: '105px', maxWidth: '105px' });
+      expect(screen.getByRole('table')).toHaveStyle({ minWidth: '2826px' });
+
+      await user.click(screen.getByText('Res'));
+      expect(onSortChange).toHaveBeenCalledWith('resilience_score', 'asc');
+      await user.click(screen.getByText('Action'));
+      expect(onSortChange).toHaveBeenCalledWith('action_state', 'asc');
+    });
+
+    // Catches the virtual-row comparator retaining stale top-level and nested opportunity evidence.
+    it('rerenders retained rows when action state and nested evidence change', async () => {
+      const user = userEvent.setup();
+      const { rerender } = renderWithProviders(
+        <ResultsTable {...defaultProps} results={[opportunityRow]} />,
+      );
+
+      rerender(
+        <ResultsTable
+          {...defaultProps}
+          results={[{
+            ...opportunityRow,
+            resilience_score: 91,
+            action_state: 'watch',
+            opportunity_state: {
+              ...opportunityRow.opportunity_state,
+              benchmark_symbol: 'QQQ',
+            },
+          }]}
+        />,
+      );
+
+      expect(screen.queryByText('Setup Ready')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Watch' })).toBeInTheDocument();
+      expect(screen.getByText('91.0')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Watch' }));
+      expect(screen.getByRole('presentation')).toHaveTextContent('QQQ');
+    });
   });
 
   // ── SE column rendering — full data ──────────────────────────────────

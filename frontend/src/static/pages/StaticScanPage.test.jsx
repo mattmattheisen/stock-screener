@@ -9,6 +9,20 @@ import StaticScanPage from './StaticScanPage';
 const filterPanelSpy = vi.fn();
 const resultsTableSpy = vi.fn();
 const staticChartModalSpy = vi.fn();
+const resultsTableTestState = vi.hoisted(() => ({ renderReal: false }));
+
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }) => ({
+    getVirtualItems: () => Array.from({ length: count }, (_, index) => ({
+      index,
+      start: index * 48,
+      end: (index + 1) * 48,
+      size: 48,
+      key: index,
+    })),
+    getTotalSize: () => count * 48,
+  }),
+}));
 
 vi.mock('../../components/Scan/FilterPanel', () => ({
   default: (props) => {
@@ -17,9 +31,15 @@ vi.mock('../../components/Scan/FilterPanel', () => ({
   },
 }));
 
-vi.mock('../../components/Scan/ResultsTable', () => ({
-  default: (props) => {
+vi.mock('../../components/Scan/ResultsTable', async () => {
+  const actual = await vi.importActual('../../components/Scan/ResultsTable');
+  return {
+    default: (props) => {
     resultsTableSpy(props);
+    if (resultsTableTestState.renderReal) {
+      const ActualResultsTable = actual.default;
+      return <ActualResultsTable {...props} />;
+    }
     return (
       <div>
         <div data-testid="results-table-page">{props.page}</div>
@@ -38,7 +58,8 @@ vi.mock('../../components/Scan/ResultsTable', () => ({
       </div>
     );
   },
-}));
+  };
+});
 
 vi.mock('../StaticChartViewerModal', () => ({
   default: (props) => {
@@ -81,6 +102,121 @@ describe('StaticScanPage', () => {
     filterPanelSpy.mockClear();
     resultsTableSpy.mockClear();
     staticChartModalSpy.mockClear();
+    resultsTableTestState.renderReal = false;
+  });
+
+  it('hides opportunity workflow for a legacy bundle without the capability', async () => {
+    resultsTableTestState.renderReal = true;
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ pages: { scan: { path: 'scan/manifest.json' } } }),
+        };
+      }
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            run_id: 9,
+            as_of_date: '2026-08-21',
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 1,
+            filter_options: {},
+            initial_rows: [{ symbol: 'LEGACY', composite_score: 80, rating: 'Watch' }],
+            preset_screens: [{
+              id: 'correction_survivors',
+              name: 'Correction Survivors',
+              short_name: 'Survivors',
+              filters: { correctionSurvivor: true },
+              sort_by: 'resilience_score',
+              sort_order: 'desc',
+            }],
+            chunks: [],
+            charts: { available: false },
+          }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'Daily Scan' })).toBeInTheDocument();
+    expect(screen.queryByText(/Survivors/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Res')).not.toBeInTheDocument();
+    expect(screen.queryByText('Action')).not.toBeInTheDocument();
+  });
+
+  it('opens static opportunity evidence without a chart bundle and keeps mixed legacy rows non-interactive', async () => {
+    resultsTableTestState.renderReal = true;
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            features: { opportunity_state: true },
+            pages: { scan: { path: 'scan/manifest.json' } },
+          }),
+        };
+      }
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            run_id: 10,
+            as_of_date: '2026-08-21',
+            sort: { field: 'resilience_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 2,
+            filter_options: {},
+            initial_rows: [
+              {
+                symbol: 'READY',
+                resilience_score: 84,
+                action_state: 'setup_ready',
+                rating: 'Leader',
+                opportunity_state: {
+                  market: 'US',
+                  benchmark_symbol: 'SPY',
+                  score_pillars: { benchmark_leadership: 20 },
+                  passed_checks: ['leadership_gate'],
+                },
+              },
+              { symbol: 'LEGACY', rating: 'Watch' },
+            ],
+            preset_screens: [{
+              id: 'correction_survivors',
+              name: 'Correction Survivors',
+              short_name: 'Survivors',
+              filters: { correctionSurvivor: true },
+              sort_by: 'resilience_score',
+              sort_order: 'desc',
+            }],
+            chunks: [],
+            charts: { available: false },
+          }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    renderPage();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Setup Ready' }));
+    expect(screen.getByRole('presentation')).toHaveTextContent('Resilience score');
+    expect(screen.getByRole('presentation')).toHaveTextContent('SPY');
+    expect(screen.getByText('Not computed')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Not computed' })).not.toBeInTheDocument();
+    expect(resultsTableSpy.mock.calls.at(-1)?.[0]).not.toHaveProperty('opportunityTelemetrySurface');
   });
 
   afterEach(() => {
@@ -429,7 +565,10 @@ describe('StaticScanPage', () => {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ pages: { scan: { path: 'scan/manifest.json' } } }),
+          json: async () => ({
+            features: { opportunity_state: true },
+            pages: { scan: { path: 'scan/manifest.json' } },
+          }),
         };
       }
 

@@ -4,8 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEmptyExpression } from '../filterExpressionModel';
 import ScanResultsSection from './ScanResultsSection';
 
+const resultsTableSpy = vi.fn();
+
 vi.mock('../../../components/Scan/ResultsTable', () => ({
-  default: () => <div>previous-results-table</div>,
+  default: (props) => {
+    resultsTableSpy(props);
+    return <div>previous-results-table</div>;
+  },
 }));
 
 const baseProps = {
@@ -28,6 +33,14 @@ const baseProps = {
 };
 
 describe('ScanResultsSection', () => {
+  it('opts the live results table into scan opportunity telemetry', () => {
+    render(<ScanResultsSection {...baseProps} />);
+
+    expect(resultsTableSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ opportunityTelemetrySurface: 'scan' }),
+    );
+  });
+
   it('keeps prior rows visible and shows a retryable request error', () => {
     render(
       <ScanResultsSection

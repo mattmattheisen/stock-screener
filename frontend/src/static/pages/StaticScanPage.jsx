@@ -93,7 +93,14 @@ function StaticScanPage() {
   );
   const manifestDefaultSortBy = scanManifestQuery.data?.sort?.field ?? 'composite_score';
   const manifestDefaultSortOrder = scanManifestQuery.data?.sort?.order ?? 'desc';
-  const presetScreens = scanManifestQuery.data?.preset_screens;
+  const showOpportunityState = marketEntry.features?.opportunity_state === true;
+  const presetScreens = useMemo(() => {
+    const screens = scanManifestQuery.data?.preset_screens;
+    if (!Array.isArray(screens) || showOpportunityState) {
+      return screens;
+    }
+    return screens.filter((screen) => screen.id !== 'correction_survivors');
+  }, [scanManifestQuery.data?.preset_screens, showOpportunityState]);
 
   useEffect(() => {
     if (scanManifestQuery.data?.default_page_size) {
@@ -399,6 +406,7 @@ function StaticScanPage() {
         showWatchlistMenu={false}
         isChartEnabled={isChartEnabled}
         sortingEnabled={hydrationComplete}
+        showOpportunityState={showOpportunityState}
       />
 
       <StaticChartViewerModal

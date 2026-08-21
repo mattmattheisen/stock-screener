@@ -281,6 +281,38 @@ export const mixedSeRow = {
   se_pivot_price: null,
 };
 
+/** Persisted opportunity-state row; deliberately has no chart or full Setup Engine payload. */
+export const opportunityRow = {
+  ...nullSeRow,
+  symbol: 'OPPORTUNITY',
+  resilience_score: 84,
+  action_state: 'setup_ready',
+  opportunity_state: {
+    as_of_date: '2026-08-21',
+    market: 'US',
+    mic: 'XNAS',
+    benchmark_symbol: 'SPY',
+    benchmark_as_of_date: '2026-08-20',
+    score_pillars: {
+      benchmark_leadership: 20,
+      multi_horizon_rs: 18.2,
+      trend_integrity: 20,
+      structure_tightness: 18,
+      liquidity_freshness: 20,
+    },
+    passed_checks: ['leadership_gate'],
+    failed_checks: ['structure_gate'],
+    warnings: ['benchmark_date_lag'],
+    action_reasons: ['survivor', 'setup_ready'],
+  },
+};
+
+/** Row exported before opportunity state existed. */
+export const legacyOpportunityRow = {
+  ...nullSeRow,
+  symbol: 'LEGACY',
+};
+
 /**
  * Operational flags stock — includes operational invalidation flags
  * (too_extended, low_liquidity, breaks_50d_support) for severity-aware rendering tests.
