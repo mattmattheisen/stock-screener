@@ -421,6 +421,65 @@ describe('StaticScanPage', () => {
     });
   });
 
+  it('applies and resilience-sorts the Correction Survivors preset', async () => {
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ pages: { scan: { path: 'scan/manifest.json' } } }),
+        };
+      }
+
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 4,
+            filter_options: {},
+            initial_rows: [
+              { symbol: 'BETA', correction_survivor: true, resilience_score: 84, composite_score: 70 },
+              { symbol: 'ALPHA', correction_survivor: true, resilience_score: 84, composite_score: 60 },
+              { symbol: 'HIGH', correction_survivor: true, resilience_score: 95, composite_score: 50 },
+              { symbol: 'OUT', correction_survivor: false, resilience_score: 99, composite_score: 99 },
+            ],
+            preset_screens: [{
+              id: 'correction_survivors',
+              name: 'Correction Survivors',
+              short_name: 'Survivors',
+              filters: { correctionSurvivor: true },
+              sort_by: 'resilience_score',
+              sort_order: 'desc',
+            }],
+            chunks: [],
+            charts: { path: 'charts/index.json', available: false },
+          }),
+        };
+      }
+
+      if (path === 'charts/index.json') {
+        return { ok: true, status: 200, json: async () => ({ symbols: [] }) };
+      }
+
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    renderPage();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByText('Survivors (3)'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('results-table-rows')).toHaveTextContent('HIGH,ALPHA,BETA');
+      expect(screen.getByTestId('results-table-rows')).not.toHaveTextContent('OUT');
+    });
+  });
+
   it('normalizes exported filter options before rendering the filter panel', async () => {
     globalThis.fetch = vi.fn(async (url) => {
       const path = String(url).split('/static-data/')[1];

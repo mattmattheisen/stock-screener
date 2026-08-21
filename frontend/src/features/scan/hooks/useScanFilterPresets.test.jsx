@@ -74,6 +74,38 @@ describe('useScanFilterPresets', () => {
     }));
   });
 
+  it('loads the Correction Survivors live preset with survivor semantics', () => {
+    const { hook, applyQuery } = setup({
+      presets: [{
+        id: 'correction-survivors-live',
+        name: 'Correction Survivors',
+        filters: { ...buildDefaultScanFilters(), correctionSurvivor: true },
+        sort_by: 'resilience_score',
+        sort_order: 'desc',
+      }],
+    });
+
+    act(() => {
+      hook.result.current.handleLoadPreset('correction-survivors-live');
+    });
+
+    expect(applyQuery).toHaveBeenCalledWith({
+      expression: expect.objectContaining({
+        required: expect.objectContaining({
+          conditions: [
+            expect.objectContaining({
+              kind: 'boolean',
+              field: 'correction_survivor',
+              value: true,
+            }),
+          ],
+        }),
+      }),
+      sortBy: 'resilience_score',
+      sortOrder: 'desc',
+    });
+  });
+
   it('omits static-only legacy aliases when loading a live preset', () => {
     const { hook, applyQuery } = setup({
       presets: [{

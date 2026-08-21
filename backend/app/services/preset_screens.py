@@ -81,6 +81,18 @@ PRESET_SCREENS: list[dict] = [
         "sort_order": "desc",
     },
     {
+        "id": "correction_survivors",
+        "name": "Correction Survivors",
+        "short_name": "Survivors",
+        "description": "Leaders that held trend and relative-strength evidence through a correction",
+        "tier": 1,
+        "filters": {
+            "correctionSurvivor": True,
+        },
+        "sort_by": "resilience_score",
+        "sort_order": "desc",
+    },
+    {
         "id": "vol_break",
         "name": "Volume Breakthrough",
         "short_name": "Vol Breakout",
