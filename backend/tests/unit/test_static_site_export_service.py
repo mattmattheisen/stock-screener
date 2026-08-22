@@ -1170,6 +1170,13 @@ def test_serialize_scan_row_preserves_compact_opportunity_evidence_only(
         "passed_checks": ["benchmark_leadership"],
         "failed_checks": [],
         "warnings": [],
+        "score_pillars": {
+            "benchmark_leadership": 20.0,
+            "multi_horizon_rs": 17.0,
+            "trend_integrity": 20.0,
+            "structure_tightness": 20.0,
+            "liquidity_freshness": 20.0,
+        },
         "metrics": {"benchmark_relative_return_65d": 0.083},
         "data_availability": {"features": "available"},
         "action_reasons": ["survivor", "setup_ready"],

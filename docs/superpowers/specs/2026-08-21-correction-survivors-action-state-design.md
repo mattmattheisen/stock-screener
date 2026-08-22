@@ -1,6 +1,6 @@
 # Correction Survivors and Action State Design
 
-**Status:** Approved direction; implementation planning pending design review
+**Status:** Implemented in Releases A1 and A2; repository-wide verification retains 7 documented pre-existing environment failures; Setup Follow-Through remains deferred
 
 **Date:** 2026-08-21
 
