@@ -130,6 +130,13 @@ describe('useScanFilterPresets', () => {
         ],
       },
       {
+        id: 'disabled-empty',
+        name: 'Disabled empty setup',
+        match: 'any',
+        enabled: false,
+        conditions: [],
+      },
+      {
         id: 'unrelated',
         name: 'Unrelated setup',
         match: 'all',
@@ -177,6 +184,13 @@ describe('useScanFilterPresets', () => {
           conditions: [
             { kind: 'categorical', field: 'rating', values: ['Buy'], mode: 'include' },
           ],
+        },
+        {
+          id: 'disabled-empty',
+          name: 'Disabled empty setup',
+          match: 'any',
+          enabled: false,
+          conditions: [],
         },
         {
           id: 'unrelated',

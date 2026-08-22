@@ -50,9 +50,12 @@ function removeOpportunityStateConditions(expression) {
   return {
     ...canonical,
     required: sanitizeGroup(canonical.required),
-    groups: canonical.groups
-      .map(sanitizeGroup)
-      .filter((group) => group.conditions.length > 0),
+    groups: canonical.groups.flatMap((group) => {
+      const sanitized = sanitizeGroup(group);
+      return group.conditions.length === 0 || sanitized.conditions.length > 0
+        ? [sanitized]
+        : [];
+    }),
   };
 }
 
