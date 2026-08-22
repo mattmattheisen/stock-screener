@@ -22,6 +22,9 @@ from app.domain.markets.catalog import get_market_catalog
 from app.domain.relative_strength import GROUP_AVG_RS_FIELDS
 from app.domain.scanning.default_filters import resolve_default_scan_filters
 from app.domain.scanning.filter_expression_model import QuerySpec
+from app.domain.scanning.materialization import (
+    scan_has_opportunity_state_materialization,
+)
 from app.domain.scanning.opportunity_state import ActionState
 from app.infra.serialization import json_safe
 from app.models.market_breadth import MarketBreadth
@@ -296,7 +299,7 @@ def _build_correction_survivor_summary(
     uow: Any,
     scan_results_use_case: Any,
 ) -> dict[str, Any]:
-    if scan is None:
+    if scan is None or not scan_has_opportunity_state_materialization(scan):
         return _empty_correction_survivor_summary(available=False)
 
     survivor_filters = FilterSpec().add_boolean("correction_survivor", True)

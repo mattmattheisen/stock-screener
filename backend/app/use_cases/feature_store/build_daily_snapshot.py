@@ -38,10 +38,9 @@ from app.domain.feature_store.models import (
     RunType,
 )
 from app.domain.feature_store.quality import DQThresholds
-from app.domain.scanning.signature import (
-    build_scan_signature_payload,
-    hash_scan_signature,
-    hash_universe_symbols,
+from app.domain.providers.price_symbol_support import split_supported_price_symbols
+from app.domain.scanning.materialization import (
+    with_opportunity_state_materialization,
 )
 from app.domain.scanning.models import ProgressEvent
 from app.domain.scanning.ports import (
@@ -52,7 +51,11 @@ from app.domain.scanning.ports import (
     StockDataProvider,
     StockScanner,
 )
-from app.domain.providers.price_symbol_support import split_supported_price_symbols
+from app.domain.scanning.signature import (
+    build_scan_signature_payload,
+    hash_scan_signature,
+    hash_universe_symbols,
+)
 from app.use_cases.feature_store.publish_run import (
     PublishFeatureRunUseCase,
     PublishRunCommand,
@@ -470,13 +473,13 @@ class BuildDailyFeatureSnapshotUseCase:
                 composite_method=cmd.composite_method,
                 criteria=cmd.criteria,
             )
-            run_config = {
+            run_config = with_opportunity_state_materialization({
                 **signature_payload,
                 "signature": signature_payload,
                 "universe": _serialize_universe_definition(cmd.universe_def),
                 "market": cmd.market,
                 "publish_pointer_key": cmd.publish_pointer_key,
-            }
+            })
             if bootstrap_gate_report is not None:
                 run_config["bootstrap_cache_only_gate"] = bootstrap_gate_report
             if rs_resolution is not None:

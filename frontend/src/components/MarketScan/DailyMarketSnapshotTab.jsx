@@ -215,13 +215,15 @@ function DailyMarketSnapshotTab() {
 
       <MarketHealthExposure exposure={snapshot?.market_health_exposure} />
 
-      <CorrectionSurvivorsPanel
-        summary={snapshot?.correction_survivors}
-        posture={snapshot?.market_health_exposure}
-        navigationSymbols={correctionSurvivorSymbols}
-        onOpenChart={scanId ? handleRowClick : null}
-        opportunityTelemetrySurface="daily"
-      />
+      {snapshot?.correction_survivors?.available === true && (
+        <CorrectionSurvivorsPanel
+          summary={snapshot.correction_survivors}
+          posture={snapshot?.market_health_exposure}
+          navigationSymbols={correctionSurvivorSymbols}
+          onOpenChart={scanId ? handleRowClick : null}
+          opportunityTelemetrySurface="daily"
+        />
+      )}
 
       <DailyScanRowsTable
         title="Top Scan Candidates"

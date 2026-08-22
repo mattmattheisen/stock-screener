@@ -7,7 +7,7 @@ paginated results, filter options, and score explanations.
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Self
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ..domain.scanning.models import (
     ScanResultItemDomain,
@@ -19,9 +19,12 @@ from ..infra.serialization import (
     normalize_string_list,
     sanitize_sparkline,
 )
-from .opportunity_state import OpportunityStateResponse
+from .opportunity_state import (
+    ActionStateValue,
+    OpportunityStateResponse,
+    validate_opportunity_projection,
+)
 from .universe import UniverseDefinition
-
 
 # ---------------------------------------------------------------------------
 # Request models
@@ -169,8 +172,18 @@ class ScanResultItem(BaseModel):
     # row predates this versioned computation and must not be inferred.
     correction_survivor: bool | None = None
     resilience_score: float | None = None
-    action_state: str | None = None
+    action_state: ActionStateValue | None = None
     opportunity_state: OpportunityStateResponse | None = None
+
+    @model_validator(mode="after")
+    def _validate_opportunity_projection(self) -> Self:
+        validate_opportunity_projection(
+            correction_survivor=self.correction_survivor,
+            resilience_score=self.resilience_score,
+            action_state=self.action_state,
+            opportunity_state=self.opportunity_state,
+        )
+        return self
 
     # Individual screener scores
     minervini_score: Optional[float] = None
@@ -451,6 +464,12 @@ class ScanResultItem(BaseModel):
         )
 
 
+class ScanResultsCapabilities(BaseModel):
+    """Materialized workflows supported by the resolved scan snapshot."""
+
+    opportunity_state: bool = False
+
+
 class ScanResultsResponse(BaseModel):
     """Response model for paginated scan results."""
 
@@ -460,6 +479,9 @@ class ScanResultsResponse(BaseModel):
     per_page: int
     pages: int
     results: List[ScanResultItem]
+    capabilities: ScanResultsCapabilities = Field(
+        default_factory=ScanResultsCapabilities
+    )
     unfiltered_total: Optional[int] = None
     query_fingerprint: Optional[str] = None
 

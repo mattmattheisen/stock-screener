@@ -13,10 +13,6 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from pydantic import ValidationError
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-
 from app.database import Base
 from app.domain.common.query import (
     BooleanFilter,
@@ -42,6 +38,9 @@ from app.infra.db.models.feature_store import (
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.models.stock_universe import StockUniverse
 from app.schemas.scanning import ScanResultItem
+from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 AS_OF = date(2026, 2, 17)
 
@@ -60,8 +59,8 @@ OPPORTUNITY_EVIDENCE = {
         "benchmark_leadership": 20.0,
         "multi_horizon_rs": 17.0,
         "trend_integrity": 20.0,
-        "structure_tightness": 20.0,
-        "liquidity_freshness": 20.0,
+        "structure_tightness": 17.0,
+        "liquidity_freshness": 10.0,
     },
     "metrics": {"benchmark_relative_return_65d": 0.083},
     "data_availability": {"features": "available"},
@@ -390,12 +389,12 @@ class TestQueryRunAsScanResults:
         assert response.opportunity_state is not None
         assert response.opportunity_state.schema_version == 1
         assert response.opportunity_state.policy_version == "correction-survivors-v1"
-        assert response.opportunity_state.score_pillars == {
+        assert response.opportunity_state.score_pillars.model_dump() == {
             "benchmark_leadership": 20.0,
             "multi_horizon_rs": 17.0,
             "trend_integrity": 20.0,
-            "structure_tightness": 20.0,
-            "liquidity_freshness": 20.0,
+            "structure_tightness": 17.0,
+            "liquidity_freshness": 10.0,
         }
         assert response.opportunity_state.metrics == {
             "benchmark_relative_return_65d": 0.083

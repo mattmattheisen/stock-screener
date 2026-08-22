@@ -173,22 +173,31 @@ def evaluate_opportunity_state(inputs: OpportunityInputs) -> OpportunityStateRes
         inputs.invalidation_flags, inputs.invalidation_evidence_available
     )
     benchmark_is_future = _benchmark_is_future(inputs)
-    required_complete = _required_evidence_complete(inputs, benchmark_is_future)
-    score_pillars = _score_pillars(inputs, benchmark_is_future)
-    score = _resilience_score(score_pillars)
-
     leadership_gate = _leadership_gate(inputs)
     trend_gate = _trend_gate(inputs, hard_invalidation)
     structure_gate = _structure_gate(inputs)
-    liquidity_gate = inputs.liquidity_available is True and inputs.liquidity_passes is True
-    freshness_gate = inputs.feature_status == "complete" and inputs.is_scannable is True
+    liquidity_gate = _liquidity_gate(inputs)
+    freshness_gate = _freshness_gate(inputs)
+    required_complete = _required_evidence_complete(
+        inputs,
+        benchmark_is_future,
+        gates=(
+            leadership_gate,
+            trend_gate,
+            structure_gate,
+            liquidity_gate,
+            freshness_gate,
+        ),
+    )
+    score_pillars = _score_pillars(inputs, benchmark_is_future)
+    score = _resilience_score(score_pillars)
     correction_survivor = (
         required_complete
-        and leadership_gate
-        and trend_gate
-        and structure_gate
-        and liquidity_gate
-        and freshness_gate
+        and leadership_gate is True
+        and trend_gate is True
+        and structure_gate is True
+        and liquidity_gate is True
+        and freshness_gate is True
     )
 
     passed_checks: list[str] = []
@@ -207,7 +216,11 @@ def evaluate_opportunity_state(inputs: OpportunityInputs) -> OpportunityStateRes
         warnings.append("benchmark_date_lag")
 
     action_state, action_reasons = _resolve_action_state(
-        inputs, hard_invalidation, required_complete, benchmark_is_future
+        inputs,
+        hard_invalidation,
+        required_complete,
+        benchmark_is_future,
+        correction_survivor,
     )
     return OpportunityStateResult(
         correction_survivor=correction_survivor,
@@ -236,12 +249,19 @@ def opportunity_result_from_projection(
         return None
     if not isinstance(projection, Mapping):
         raise TypeError("projection must be a mapping")
-    if "opportunity_state" not in projection:
+    present_keys = tuple(key for key in _PROJECTION_KEYS if key in projection)
+    if not present_keys:
         return None
-    _require_keys(projection, _PROJECTION_KEYS, "projection")
+    if len(present_keys) != len(_PROJECTION_KEYS):
+        raise ValueError("opportunity projection must be all null or all present")
+    _require_exact_keys(projection, _PROJECTION_KEYS, "projection")
+    if all(projection[key] is None for key in _PROJECTION_KEYS):
+        return None
+    if projection["opportunity_state"] is None:
+        raise ValueError("opportunity projection must be all null or all present")
 
     evidence = _mapping(projection["opportunity_state"], "opportunity_state")
-    _require_keys(evidence, _EVIDENCE_KEYS, "opportunity_state")
+    _require_exact_keys(evidence, _EVIDENCE_KEYS, "opportunity_state")
     if evidence.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("opportunity_state.schema_version is unsupported or malformed")
     if evidence.get("policy_version") != POLICY_VERSION:
@@ -252,11 +272,18 @@ def opportunity_result_from_projection(
     if type(correction_survivor) is not bool:
         raise ValueError("correction_survivor must be a bool")
     resilience_score = _optional_number(projection.get("resilience_score"), "resilience_score")
+    score_pillars = _score_pillar_mapping(evidence.get("score_pillars"))
+    _validate_projection_coherence(
+        correction_survivor=correction_survivor,
+        resilience_score=resilience_score,
+        score_pillars=score_pillars,
+        action_state=action_state,
+    )
 
     return OpportunityStateResult(
         correction_survivor=correction_survivor,
         resilience_score=resilience_score,
-        score_pillars=_score_pillar_mapping(evidence.get("score_pillars")),
+        score_pillars=score_pillars,
         action_state=action_state,
         passed_checks=_string_tuple(evidence.get("passed_checks"), "passed_checks"),
         failed_checks=_string_tuple(evidence.get("failed_checks"), "failed_checks"),
@@ -296,46 +323,27 @@ def overlay_stewardship_state(
     return replace(result, action_state=stewardship_state, action_reasons=action_reasons)
 
 
-def _required_evidence_complete(inputs: OpportunityInputs, benchmark_is_future: bool) -> bool:
-    required_values = (
-        inputs.as_of_date,
-        inputs.benchmark_symbol,
-        inputs.benchmark_as_of_date,
-        inputs.benchmark_relative_return_65d,
-        inputs.rs_rating_1m,
-        inputs.rs_rating_3m,
-        inputs.rs_line_new_high,
-        inputs.rs_line_blue_dot,
-        inputs.stage,
-        inputs.ma_alignment,
-        inputs.invalidation_flags,
-        inputs.pattern_primary,
-        inputs.squeeze,
-        inputs.tight_closes_count,
-        inputs.quiet_days_count,
-        inputs.volume_vs_50d,
-        inputs.volume_dry_up_max,
-        inputs.liquidity_passes,
-        inputs.feature_status,
-        inputs.is_scannable,
-        inputs.earnings_soon,
-        inputs.setup_ready,
-        inputs.in_early_zone,
-        inputs.extended,
-        inputs.deterioration_confirmed,
+def _required_evidence_complete(
+    inputs: OpportunityInputs,
+    benchmark_is_future: bool,
+    *,
+    gates: tuple[bool | None, ...],
+) -> bool:
+    provenance_complete = (
+        bool(inputs.market)
+        and inputs.as_of_date is not None
+        and bool(inputs.benchmark_symbol)
+        and inputs.benchmark_as_of_date is not None
     )
-    availability_flags = (
-        inputs.invalidation_evidence_available,
-        inputs.setup_payload_available,
-        inputs.liquidity_available,
-        inputs.event_calendar_available,
+    event_evidence_complete = (
+        inputs.event_calendar_available is True
+        and inputs.earnings_soon is not None
     )
     return (
         not benchmark_is_future
-        and all(value is not None for value in required_values)
-        and all(value is True for value in availability_flags)
-        and (not inputs.prior_run_required or inputs.prior_run_available is True)
-        and _valid_invalidation_flags(inputs.invalidation_flags)
+        and provenance_complete
+        and event_evidence_complete
+        and all(gate is not None for gate in gates)
     )
 
 
@@ -417,34 +425,68 @@ def _score_inputs_known(inputs: OpportunityInputs) -> bool:
     )
 
 
-def _leadership_gate(inputs: OpportunityInputs) -> bool:
-    return (
-        inputs.benchmark_relative_return_65d is not None
-        and inputs.benchmark_relative_return_65d > 0
-        and inputs.rs_rating_1m is not None
-        and inputs.rs_rating_1m >= 70
-        and inputs.rs_rating_3m is not None
-        and inputs.rs_rating_3m >= 70
-        and (inputs.rs_line_new_high is True or inputs.rs_line_blue_dot is True)
+def _leadership_gate(inputs: OpportunityInputs) -> bool | None:
+    benchmark_leadership = (
+        None
+        if inputs.benchmark_relative_return_65d is None
+        else inputs.benchmark_relative_return_65d > 0
+    )
+    rs_line_leadership = _tri_or(
+        inputs.rs_line_new_high,
+        inputs.rs_line_blue_dot,
+    )
+    one_month = None if inputs.rs_rating_1m is None else inputs.rs_rating_1m >= 80
+    three_month = None if inputs.rs_rating_3m is None else inputs.rs_rating_3m >= 70
+    return _tri_and(
+        _tri_or(benchmark_leadership, rs_line_leadership),
+        one_month,
+        three_month,
     )
 
 
-def _trend_gate(inputs: OpportunityInputs, hard_invalidation: bool | None) -> bool:
-    return inputs.stage in (1, 2) and inputs.ma_alignment is True and hard_invalidation is False
+def _trend_gate(inputs: OpportunityInputs, hard_invalidation: bool | None) -> bool | None:
+    stage_passes = None if inputs.stage is None else inputs.stage in (1, 2)
+    invalidation_passes = None if hard_invalidation is None else not hard_invalidation
+    return _tri_and(stage_passes, inputs.ma_alignment, invalidation_passes)
 
 
-def _structure_gate(inputs: OpportunityInputs) -> bool:
-    return (
-        bool(inputs.pattern_primary)
-        and inputs.squeeze is True
-        and inputs.tight_closes_count is not None
-        and inputs.tight_closes_count >= 3
-        and inputs.quiet_days_count is not None
-        and inputs.quiet_days_count >= 3
-        and inputs.volume_vs_50d is not None
-        and inputs.volume_dry_up_max is not None
-        and inputs.volume_vs_50d <= inputs.volume_dry_up_max
+def _structure_gate(inputs: OpportunityInputs) -> bool | None:
+    pattern_passes = (
+        None if inputs.pattern_primary is None else bool(inputs.pattern_primary)
     )
+    tight_closes_pass = (
+        None
+        if inputs.tight_closes_count is None
+        else inputs.tight_closes_count >= 3
+    )
+    quiet_days_pass = (
+        None if inputs.quiet_days_count is None else inputs.quiet_days_count >= 3
+    )
+    dry_up_pass = (
+        None
+        if inputs.volume_vs_50d is None or inputs.volume_dry_up_max is None
+        else inputs.volume_vs_50d <= inputs.volume_dry_up_max
+    )
+    return _tri_or(
+        pattern_passes,
+        inputs.squeeze,
+        tight_closes_pass,
+        quiet_days_pass,
+        dry_up_pass,
+    )
+
+
+def _liquidity_gate(inputs: OpportunityInputs) -> bool | None:
+    if inputs.liquidity_available is not True:
+        return None
+    return inputs.liquidity_passes
+
+
+def _freshness_gate(inputs: OpportunityInputs) -> bool | None:
+    status_passes = (
+        None if inputs.feature_status is None else inputs.feature_status == "complete"
+    )
+    return _tri_and(status_passes, inputs.is_scannable)
 
 
 def _hard_invalidation(
@@ -482,6 +524,7 @@ def _resolve_action_state(
     hard_invalidation: bool | None,
     required_complete: bool,
     benchmark_is_future: bool,
+    correction_survivor: bool,
 ) -> tuple[ActionState, tuple[str, ...]]:
     if hard_invalidation is True:
         return ActionState.EXIT_RISK, _hard_invalidation_reasons(inputs.invalidation_flags)
@@ -491,10 +534,22 @@ def _resolve_action_state(
         return ActionState.EVENT_RISK, ("earnings_soon",)
     if inputs.extended is True:
         return ActionState.EXTENDED, ("extended",)
-    if not required_complete:
+    prior_run_complete = (
+        not inputs.prior_run_required
+        or (
+            inputs.prior_run_available is True
+            and inputs.deterioration_confirmed is not None
+        )
+    )
+    if not required_complete or inputs.extended is None or not prior_run_complete:
         reasons = ("future_benchmark_date",) if benchmark_is_future else ("required_evidence",)
         return ActionState.DATA_LIMITED, reasons
-    if inputs.setup_ready is True and inputs.in_early_zone is True:
+    if not correction_survivor:
+        return ActionState.WATCH, ("watch",)
+    setup_ready = _tri_and(inputs.setup_ready, inputs.in_early_zone)
+    if setup_ready is None:
+        return ActionState.DATA_LIMITED, ("required_evidence",)
+    if setup_ready:
         return ActionState.SETUP_READY, ("setup_ready",)
     return ActionState.WATCH, ("watch",)
 
@@ -559,8 +614,31 @@ def _availability_flag(value: bool | None) -> str:
     return "unknown"
 
 
-def _record_check(passed: list[str], failed: list[str], name: str, condition: bool) -> None:
+def _record_check(
+    passed: list[str],
+    failed: list[str],
+    name: str,
+    condition: bool | None,
+) -> None:
+    if condition is None:
+        return
     (passed if condition else failed).append(name)
+
+
+def _tri_and(*values: bool | None) -> bool | None:
+    if any(value is False for value in values):
+        return False
+    if all(value is True for value in values):
+        return True
+    return None
+
+
+def _tri_or(*values: bool | None) -> bool | None:
+    if any(value is True for value in values):
+        return True
+    if all(value is False for value in values):
+        return False
+    return None
 
 
 def _clamp(value: float) -> float:
@@ -581,6 +659,15 @@ def _require_keys(mapping: Mapping[str, object], required: tuple[str, ...], name
         raise ValueError(f"{name} is missing required keys: {', '.join(missing)}")
 
 
+def _require_exact_keys(
+    mapping: Mapping[str, object], required: tuple[str, ...], name: str
+) -> None:
+    _require_keys(mapping, required, name)
+    unexpected = tuple(key for key in mapping if key not in required)
+    if unexpected:
+        raise ValueError(f"{name} has unexpected keys: {', '.join(unexpected)}")
+
+
 def _string_tuple(value: object, name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"{name} must be a list of strings")
@@ -596,11 +683,32 @@ def _string_mapping(value: object, name: str) -> dict[str, str]:
 
 def _score_pillar_mapping(value: object) -> dict[str, float | None]:
     mapping = _mapping(value, "score_pillars")
-    _require_keys(mapping, _SCORE_PILLAR_KEYS, "score_pillars")
+    _require_exact_keys(mapping, _SCORE_PILLAR_KEYS, "score_pillars")
     return {
         key: _optional_number(mapping[key], f"score_pillars.{key}")
         for key in _SCORE_PILLAR_KEYS
     }
+
+
+def _validate_projection_coherence(
+    *,
+    correction_survivor: bool,
+    resilience_score: float | None,
+    score_pillars: Mapping[str, float | None],
+    action_state: ActionState,
+) -> None:
+    pillars = tuple(score_pillars.values())
+    if resilience_score is None:
+        if any(pillar is not None for pillar in pillars):
+            raise ValueError("score pillars must be all null when resilience_score is null")
+    else:
+        if any(pillar is None for pillar in pillars):
+            raise ValueError("score pillars must all be present when resilience_score is present")
+        pillar_sum = round(sum(pillar for pillar in pillars if pillar is not None), 1)
+        if pillar_sum != round(resilience_score, 1):
+            raise ValueError("resilience_score must equal the score pillar sum")
+    if action_state is ActionState.SETUP_READY and not correction_survivor:
+        raise ValueError("setup_ready requires correction_survivor=true")
 
 
 def _optional_string(value: object, name: str) -> str | None:

@@ -55,6 +55,7 @@ const defaultProps = {
   onSortChange: vi.fn(),
   onOpenChart: vi.fn(),
   loading: false,
+  showOpportunityState: true,
 };
 
 describe('ResultsTable', () => {
@@ -100,6 +101,54 @@ describe('ResultsTable', () => {
       expect(screen.getByRole('presentation')).toHaveTextContent('Resilience score');
       expect(screen.getByRole('presentation')).toHaveTextContent('84.0');
       expect(onOpenChart).not.toHaveBeenCalled();
+    });
+
+    it('reconciles selected evidence to current rows and never reopens a cleared selection', async () => {
+      const user = userEvent.setup();
+      const { rerender } = renderWithProviders(
+        <ResultsTable {...defaultProps} results={[opportunityRow]} />,
+      );
+      await user.click(screen.getByRole('button', { name: 'Setup Ready' }));
+      expect(screen.getByRole('presentation')).toHaveTextContent('84.0');
+
+      rerender(
+        <ResultsTable
+          {...defaultProps}
+          results={[{ ...opportunityRow, resilience_score: 79.0 }]}
+        />,
+      );
+      expect(screen.getByRole('presentation')).toHaveTextContent('79.0');
+      expect(screen.getByRole('presentation')).not.toHaveTextContent('84.0');
+
+      rerender(
+        <ResultsTable
+          {...defaultProps}
+          results={[{ ...opportunityRow, symbol: 'NEW' }]}
+        />,
+      );
+      expect(screen.queryByRole('heading', { name: 'Opportunity evidence' })).not.toBeInTheDocument();
+
+      rerender(<ResultsTable {...defaultProps} results={[opportunityRow]} />);
+      expect(screen.queryByRole('heading', { name: 'Opportunity evidence' })).not.toBeInTheDocument();
+    });
+
+    it('clears evidence selection when capability is disabled', async () => {
+      const user = userEvent.setup();
+      const { rerender } = renderWithProviders(
+        <ResultsTable {...defaultProps} results={[opportunityRow]} />,
+      );
+      await user.click(screen.getByRole('button', { name: 'Setup Ready' }));
+
+      rerender(
+        <ResultsTable
+          {...defaultProps}
+          results={[opportunityRow]}
+          showOpportunityState={false}
+        />,
+      );
+      rerender(<ResultsTable {...defaultProps} results={[opportunityRow]} />);
+
+      expect(screen.queryByRole('heading', { name: 'Opportunity evidence' })).not.toBeInTheDocument();
     });
 
     // Catches legacy rows becoming misleadingly actionable when compact evidence was never persisted.

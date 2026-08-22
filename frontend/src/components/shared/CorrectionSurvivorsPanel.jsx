@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Box, Chip, Paper, Typography } from '@mui/material';
 
 import { ACTION_STATE_META } from '../../features/opportunityState/actionState';
@@ -15,7 +15,7 @@ function CorrectionSurvivorsPanel({
   onOpenChart = null,
   opportunityTelemetrySurface,
 }) {
-  const [opportunityRow, setOpportunityRow] = useState(null);
+  const [opportunitySymbol, setOpportunitySymbol] = useState(null);
   const isComplete = summary?.available === true && summary?.complete === true;
   const rows = isComplete && Array.isArray(summary?.rows) ? summary.rows : EMPTY_ROWS;
   const rowSymbols = useMemo(
@@ -23,6 +23,18 @@ function CorrectionSurvivorsPanel({
     [rows],
   );
   const resolvedNavigationSymbols = navigationSymbols ?? rowSymbols;
+  const opportunityRow = useMemo(
+    () => rows.find((row) => row?.symbol === opportunitySymbol) ?? null,
+    [opportunitySymbol, rows],
+  );
+  useEffect(() => {
+    if (
+      opportunitySymbol != null
+      && (!isComplete || !opportunityRow?.opportunity_state)
+    ) {
+      setOpportunitySymbol(null);
+    }
+  }, [isComplete, opportunityRow, opportunitySymbol]);
 
   return (
     <Paper
@@ -90,7 +102,7 @@ function CorrectionSurvivorsPanel({
             emptyMessage="No correction survivors in this snapshot."
             scoreField="resilience_score"
             showActionState
-            onOpenOpportunity={setOpportunityRow}
+            onOpenOpportunity={(row) => setOpportunitySymbol(row?.symbol ?? null)}
           />
         </>
       )}
@@ -98,7 +110,7 @@ function CorrectionSurvivorsPanel({
       <OpportunityEvidenceDrawer
         open={Boolean(opportunityRow)}
         row={opportunityRow}
-        onClose={() => setOpportunityRow(null)}
+        onClose={() => setOpportunitySymbol(null)}
         opportunityTelemetrySurface={opportunityTelemetrySurface}
       />
     </Paper>

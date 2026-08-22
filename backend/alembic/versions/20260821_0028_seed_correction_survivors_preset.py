@@ -17,7 +17,6 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 
-
 revision = "20260821_0028"
 down_revision = "20260808_0027"
 branch_labels = None
@@ -187,11 +186,18 @@ def _seed_preset(bind) -> None:
 
 
 def _create_indexes() -> None:
-    for field in ("correction_survivor", "resilience_score"):
-        op.execute(
-            f"CREATE INDEX IF NOT EXISTS {_index_name(field)} "
-            f"ON stock_feature_daily (run_id, ({_index_expr(field)}))"
-        )
+    with op.get_context().autocommit_block():
+        for field in ("correction_survivor", "resilience_score"):
+            op.execute(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {_index_name(field)} "
+                f"ON stock_feature_daily (run_id, ({_index_expr(field)}))"
+            )
+
+
+def _drop_indexes() -> None:
+    with op.get_context().autocommit_block():
+        for field in ("correction_survivor", "resilience_score"):
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {_index_name(field)}")
 
 
 def upgrade() -> None:
@@ -232,6 +238,5 @@ def _delete_unchanged_seed(bind) -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "postgresql":
-        for field in ("correction_survivor", "resilience_score"):
-            op.execute(f"DROP INDEX IF EXISTS {_index_name(field)}")
+        _drop_indexes()
     _delete_unchanged_seed(bind)

@@ -6,12 +6,9 @@ then exposes the real feature-store and static-export boundaries used by tests.
 
 from __future__ import annotations
 
-from datetime import date, datetime
 import json
+from datetime import date, datetime
 from pathlib import Path
-
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.contracts.filter_expression import expression_from_payload
 from app.database import Base
@@ -26,15 +23,19 @@ from app.domain.scanning.opportunity_state import (
 )
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
+from app.models.filter_preset import FilterPreset
+from app.models.scan_result import Scan
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
 from app.schemas.scanning import ScanResultItem
 from app.services.preset_screens import PRESET_SCREENS
 from app.services.static_site_export_service import StaticSiteExportService
-
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 AS_OF_DATE = date(2026, 8, 21)
 RUN_ID = 1201
+SCAN_ID = "00000000-0000-0000-0000-000000001201"
 
 
 def _complete_inputs(**changes) -> OpportunityInputs:
@@ -138,6 +139,14 @@ class OpportunityStateParitySnapshot:
             benchmark_cache=object(),
         )
 
+    @property
+    def session_factory(self):
+        return self._session_factory
+
+    @property
+    def scan_id(self) -> str:
+        return SCAN_ID
+
     def close(self) -> None:
         self._engine.dispose()
 
@@ -224,6 +233,8 @@ def build_parity_snapshot(database_path: Path) -> OpportunityStateParitySnapshot
             StockFeatureDaily.__table__,
             StockUniverse.__table__,
             StockFundamental.__table__,
+            Scan.__table__,
+            FilterPreset.__table__,
         ],
     )
     session_factory = sessionmaker(
@@ -241,7 +252,10 @@ def build_parity_snapshot(database_path: Path) -> OpportunityStateParitySnapshot
                 as_of_date=AS_OF_DATE,
                 run_type="daily_snapshot",
                 status="published",
-                config_json={"market": "US"},
+                config_json={
+                    "market": "US",
+                    "materialization_versions": {"opportunity_state": 1},
+                },
                 published_at=datetime(2026, 8, 21, 22, 0, 0),
             )
         )
@@ -301,6 +315,33 @@ def build_parity_snapshot(database_path: Path) -> OpportunityStateParitySnapshot
                     "avg_dollar_volume": 150_000_100.0,
                     "screeners_run": ["minervini"],
                 },
+            )
+        )
+        db.add(
+            Scan(
+                scan_id=SCAN_ID,
+                criteria={},
+                universe="all",
+                universe_key="market:US",
+                universe_type="market",
+                universe_market="US",
+                screener_types=["minervini", "setup_engine"],
+                composite_method="weighted_average",
+                total_stocks=8,
+                passed_stocks=8,
+                status="completed",
+                feature_run_id=RUN_ID,
+            )
+        )
+        survivor_screen = _correction_survivors_screen(PRESET_SCREENS)
+        db.add(
+            FilterPreset(
+                name=survivor_screen["name"],
+                description=survivor_screen["description"],
+                filters=json.dumps(survivor_screen["filters"]),
+                sort_by=survivor_screen["sort_by"],
+                sort_order=survivor_screen["sort_order"],
+                position=0,
             )
         )
         db.commit()

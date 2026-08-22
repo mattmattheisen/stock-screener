@@ -18,7 +18,6 @@ from typing import Any
 
 import pandas as pd
 import pytest
-
 from app.domain.common.errors import EntityNotFoundError, InvalidTransitionError
 from app.domain.common.query import PageSpec
 from app.domain.common.uow import UnitOfWork
@@ -73,6 +72,7 @@ class FakeScan:
     idempotency_key: str | None = None
     task_id: str | None = None
     feature_run_id: int | None = None
+    feature_run: Any = None
     trigger_source: str = "manual"
     universe: str | None = None
     universe_key: str | None = None

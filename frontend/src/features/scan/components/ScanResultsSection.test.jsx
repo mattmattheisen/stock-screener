@@ -33,11 +33,30 @@ const baseProps = {
 };
 
 describe('ScanResultsSection', () => {
-  it('opts the live results table into scan opportunity telemetry', () => {
+  it('keeps opportunity workflow hidden until the API declares capability', () => {
     render(<ScanResultsSection {...baseProps} />);
 
     expect(resultsTableSpy).toHaveBeenLastCalledWith(
-      expect.objectContaining({ opportunityTelemetrySurface: 'scan' }),
+      expect.objectContaining({
+        opportunityTelemetrySurface: 'scan',
+        showOpportunityState: false,
+      }),
+    );
+  });
+
+  it('shows opportunity columns only for a capable live scan response', () => {
+    render(
+      <ScanResultsSection
+        {...baseProps}
+        resultsData={{
+          ...baseProps.resultsData,
+          capabilities: { opportunity_state: true },
+        }}
+      />,
+    );
+
+    expect(resultsTableSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ showOpportunityState: true }),
     );
   });
 

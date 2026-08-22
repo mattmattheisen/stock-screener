@@ -91,6 +91,44 @@ describe('CorrectionSurvivorsPanel', () => {
     expect(screen.getByText('persisted evidence only')).toBeInTheDocument();
   });
 
+  it('derives selected evidence from current summary rows and clears removed identities', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderWithProviders(
+      <CorrectionSurvivorsPanel summary={completeSummary} posture={null} />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Setup Ready' }));
+
+    rerender(
+      <CorrectionSurvivorsPanel
+        summary={{
+          ...completeSummary,
+          rows: [{
+            ...rows[0],
+            resilience_score: 79,
+            opportunity_state: {
+              ...rows[0].opportunity_state,
+              action_reasons: ['updated persisted evidence'],
+            },
+          }],
+        }}
+        posture={null}
+      />,
+    );
+    expect(screen.getByText('updated persisted evidence')).toBeInTheDocument();
+    expect(screen.queryByText('persisted evidence only')).not.toBeInTheDocument();
+
+    rerender(
+      <CorrectionSurvivorsPanel
+        summary={{ ...completeSummary, rows: [rows[1]] }}
+        posture={null}
+      />,
+    );
+    expect(screen.queryByRole('heading', { name: 'Opportunity evidence' })).not.toBeInTheDocument();
+
+    rerender(<CorrectionSurvivorsPanel summary={completeSummary} posture={null} />);
+    expect(screen.queryByRole('heading', { name: 'Opportunity evidence' })).not.toBeInTheDocument();
+  });
+
   // Catches unavailable data being mislabeled as a valid no-survivor result.
   it('distinguishes incomplete data from a complete zero result', () => {
     const { rerender } = renderWithProviders(
@@ -163,5 +201,28 @@ describe('CorrectionSurvivorsPanel', () => {
 
     expect(await screen.findByRole('heading', { name: 'Opportunity evidence' })).toBeInTheDocument();
     expect(onOpenChart).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Enter', '{Enter}'],
+    ['Space', ' '],
+  ])('opens the chart once when the direct row receives %s', async (_keyName, key) => {
+    const onOpenChart = vi.fn();
+    renderWithProviders(
+      <CorrectionSurvivorsPanel
+        summary={completeSummary}
+        posture={null}
+        onOpenChart={onOpenChart}
+        navigationSymbols={['FIRST', 'SECOND']}
+      />,
+    );
+    const row = screen.getByRole('row', { name: /FIRST/ });
+    row.focus();
+
+    const user = userEvent.setup();
+    await user.keyboard(key);
+
+    expect(onOpenChart).toHaveBeenCalledOnce();
+    expect(onOpenChart).toHaveBeenCalledWith('FIRST', ['FIRST', 'SECOND']);
   });
 });

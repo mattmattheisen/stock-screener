@@ -7,10 +7,10 @@ from datetime import datetime
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
-
 from app.api.v1.scans import router as scans_router
 from app.wiring.bootstrap import get_uow
+from fastapi import FastAPI
+
 from tests.unit.use_cases.conftest import (
     FakeFeatureStoreRepository,
     FakeScan,
@@ -18,7 +18,6 @@ from tests.unit.use_cases.conftest import (
     FakeScanResultRepository,
     make_domain_item,
 )
-
 
 app = FastAPI()
 app.include_router(scans_router, prefix="/api/v1/scans")
@@ -146,6 +145,26 @@ class TestScanResultEndpoints:
             assert row["rs_line_new_high_before_price"] is True
             assert row["rs_line_blue_dot_recent"] is True
             assert row["rs_line_new_high_date"] == "2026-01-06"
+            assert resp.json()["capabilities"] == {"opportunity_state": False}
+        finally:
+            app.dependency_overrides.pop(get_uow, None)
+
+    async def test_results_endpoint_surfaces_backend_owned_opportunity_capability(
+        self, client
+    ):
+        scan_repo = FakeScanRepository()
+        scan = _make_scan("scan-current")
+        scan.criteria = {"materialization_versions": {"opportunity_state": 1}}
+        scan_repo.scans["scan-current"] = scan
+        uow = _FakeUoW(scans=scan_repo)
+
+        app.dependency_overrides[get_uow] = lambda: uow
+        try:
+            resp = await client.get("/api/v1/scans/scan-current/results")
+
+            assert resp.status_code == 200
+            assert resp.json()["results"] == []
+            assert resp.json()["capabilities"] == {"opportunity_state": True}
         finally:
             app.dependency_overrides.pop(get_uow, None)
 

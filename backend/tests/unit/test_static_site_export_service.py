@@ -7,13 +7,9 @@ from datetime import date, datetime
 from inspect import Parameter, getsource, signature
 from types import SimpleNamespace
 
+import app.services.static_site_export_service as export_module
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
-
-import app.services.static_site_export_service as export_module
 from app.database import Base
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
@@ -46,6 +42,9 @@ from app.services.static_site_export_service import (
     StaticSiteExportService,
     StaticSiteSectionUnavailableError,
 )
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -1174,8 +1173,8 @@ def test_serialize_scan_row_preserves_compact_opportunity_evidence_only(
             "benchmark_leadership": 20.0,
             "multi_horizon_rs": 17.0,
             "trend_integrity": 20.0,
-            "structure_tightness": 20.0,
-            "liquidity_freshness": 20.0,
+            "structure_tightness": 17.0,
+            "liquidity_freshness": 10.0,
         },
         "metrics": {"benchmark_relative_return_65d": 0.083},
         "data_availability": {"features": "available"},

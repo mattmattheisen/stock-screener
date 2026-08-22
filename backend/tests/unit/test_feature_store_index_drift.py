@@ -20,10 +20,6 @@ from pathlib import Path
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import create_mock_engine
-from sqlalchemy.dialects import postgresql
-from sqlalchemy.orm import Session
-
 from app.domain.common.query import BooleanFilter
 from app.domain.scanning.filter_expression_model import FilterExpression
 from app.infra.db.models.feature_store import StockFeatureDaily
@@ -32,6 +28,9 @@ from app.infra.query.feature_store_query import (
     _FIELD_BINDINGS,
     compile_filter_expression,
 )
+from sqlalchemy import create_mock_engine
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Session
 
 _MIGRATION = (
     Path(__file__).parents[2]
@@ -134,12 +133,72 @@ def test_correction_survivor_migration_emits_exact_postgres_indexes():
 
     migration._create_indexes()
 
-    statements = [line for line in output.getvalue().splitlines() if line]
+    statements = [
+        line
+        for line in output.getvalue().splitlines()
+        if line.startswith("CREATE INDEX")
+    ]
     assert statements == [
-        "CREATE INDEX IF NOT EXISTS ix_sfd_run_correction_survivor "
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sfd_run_correction_survivor "
         "ON stock_feature_daily (run_id, "
         "(lower(details_json ->> 'correction_survivor')));",
-        "CREATE INDEX IF NOT EXISTS ix_sfd_run_resilience_score "
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sfd_run_resilience_score "
         "ON stock_feature_daily (run_id, "
         "(CAST(details_json ->> 'resilience_score' AS FLOAT)));",
     ]
+
+
+def test_correction_survivor_migration_emits_exact_concurrent_drops():
+    migration = _load_migration(_CORRECTION_SURVIVORS_MIGRATION)
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+
+    migration._drop_indexes()
+
+    statements = [
+        line
+        for line in output.getvalue().splitlines()
+        if line.startswith("DROP INDEX")
+    ]
+    assert statements == [
+        "DROP INDEX CONCURRENTLY IF EXISTS ix_sfd_run_correction_survivor;",
+        "DROP INDEX CONCURRENTLY IF EXISTS ix_sfd_run_resilience_score;",
+    ]
+
+
+def test_correction_survivor_index_ddl_runs_inside_autocommit_block():
+    migration = _load_migration(_CORRECTION_SURVIVORS_MIGRATION)
+    events: list[object] = []
+
+    class _AutocommitBlock:
+        def __enter__(self):
+            events.append("enter")
+
+        def __exit__(self, *_args):
+            events.append("exit")
+
+    class _Context:
+        @staticmethod
+        def autocommit_block():
+            return _AutocommitBlock()
+
+    class _Operations:
+        @staticmethod
+        def get_context():
+            return _Context()
+
+        @staticmethod
+        def execute(statement):
+            events.append(statement)
+
+    migration.op = _Operations()
+
+    migration._create_indexes()
+
+    assert events[0] == "enter"
+    assert events[-1] == "exit"
+    assert all("CONCURRENTLY" in statement for statement in events[1:-1])

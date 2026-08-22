@@ -132,6 +132,9 @@ function ScanPage() {
     initialFilters: DEFAULT_SCAN_FILTERS,
     initialExpression: DEFAULT_SCAN_EXPRESSION,
   });
+  const opportunityStateAvailable = (
+    displayedResultsData?.capabilities?.opportunity_state === true
+  );
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
@@ -234,6 +237,7 @@ function ScanPage() {
     sortOrder,
     applyQuery: requestQuery,
     expression: draftExpression,
+    opportunityStateAvailable,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -673,7 +677,7 @@ function ScanPage() {
           filterOptions={normalizedFilterOptions}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}
-          presets={presets}
+          presets={presetState.availablePresets}
           activePresetId={presetState.activePresetId}
           hasUnsavedChanges={presetState.hasUnsavedChanges()}
           presetsLoading={presetsLoading}

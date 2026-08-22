@@ -8,7 +8,7 @@ dispatched to the async chunked-compute path.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from app.domain.feature_store.models import (
     FeatureRowWrite,
@@ -27,7 +27,6 @@ from tests.unit.use_cases.conftest import (
     FakeUnitOfWork,
     FakeUniverseRepository,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -67,6 +66,7 @@ def _publish_run(
     rows: list[FeatureRowWrite],
     as_of: date | None = None,
     pointer_key: str = "latest_published",
+    config_json: dict | None = None,
 ) -> int:
     """Create + populate + publish a feature run on the fake repos.
 
@@ -82,6 +82,7 @@ def _publish_run(
         run_type=RunType.DAILY_SNAPSHOT,
         universe_hash="universe-hash-irrelevant",
         input_hash="input-hash-irrelevant",
+        config_json=config_json,
     )
     feature_runs.set_run_covered_symbols(run.id, [r.symbol for r in rows])
     feature_runs.mark_completed(
@@ -167,6 +168,57 @@ class TestCompilePathHappyPath:
         # feature_run_id is intentionally None — read path uses scan_results.
         assert scan.feature_run_id is None
         assert run_id is not None
+
+    def test_compile_path_propagates_source_materialization_capability(self):
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=["AAPL"],
+            rows=[_row("AAPL", custom_score=85)],
+            config_json={"materialization_versions": {"opportunity_state": 1}},
+        )
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(["AAPL"]),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+
+        CreateScanUseCase(dispatcher=FakeTaskDispatcher()).execute(
+            uow, _custom_command()
+        )
+
+        assert uow.scans.rows[0].criteria["materialization_versions"] == {
+            "opportunity_state": 1
+        }
+
+    def test_compile_path_does_not_infer_capability_from_legacy_rows(self):
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=["AAPL"],
+            rows=[
+                _row(
+                    "AAPL",
+                    custom_score=85,
+                    opportunity_state="setup_ready",
+                )
+            ],
+        )
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(["AAPL"]),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+
+        CreateScanUseCase(dispatcher=FakeTaskDispatcher()).execute(
+            uow, _custom_command()
+        )
+
+        assert "materialization_versions" not in uow.scans.rows[0].criteria
 
     def test_compile_path_does_not_apply_stale_custom_score_gate(self):
         """A covering run reached this path because its (input_hash) differs

@@ -4,12 +4,10 @@ import json
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
-import pytest
-from pydantic import ValidationError
-
 import app.services.daily_snapshot_service as daily_snapshot_service
 import app.services.key_market_history as key_market_history
 import app.services.snapshot_date_coherence as snapshot_date_coherence
+import pytest
 from app.api.v1.market_scan import _if_none_match_matches
 from app.domain.common.query import (
     BooleanFilter,
@@ -34,6 +32,7 @@ from app.services.daily_snapshot_service import (
 from app.services.price_refresh_plan_builder import _key_market_refresh_symbols
 from app.services.snapshot_date_coherence import coherence_status
 from app.use_cases.scanning.get_scan_results import GetScanResultsResult
+from pydantic import ValidationError
 
 
 def _norm(market):
@@ -692,8 +691,10 @@ class FakeDailySnapshotScanResults:
 
     def __init__(self, rows):
         self.rows = tuple(rows)
+        self.calls = 0
 
     def execute(self, _uow, query):
+        self.calls += 1
         rows = list(self.rows)
         for condition in query.query_spec.expression.required_conditions:
             if isinstance(condition, BooleanFilter):
@@ -773,6 +774,13 @@ def _daily_snapshot_row(
     action_state,
     composite_score=75.0,
 ):
+    score_pillars = {
+        "benchmark_leadership": resilience,
+        "multi_horizon_rs": 0.0 if resilience is not None else None,
+        "trend_integrity": 0.0 if resilience is not None else None,
+        "structure_tightness": 0.0 if resilience is not None else None,
+        "liquidity_freshness": 0.0 if resilience is not None else None,
+    }
     return ScanResultItemDomain(
         symbol=symbol,
         composite_score=composite_score,
@@ -789,6 +797,22 @@ def _daily_snapshot_row(
             "correction_survivor": survivor,
             "resilience_score": resilience,
             "action_state": action_state,
+            "opportunity_state": {
+                "schema_version": 1,
+                "policy_version": "correction-survivors-v1",
+                "as_of_date": "2026-08-21",
+                "market": "US",
+                "mic": "XNAS",
+                "benchmark_symbol": "SPY",
+                "benchmark_as_of_date": "2026-08-21",
+                "passed_checks": [],
+                "failed_checks": [],
+                "warnings": [],
+                "score_pillars": score_pillars,
+                "metrics": {},
+                "data_availability": {"required_evidence": "complete"},
+                "action_reasons": [action_state],
+            },
         },
     )
 
@@ -817,15 +841,17 @@ def survivor_snapshot_fixture(monkeypatch):
             action_state="setup_ready",
             composite_score=10.0,
         ),
-        _daily_snapshot_row(
-            "ZZZ", survivor=False, resilience=99.0, action_state="setup_ready"
-        ),
+        _daily_snapshot_row("ZZZ", survivor=False, resilience=99.0, action_state="watch"),
     ]
     scan = SimpleNamespace(
         scan_id="scan-survivors",
+        feature_run_id=1,
         feature_run=SimpleNamespace(
             as_of_date=date(2026, 8, 21),
             published_at=datetime(2026, 8, 21, 23, 0, tzinfo=timezone.utc),
+            config_json={
+                "materialization_versions": {"opportunity_state": 1}
+            },
         ),
         completed_at=datetime(2026, 8, 22, 1, 0, tzinfo=timezone.utc),
     )
@@ -992,6 +1018,36 @@ class TestDailySnapshotCorrectionSurvivors:
             },
             "rows": [],
         }
+
+    def test_legacy_scan_marks_summary_unavailable_without_count_queries(
+        self, survivor_snapshot_fixture
+    ):
+        scan = survivor_snapshot_fixture["scan"]
+        scan.feature_run.config_json = {}
+        use_case = survivor_snapshot_fixture["scan_results_use_case"]
+
+        summary = daily_snapshot_service._build_correction_survivor_summary(
+            scan=scan,
+            uow=survivor_snapshot_fixture["uow"],
+            scan_results_use_case=use_case,
+        )
+
+        assert summary == {
+            "available": False,
+            "complete": False,
+            "count": 0,
+            "counts_by_action_state": {
+                "exit_risk": 0,
+                "deteriorating": 0,
+                "event_risk": 0,
+                "extended": 0,
+                "data_limited": 0,
+                "setup_ready": 0,
+                "watch": 0,
+            },
+            "rows": [],
+        }
+        assert use_case.calls == 0
 
     def test_missing_market_posture_does_not_alter_survivors(
         self, survivor_snapshot_fixture, monkeypatch

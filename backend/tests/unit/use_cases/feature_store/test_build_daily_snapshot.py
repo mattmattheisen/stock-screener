@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-
 from app.domain.common.errors import ValidationError
 from app.domain.feature_store.models import RunStatus
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
@@ -22,6 +21,7 @@ from app.use_cases.feature_store.build_daily_snapshot import (
     BuildDailySnapshotCommand,
     _map_orchestrator_to_feature_row,
 )
+
 from tests.unit.use_cases.conftest import (
     FakeCancellationToken,
     FakeFeatureRunRepository,
@@ -348,6 +348,7 @@ class TestHappyPath:
         assert run.config["signature"]["signature_version"] == 1
         assert run.config["publish_pointer_key"] == "latest_published"
         assert run.config["universe"] == {}
+        assert run.config["materialization_versions"] == {"opportunity_state": 1}
 
     @_PATCH_TRADING_DAY
     def test_exact_balanced_rs_is_hydrated_and_audited_on_feature_run(

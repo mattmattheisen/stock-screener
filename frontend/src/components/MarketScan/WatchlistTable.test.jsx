@@ -71,6 +71,20 @@ const renderTable = (onOpenChart = vi.fn()) => ({
   ),
 });
 
+const tableElement = ({
+  data = watchlistData,
+  stewardship = stewardshipBySymbol,
+  onOpenChart = vi.fn(),
+} = {}) => (
+  <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <WatchlistTable
+      watchlistData={data}
+      stewardshipBySymbol={stewardship}
+      onOpenChart={onOpenChart}
+    />
+  </MemoryRouter>
+);
+
 describe('WatchlistTable', () => {
   beforeEach(() => {
     recordOpportunityEvidenceOpen.mockClear();
@@ -95,16 +109,43 @@ describe('WatchlistTable', () => {
   });
 
   // Catches keyboard-generated badge clicks bubbling into the chart row action.
-  it('isolates Action State keyboard activation from chart opening', async () => {
+  it.each([
+    ['Enter', '{Enter}'],
+    ['Space', ' '],
+  ])('isolates Action State %s activation from chart opening', async (_keyName, key) => {
     const user = userEvent.setup();
     const { onOpenChart } = renderTable();
     const actionBadge = screen.getByRole('button', { name: 'Setup Ready' });
 
     actionBadge.focus();
-    await user.keyboard('{Enter}');
+    await user.keyboard(key);
 
     expect(screen.getByText('Opportunity evidence')).toBeInTheDocument();
     expect(onOpenChart).not.toHaveBeenCalled();
+  });
+
+  it('reconciles selected evidence to current watchlist rows and clears removed identities', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderWithProviders(tableElement());
+    await user.click(screen.getByRole('button', { name: 'Setup Ready' }));
+    expect(screen.getByText('91.5')).toBeInTheDocument();
+
+    rerender(tableElement({
+      stewardship: {
+        NVDA: { ...stewardshipBySymbol.NVDA, resilience_score: 79.0 },
+      },
+    }));
+    expect(screen.getByText('79.0')).toBeInTheDocument();
+    expect(screen.queryByText('91.5')).not.toBeInTheDocument();
+
+    rerender(tableElement({
+      data: { ...watchlistData, items: [{ ...watchlistData.items[0], id: 22, symbol: 'AMD' }] },
+      stewardship: {},
+    }));
+    expect(screen.queryByRole('heading', { name: 'Opportunity evidence' })).not.toBeInTheDocument();
+
+    rerender(tableElement());
+    expect(screen.queryByRole('heading', { name: 'Opportunity evidence' })).not.toBeInTheDocument();
   });
 
   // Catches Action State integration disabling the pre-existing row chart action.

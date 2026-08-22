@@ -53,6 +53,50 @@ function setup(overrides = {}) {
 }
 
 describe('useScanFilterPresets', () => {
+  it('hides and blocks the Correction Survivors preset without API capability', () => {
+    const { hook, applyQuery } = setup({
+      opportunityStateAvailable: false,
+      presets: [
+        {
+          id: 'correction-survivors-live',
+          name: 'Correction Survivors',
+          filters: { ...buildDefaultScanFilters(), correctionSurvivor: true },
+          sort_by: 'resilience_score',
+          sort_order: 'desc',
+        },
+        {
+          id: 'momentum',
+          name: 'Momentum',
+          filters: buildDefaultScanFilters(),
+          sort_by: 'composite_score',
+          sort_order: 'desc',
+        },
+      ],
+    });
+
+    expect(hook.result.current.availablePresets.map(({ name }) => name)).toEqual([
+      'Momentum',
+    ]);
+
+    act(() => hook.result.current.handleLoadPreset('correction-survivors-live'));
+    expect(applyQuery).not.toHaveBeenCalled();
+  });
+
+  it('exposes the Correction Survivors preset for a capable scan', () => {
+    const { hook } = setup({
+      opportunityStateAvailable: true,
+      presets: [{
+        id: 'correction-survivors-live',
+        name: 'Correction Survivors',
+        filters: { ...buildDefaultScanFilters(), correctionSurvivor: true },
+        sort_by: 'resilience_score',
+        sort_order: 'desc',
+      }],
+    });
+
+    expect(hook.result.current.availablePresets).toHaveLength(1);
+  });
+
   it('loads a preset as one canonical filter + sort transition', () => {
     const { hook, applyQuery } = setup();
 
@@ -76,6 +120,7 @@ describe('useScanFilterPresets', () => {
 
   it('loads the Correction Survivors live preset with survivor semantics', () => {
     const { hook, applyQuery } = setup({
+      opportunityStateAvailable: true,
       presets: [{
         id: 'correction-survivors-live',
         name: 'Correction Survivors',

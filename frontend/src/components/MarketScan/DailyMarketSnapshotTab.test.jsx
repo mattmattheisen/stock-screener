@@ -348,7 +348,7 @@ describe('DailyMarketSnapshotTab', () => {
     expect(screen.queryByText('Survivor data incomplete')).not.toBeInTheDocument();
   });
 
-  it('renders an incomplete live survivor aggregate as incomplete', async () => {
+  it('hides the survivor workflow when the live snapshot capability is unavailable', async () => {
     getDailySnapshot.mockResolvedValue(snapshotPayload({
       correction_survivors: {
         available: false,
@@ -369,7 +369,9 @@ describe('DailyMarketSnapshotTab', () => {
 
     renderWithProviders(<DailyMarketSnapshotTab />);
 
-    expect(await screen.findByText('Survivor data incomplete')).toBeInTheDocument();
+    expect(await screen.findByText('LIVE')).toBeInTheDocument();
+    expect(screen.queryByTestId('correction-survivors-panel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Survivor data incomplete')).not.toBeInTheDocument();
     expect(screen.queryByText('No correction survivors in this snapshot.')).not.toBeInTheDocument();
   });
 });

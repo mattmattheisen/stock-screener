@@ -1,7 +1,6 @@
 from datetime import date, datetime, timezone
 
 import pytest
-
 from app.domain.scanning.opportunity_state import (
     ActionState,
     InvalidationEvidence,
@@ -197,42 +196,45 @@ def test_non_future_benchmark_lag_is_admissible_and_auditable():
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    ("field", "value", "expected_survivor"),
     [
-        ("benchmark_relative_return_65d", None),
-        ("rs_rating_1m", None),
-        ("rs_rating_3m", None),
-        ("rs_line_new_high", None),
-        ("rs_line_blue_dot", None),
-        ("stage", None),
-        ("ma_alignment", None),
-        ("invalidation_flags", None),
-        ("pattern_primary", None),
-        ("squeeze", None),
-        ("tight_closes_count", None),
-        ("quiet_days_count", None),
-        ("volume_vs_50d", None),
-        ("volume_dry_up_max", None),
-        ("liquidity_passes", None),
-        ("feature_status", None),
-        ("is_scannable", None),
+        ("benchmark_relative_return_65d", None, True),
+        ("rs_rating_1m", None, False),
+        ("rs_rating_3m", None, False),
+        ("rs_line_new_high", None, True),
+        ("rs_line_blue_dot", None, True),
+        ("stage", None, False),
+        ("ma_alignment", None, False),
+        ("invalidation_flags", None, False),
+        ("pattern_primary", None, True),
+        ("squeeze", None, True),
+        ("tight_closes_count", None, True),
+        ("quiet_days_count", None, True),
+        ("volume_vs_50d", None, True),
+        ("volume_dry_up_max", None, True),
+        ("liquidity_passes", None, False),
+        ("feature_status", None, False),
+        ("is_scannable", None, False),
     ],
 )
-def test_missing_score_input_never_coerces_to_zero(field, value):
+def test_missing_score_input_never_coerces_to_zero(field, value, expected_survivor):
     """Break caught: replacing an unknown score input with a false or zero contribution."""
     result = evaluate_opportunity_state(complete_inputs(**{field: value}))
 
     assert result.resilience_score is None
-    assert result.correction_survivor is False
+    assert result.correction_survivor is expected_survivor
 
 
 @pytest.mark.parametrize(
     "changes",
     [
-        {"benchmark_relative_return_65d": 0.0},
-        {"rs_rating_1m": 69.9},
+        {
+            "benchmark_relative_return_65d": 0.0,
+            "rs_line_new_high": False,
+            "rs_line_blue_dot": False,
+        },
+        {"rs_rating_1m": 79.9},
         {"rs_rating_3m": 69.9},
-        {"rs_line_new_high": False, "rs_line_blue_dot": False},
     ],
 )
 def test_each_leadership_gate_boundary_can_disqualify_a_complete_row(changes):
@@ -242,6 +244,59 @@ def test_each_leadership_gate_boundary_can_disqualify_a_complete_row(changes):
     assert result.resilience_score is not None
     assert result.correction_survivor is False
     assert "leadership_gate" in result.failed_checks
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected_score"),
+    [
+        (
+            {"rs_line_new_high": False, "rs_line_blue_dot": False},
+            89.0,
+        ),
+        (
+            {"benchmark_relative_return_65d": -0.01},
+            85.0,
+        ),
+        (
+            {"rs_rating_1m": 80.0, "rs_rating_3m": 70.0},
+            95.0,
+        ),
+    ],
+)
+def test_leadership_gate_uses_or_signal_and_exact_rs_boundaries(changes, expected_score):
+    """Break caught: requiring both benchmark return and RS-line leadership, or using RS 70 for 1M."""
+    result = evaluate_opportunity_state(complete_inputs(**changes))
+
+    assert result.correction_survivor is True
+    assert result.resilience_score == expected_score
+    assert result.action_state is ActionState.SETUP_READY
+
+
+def test_positive_return_decides_leadership_when_rs_line_signals_are_unknown():
+    """Break caught: score completeness incorrectly making a decidable leadership gate unavailable."""
+    result = evaluate_opportunity_state(
+        complete_inputs(rs_line_new_high=None, rs_line_blue_dot=None)
+    )
+
+    assert result.correction_survivor is True
+    assert result.resilience_score is None
+    assert result.action_state is ActionState.SETUP_READY
+
+
+def test_leadership_is_unknown_when_no_known_disjunct_passes():
+    """Break caught: coercing a missing RS-line signal to false and reporting a definitive gate failure."""
+    result = evaluate_opportunity_state(
+        complete_inputs(
+            benchmark_relative_return_65d=-0.01,
+            rs_line_new_high=None,
+            rs_line_blue_dot=False,
+        )
+    )
+
+    assert result.correction_survivor is False
+    assert result.resilience_score is None
+    assert result.action_state is ActionState.DATA_LIMITED
+    assert "leadership_gate" not in result.failed_checks
 
 
 @pytest.mark.parametrize(
@@ -260,37 +315,87 @@ def test_each_trend_gate_boundary_can_disqualify_a_complete_row(changes):
     assert "trend_gate" in result.failed_checks
 
 
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"pattern_primary": ""},
-        {"squeeze": False},
-        {"tight_closes_count": 2},
-        {"quiet_days_count": 2},
-        {"volume_vs_50d": 0.81},
-    ],
-)
-def test_each_structure_gate_boundary_can_disqualify_a_complete_row(changes):
-    """Break caught: classifying an incomplete contraction setup as a survivor."""
-    result = evaluate_opportunity_state(complete_inputs(**changes))
+def test_primary_pattern_alone_decides_constructive_structure():
+    """Break caught: requiring every supported structure signal instead of any one passing signal."""
+    result = evaluate_opportunity_state(
+        complete_inputs(
+            squeeze=False,
+            tight_closes_count=2,
+            quiet_days_count=2,
+            volume_vs_50d=0.81,
+        )
+    )
+
+    assert result.correction_survivor is True
+    assert result.resilience_score == 85.0
+    assert result.action_state is ActionState.SETUP_READY
+
+
+def test_primary_pattern_decides_structure_when_other_signals_are_unknown():
+    """Break caught: all-input score completeness leaking into the any-signal structure gate."""
+    result = evaluate_opportunity_state(
+        complete_inputs(
+            squeeze=None,
+            tight_closes_count=None,
+            quiet_days_count=None,
+            volume_vs_50d=None,
+        )
+    )
+
+    assert result.correction_survivor is True
+    assert result.resilience_score is None
+    assert result.action_state is ActionState.SETUP_READY
+
+
+def test_all_known_structure_failures_make_the_row_ineligible():
+    """Break caught: an any-signal structure gate passing when every supported signal fails."""
+    result = evaluate_opportunity_state(
+        complete_inputs(
+            pattern_primary="",
+            squeeze=False,
+            tight_closes_count=2,
+            quiet_days_count=2,
+            volume_vs_50d=0.81,
+        )
+    )
 
     assert result.correction_survivor is False
     assert "structure_gate" in result.failed_checks
+    assert result.action_state is ActionState.WATCH
 
 
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"liquidity_available": False},
-        {"liquidity_passes": False},
-    ],
-)
-def test_each_liquidity_gate_boundary_can_disqualify_a_complete_row(changes):
+def test_structure_is_unknown_when_remaining_signal_is_missing():
+    """Break caught: a missing supported structure signal silently becoming a known failure."""
+    result = evaluate_opportunity_state(
+        complete_inputs(
+            pattern_primary=None,
+            squeeze=False,
+            tight_closes_count=2,
+            quiet_days_count=2,
+            volume_vs_50d=0.81,
+        )
+    )
+
+    assert result.correction_survivor is False
+    assert result.action_state is ActionState.DATA_LIMITED
+    assert "structure_gate" not in result.failed_checks
+
+
+def test_known_liquidity_failure_can_disqualify_a_complete_row():
     """Break caught: permitting unverified or failed liquidity to pass eligibility."""
-    result = evaluate_opportunity_state(complete_inputs(**changes))
+    result = evaluate_opportunity_state(complete_inputs(liquidity_passes=False))
 
     assert result.correction_survivor is False
     assert "liquidity_gate" in result.failed_checks
+
+
+def test_unavailable_liquidity_is_unknown_not_a_definitive_failure():
+    """Break caught: recording unavailable liquidity evidence as a known failed gate."""
+    result = evaluate_opportunity_state(complete_inputs(liquidity_available=False))
+
+    assert result.correction_survivor is False
+    assert result.action_state is ActionState.DATA_LIMITED
+    assert "liquidity_gate" not in result.failed_checks
 
 
 @pytest.mark.parametrize("changes", [{"feature_status": "partial"}, {"is_scannable": False}])
@@ -306,9 +411,7 @@ def test_each_freshness_gate_boundary_can_disqualify_a_complete_row(changes):
     "changes",
     [
         {"invalidation_evidence_available": False},
-        {"setup_payload_available": False},
         {"event_calendar_available": False},
-        {"prior_run_required": True, "prior_run_available": False},
     ],
 )
 def test_each_required_evidence_boundary_marks_a_row_data_limited(changes):
@@ -318,6 +421,68 @@ def test_each_required_evidence_boundary_marks_a_row_data_limited(changes):
     assert result.correction_survivor is False
     assert result.action_state is ActionState.DATA_LIMITED
     assert "required_evidence" in result.failed_checks
+
+
+def test_setup_payload_availability_does_not_override_decidable_survivor_gates():
+    """Break caught: treating score-only completeness evidence as an eligibility gate."""
+    result = evaluate_opportunity_state(complete_inputs(setup_payload_available=False))
+
+    assert result.correction_survivor is True
+    assert result.resilience_score is None
+    assert result.action_state is ActionState.SETUP_READY
+
+
+def test_missing_requested_prior_run_limits_action_state_not_current_survivor_status():
+    """Break caught: allowing optional cross-run stewardship data to change current eligibility."""
+    result = evaluate_opportunity_state(
+        complete_inputs(prior_run_required=True, prior_run_available=False)
+    )
+
+    assert result.correction_survivor is True
+    assert result.action_state is ActionState.DATA_LIMITED
+    assert "required_evidence" not in result.failed_checks
+
+
+@pytest.mark.parametrize("changes", [{"market": None}, {"as_of_date": None}])
+def test_market_and_as_of_provenance_are_required(changes):
+    """Break caught: classifying a survivor without its Market or point-in-time row date."""
+    result = evaluate_opportunity_state(complete_inputs(**changes))
+
+    assert result.correction_survivor is False
+    assert result.action_state is ActionState.DATA_LIMITED
+    assert "required_evidence" in result.failed_checks
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {
+            "benchmark_relative_return_65d": 0.0,
+            "rs_line_new_high": False,
+            "rs_line_blue_dot": False,
+        },
+        {"rs_rating_1m": 75.0},
+        {"rs_rating_3m": 65.0},
+        {"stage": 3},
+        {"ma_alignment": False},
+        {
+            "pattern_primary": "",
+            "squeeze": False,
+            "tight_closes_count": 2,
+            "quiet_days_count": 2,
+            "volume_vs_50d": 0.81,
+        },
+        {"liquidity_passes": False},
+        {"feature_status": "partial"},
+        {"is_scannable": False},
+    ],
+)
+def test_known_eligibility_failures_cannot_resolve_setup_ready(changes):
+    """Break caught: Setup Engine readiness bypassing a known failed survivor gate."""
+    result = evaluate_opportunity_state(complete_inputs(**changes))
+
+    assert result.correction_survivor is False
+    assert result.action_state is ActionState.WATCH
 
 
 def test_current_only_row_ignores_absent_prior_run_data():
@@ -365,6 +530,49 @@ def test_present_projection_rejects_missing_required_evidence_key():
     del projection["opportunity_state"]["market"]
 
     with pytest.raises(ValueError, match="market"):
+        opportunity_result_from_projection(projection)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda projection: projection.update({"unexpected": True}),
+        lambda projection: projection["opportunity_state"].update({"unexpected": True}),
+        lambda projection: projection["opportunity_state"]["score_pillars"].update(
+            {"unexpected": 1.0}
+        ),
+    ],
+)
+def test_present_projection_rejects_unknown_versioned_keys(mutation):
+    """Break caught: silently ignoring schema drift in persisted policy evidence."""
+    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    mutation(projection)
+
+    with pytest.raises(ValueError, match="unexpected"):
+        opportunity_result_from_projection(projection)
+
+
+def test_present_projection_rejects_partial_top_level_materialization():
+    """Break caught: interpreting a mixed legacy/current row as not computed."""
+    with pytest.raises(ValueError, match="all null or all present"):
+        opportunity_result_from_projection({"correction_survivor": True})
+
+
+def test_present_projection_rejects_incoherent_score_sum():
+    """Break caught: trusting a score that disagrees with its persisted decomposition."""
+    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    projection["resilience_score"] = 96.0
+
+    with pytest.raises(ValueError, match="pillar sum"):
+        opportunity_result_from_projection(projection)
+
+
+def test_present_projection_rejects_setup_ready_non_survivor():
+    """Break caught: accepting an impossible action/eligibility combination from storage."""
+    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    projection["correction_survivor"] = False
+
+    with pytest.raises(ValueError, match="setup_ready"):
         opportunity_result_from_projection(projection)
 
 

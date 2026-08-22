@@ -1,6 +1,6 @@
 # Correction Survivors and Action State Design
 
-**Status:** Implemented in Releases A1 and A2; repository-wide verification retains 7 documented pre-existing environment failures; Setup Follow-Through remains deferred
+**Status:** Implemented in Releases A1 and A2; repository-wide verification retains 7 documented environment-gated failures; Setup Follow-Through remains deferred
 
 **Date:** 2026-08-21
 

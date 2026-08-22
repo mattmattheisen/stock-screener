@@ -1,9 +1,35 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   canonicalizeExpression,
   stableExpressionKey,
 } from '../filterExpressionModel';
 import { legacyLiveFiltersToExpression } from '../legacyFilterExpression';
+
+const OPPORTUNITY_STATE_FIELDS = new Set([
+  'correction_survivor',
+  'resilience_score',
+  'action_state',
+]);
+
+function valueReferencesOpportunityState(value) {
+  if (Array.isArray(value)) {
+    return value.some(valueReferencesOpportunityState);
+  }
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  if (OPPORTUNITY_STATE_FIELDS.has(value.field)) {
+    return true;
+  }
+  return Object.values(value).some(valueReferencesOpportunityState);
+}
+
+function isOpportunityStatePreset(preset) {
+  return preset?.name === 'Correction Survivors'
+    || preset?.filters?.correctionSurvivor != null
+    || OPPORTUNITY_STATE_FIELDS.has(preset?.sort_by)
+    || valueReferencesOpportunityState(preset?.filters?.expression);
+}
 
 export function useScanFilterPresets({
   presets,
@@ -14,6 +40,7 @@ export function useScanFilterPresets({
   sortOrder,
   applyQuery,
   expression = null,
+  opportunityStateAvailable = false,
 }) {
   const [activePresetId, setActivePresetId] = useState(null);
   const [presetFiltersSnapshot, setPresetFiltersSnapshot] = useState(null);
@@ -32,12 +59,27 @@ export function useScanFilterPresets({
     }),
     [expression],
   );
+  const availablePresets = useMemo(
+    () => (opportunityStateAvailable
+      ? presets
+      : presets.filter((preset) => !isOpportunityStatePreset(preset))),
+    [opportunityStateAvailable, presets],
+  );
 
   const clearActivePreset = useCallback(() => {
     setActivePresetId(null);
     setPresetFiltersSnapshot(null);
     setPresetSortSnapshot(null);
   }, []);
+
+  useEffect(() => {
+    if (
+      activePresetId != null
+      && !availablePresets.some((preset) => preset.id === activePresetId)
+    ) {
+      clearActivePreset();
+    }
+  }, [activePresetId, availablePresets, clearActivePreset]);
 
   const hasUnsavedChanges = useCallback(() => {
     if (!activePresetId || !presetFiltersSnapshot) {
@@ -61,7 +103,7 @@ export function useScanFilterPresets({
         return;
       }
 
-      const preset = presets.find((item) => item.id === presetId);
+      const preset = availablePresets.find((item) => item.id === presetId);
       if (!preset) {
         return;
       }
@@ -84,7 +126,7 @@ export function useScanFilterPresets({
       );
       setPresetSortSnapshot({ sortBy: preset.sort_by, sortOrder: preset.sort_order });
     },
-    [applyQuery, clearActivePreset, presets]
+    [applyQuery, availablePresets, clearActivePreset]
   );
 
   const handleOpenSaveDialog = useCallback(() => {
@@ -119,7 +161,7 @@ export function useScanFilterPresets({
 
   const handleRenamePreset = useCallback(
     (presetId) => {
-      const preset = presets.find((item) => item.id === presetId);
+      const preset = availablePresets.find((item) => item.id === presetId);
       if (!preset) {
         return;
       }
@@ -130,7 +172,7 @@ export function useScanFilterPresets({
       setSaveDialogError(null);
       setSaveDialogOpen(true);
     },
-    [presets]
+    [availablePresets]
   );
 
   const handleDeletePreset = useCallback(
@@ -197,6 +239,7 @@ export function useScanFilterPresets({
   );
 
   return {
+    availablePresets,
     activePresetId,
     hasUnsavedChanges,
     clearActivePreset,

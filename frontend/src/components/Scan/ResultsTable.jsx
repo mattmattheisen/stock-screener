@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useCallback, memo } from 'react';
+import { useMemo, useRef, useState, useCallback, useEffect, memo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Table,
@@ -608,14 +608,26 @@ function ResultsTable({
   showWatchlistMenu = true,
   sortingEnabled = true,
   isChartEnabled,
-  showOpportunityState = true,
+  showOpportunityState = false,
   opportunityTelemetrySurface,
 }) {
   const parentRef = useRef(null);
   // MCap column display mode — kept as local state; scan-level persistence
   // can lift this up later if users want it to survive navigation.
   const [mcapDisplay, setMcapDisplay] = useState(MCAP_DISPLAY.USD);
-  const [opportunityRow, setOpportunityRow] = useState(null);
+  const [opportunitySymbol, setOpportunitySymbol] = useState(null);
+  const opportunityRow = useMemo(
+    () => results?.find((row) => row?.symbol === opportunitySymbol) ?? null,
+    [opportunitySymbol, results],
+  );
+  useEffect(() => {
+    if (
+      opportunitySymbol != null
+      && (!showOpportunityState || !opportunityRow?.opportunity_state)
+    ) {
+      setOpportunitySymbol(null);
+    }
+  }, [opportunityRow, opportunitySymbol, showOpportunityState]);
   const visibleColumns = useMemo(() => {
     const base = columns.filter((column) => (
       (showActions || column.id !== 'chart') &&
@@ -648,11 +660,11 @@ function ResultsTable({
   }, [onOpenChart]);
 
   const handleOpenOpportunity = useCallback((row) => {
-    setOpportunityRow(row);
+    setOpportunitySymbol(row?.symbol ?? null);
   }, []);
 
   const handleCloseOpportunity = useCallback(() => {
-    setOpportunityRow(null);
+    setOpportunitySymbol(null);
   }, []);
 
   // Virtualize rows - only render visible rows plus overscan

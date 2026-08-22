@@ -1,7 +1,7 @@
 /**
  * Watchlist Table Component
  */
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link as RouterLink } from 'react-router-dom';
 import {
@@ -39,8 +39,21 @@ const PRICE_PERIODS = [
 
 function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, onOpenChart }) {
   const [hoveredRow, setHoveredRow] = useState(null);
-  const [opportunityRow, setOpportunityRow] = useState(null);
+  const [opportunityItemId, setOpportunityItemId] = useState(null);
   const queryClient = useQueryClient();
+  const { items, price_change_bounds } = watchlistData;
+  const opportunityRow = useMemo(() => {
+    const stock = items?.find((item) => item.id === opportunityItemId);
+    if (!stock) return null;
+    const stewardship = stewardshipBySymbol[stock.symbol];
+    if (!stewardship?.opportunity_state) return null;
+    return { ...stock, ...stewardship };
+  }, [items, opportunityItemId, stewardshipBySymbol]);
+  useEffect(() => {
+    if (opportunityItemId != null && opportunityRow == null) {
+      setOpportunityItemId(null);
+    }
+  }, [opportunityItemId, opportunityRow]);
 
   const removeMutation = useMutation({
     mutationFn: removeItem,
@@ -54,8 +67,6 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
     e.stopPropagation();
     removeMutation.mutate(itemId);
   };
-
-  const { items, price_change_bounds } = watchlistData;
 
   if (!items || items.length === 0) {
     return (
@@ -172,7 +183,7 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
                     onClick={stewardship.opportunity_state
                       ? (event) => {
                         event.stopPropagation();
-                        setOpportunityRow({ ...stock, ...stewardship });
+                        setOpportunityItemId(stock.id);
                       }
                       : undefined}
                   />
@@ -234,7 +245,7 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
       <OpportunityEvidenceDrawer
         open={Boolean(opportunityRow)}
         row={opportunityRow}
-        onClose={() => setOpportunityRow(null)}
+        onClose={() => setOpportunityItemId(null)}
         opportunityTelemetrySurface="watchlist"
       />
     </>

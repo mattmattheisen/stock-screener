@@ -16,20 +16,18 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable, Optional, Protocol
+from typing import Iterable, Protocol
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
-from app.domain.universe import UniverseType
 from app.domain.scanning.custom_criteria_compiler import (
     CompiledCustomCriteria,
     compile_custom_criteria,
 )
 from app.domain.scanning.errors import SingleActiveScanViolation
-from app.domain.scanning.signature import (
-    build_scan_signature_payload,
-    hash_scan_signature,
-    hash_universe_symbols,
+from app.domain.scanning.materialization import (
+    config_has_opportunity_state_materialization,
+    with_opportunity_state_materialization,
 )
 from app.domain.scanning.models import (
     FreshnessDecision,
@@ -38,6 +36,12 @@ from app.domain.scanning.models import (
     ScanWarningCode,
 )
 from app.domain.scanning.ports import TaskDispatcher
+from app.domain.scanning.signature import (
+    build_scan_signature_payload,
+    hash_scan_signature,
+    hash_universe_symbols,
+)
+from app.domain.universe import UniverseType
 
 logger = logging.getLogger(__name__)
 
@@ -464,12 +468,27 @@ class CreateScanUseCase:
             if instant_match is None and should_attempt_instant:
                 compile_outcome = self._attempt_compile_path(uow, cmd, symbols)
 
+            stored_criteria = dict(cmd.criteria or {})
+            if instant_match is None:
+                if compile_outcome is None:
+                    stored_criteria = with_opportunity_state_materialization(
+                        stored_criteria
+                    )
+                else:
+                    source_run, _results = compile_outcome
+                    if config_has_opportunity_state_materialization(
+                        getattr(source_run, "config", None)
+                    ):
+                        stored_criteria = with_opportunity_state_materialization(
+                            stored_criteria
+                        )
+
             # ── Create scan record ───────────────────────────────────
             scan_id = str(uuid.uuid4())
             try:
                 scan = uow.scans.create(
                     scan_id=scan_id,
-                    criteria=cmd.criteria or {},
+                    criteria=stored_criteria,
                     universe=cmd.universe_label,
                     universe_key=cmd.universe_key,
                     universe_type=cmd.universe_type,
