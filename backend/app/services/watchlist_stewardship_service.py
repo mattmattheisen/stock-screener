@@ -26,7 +26,10 @@ from app.schemas.user_watchlist import (
     WatchlistStewardshipSummaryCounts,
 )
 from app.services.stock_event_context_service import StockEventContextService
-from app.services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfileService
+from app.services.strategy_profile_service import (
+    DEFAULT_PROFILE,
+    StrategyProfileService,
+)
 from app.utils.market_hours import eastern_day_bounds_utc, to_eastern_date
 
 SUPPORTED_THEME_ALERT_TYPES = ("breakout", "velocity_spike")
@@ -79,12 +82,15 @@ def _overlaid_opportunity_projection(
     prior_run_available: bool,
 ) -> dict[str, object]:
     details = current_row.details_json or {}
-    if "opportunity_state" not in details:
+    projection = {
+        key: details[key]
+        for key in OPPORTUNITY_PROJECTION_KEYS
+        if key in details
+    }
+    if not projection:
         return {}
 
-    current_result = opportunity_result_from_projection(
-        {key: details.get(key) for key in OPPORTUNITY_PROJECTION_KEYS}
-    )
+    current_result = opportunity_result_from_projection(projection)
     if current_result is None:
         return {}
     return overlay_stewardship_state(

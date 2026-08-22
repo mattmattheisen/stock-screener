@@ -20,9 +20,11 @@ from ..infra.serialization import (
     sanitize_sparkline,
 )
 from .opportunity_state import (
+    OPPORTUNITY_PROJECTION_KEYS,
     ActionStateValue,
     OpportunityStateResponse,
     validate_opportunity_projection,
+    validate_opportunity_projection_input,
 )
 from .universe import UniverseDefinition
 
@@ -174,6 +176,11 @@ class ScanResultItem(BaseModel):
     resilience_score: float | None = None
     action_state: ActionStateValue | None = None
     opportunity_state: OpportunityStateResponse | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_raw_opportunity_projection(cls, data: Any) -> Any:
+        return validate_opportunity_projection_input(data)
 
     @model_validator(mode="after")
     def _validate_opportunity_projection(self) -> Self:
@@ -346,10 +353,11 @@ class ScanResultItem(BaseModel):
                 MatchedGroup(id=group.id, name=group.name)
                 for group in getattr(item, "matched_groups", ())
             ],
-            correction_survivor=ef.get("correction_survivor"),
-            resilience_score=ef.get("resilience_score"),
-            action_state=ef.get("action_state"),
-            opportunity_state=ef.get("opportunity_state"),
+            **{
+                key: ef[key]
+                for key in OPPORTUNITY_PROJECTION_KEYS
+                if key in ef
+            },
             # Individual screener scores
             minervini_score=ef.get("minervini_score"),
             canslim_score=ef.get("canslim_score"),

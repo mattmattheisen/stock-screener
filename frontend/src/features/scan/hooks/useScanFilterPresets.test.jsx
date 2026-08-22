@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { buildDefaultScanFilters } from '../defaultFilters';
+import { createEmptyExpression } from '../filterExpressionModel';
 import { legacyFiltersToExpression } from '../legacyFilterExpression';
 import { useScanFilterPresets } from './useScanFilterPresets';
 
@@ -95,6 +96,130 @@ describe('useScanFilterPresets', () => {
     });
 
     expect(hook.result.current.availablePresets).toHaveLength(1);
+  });
+
+  it('sanitizes manually authored opportunity query state once when capability is lost', () => {
+    const expression = createEmptyExpression([
+      { kind: 'range', field: 'price', min: 10, max: null },
+      { kind: 'boolean', field: 'correction_survivor', value: true },
+    ]);
+    expression.group_join = 'all';
+    expression.groups = [
+      {
+        id: 'mixed',
+        name: 'Mixed setup',
+        match: 'all',
+        enabled: true,
+        conditions: [
+          { kind: 'range', field: 'resilience_score', min: 80, max: null },
+          { kind: 'categorical', field: 'rating', values: ['Buy'], mode: 'include' },
+        ],
+      },
+      {
+        id: 'opportunity-only',
+        name: 'Opportunity only',
+        match: 'any',
+        enabled: true,
+        conditions: [
+          {
+            kind: 'categorical',
+            field: 'action_state',
+            values: ['setup_ready'],
+            mode: 'include',
+          },
+        ],
+      },
+      {
+        id: 'unrelated',
+        name: 'Unrelated setup',
+        match: 'all',
+        enabled: false,
+        conditions: [
+          { kind: 'boolean', field: 'vcp_detected', value: true },
+        ],
+      },
+    ];
+    const { hook, props, applyQuery } = setup({
+      expression,
+      sortBy: 'resilience_score',
+      sortOrder: 'asc',
+      opportunityStateAvailable: true,
+    });
+
+    act(() => {
+      hook.rerender({
+        ...props,
+        expression,
+        sortBy: 'resilience_score',
+        sortOrder: 'asc',
+        opportunityStateAvailable: false,
+      });
+    });
+
+    const sanitizedExpression = {
+      expression_version: 1,
+      required: {
+        id: 'required',
+        name: 'Always require',
+        match: 'all',
+        enabled: true,
+        conditions: [
+          { kind: 'range', field: 'price', min: 10, max: null },
+        ],
+      },
+      group_join: 'all',
+      groups: [
+        {
+          id: 'mixed',
+          name: 'Mixed setup',
+          match: 'all',
+          enabled: true,
+          conditions: [
+            { kind: 'categorical', field: 'rating', values: ['Buy'], mode: 'include' },
+          ],
+        },
+        {
+          id: 'unrelated',
+          name: 'Unrelated setup',
+          match: 'all',
+          enabled: false,
+          conditions: [
+            { kind: 'boolean', field: 'vcp_detected', value: true },
+          ],
+        },
+      ],
+    };
+    expect(applyQuery).toHaveBeenCalledTimes(1);
+    expect(applyQuery).toHaveBeenCalledWith({
+      expression: sanitizedExpression,
+      sortBy: 'composite_score',
+      sortOrder: 'desc',
+    });
+
+    act(() => {
+      hook.rerender({
+        ...props,
+        expression: sanitizedExpression,
+        sortBy: 'composite_score',
+        sortOrder: 'desc',
+        opportunityStateAvailable: false,
+      });
+    });
+    expect(applyQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not sanitize opportunity query state while capability remains true', () => {
+    const expression = createEmptyExpression([
+      { kind: 'boolean', field: 'correction_survivor', value: true },
+    ]);
+    const { applyQuery } = setup({
+      expression,
+      sortBy: 'resilience_score',
+      sortOrder: 'desc',
+      opportunityStateAvailable: true,
+    });
+
+    expect(applyQuery).not.toHaveBeenCalled();
   });
 
   it('loads a preset as one canonical filter + sort transition', () => {

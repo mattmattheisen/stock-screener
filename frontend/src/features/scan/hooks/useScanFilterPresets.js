@@ -4,12 +4,9 @@ import {
   stableExpressionKey,
 } from '../filterExpressionModel';
 import { legacyLiveFiltersToExpression } from '../legacyFilterExpression';
+import { isOpportunityStateField } from '../scanFilterFields';
 
-const OPPORTUNITY_STATE_FIELDS = new Set([
-  'correction_survivor',
-  'resilience_score',
-  'action_state',
-]);
+const SAFE_SCAN_SORT = Object.freeze({ sortBy: 'composite_score', sortOrder: 'desc' });
 
 function valueReferencesOpportunityState(value) {
   if (Array.isArray(value)) {
@@ -18,7 +15,7 @@ function valueReferencesOpportunityState(value) {
   if (!value || typeof value !== 'object') {
     return false;
   }
-  if (OPPORTUNITY_STATE_FIELDS.has(value.field)) {
+  if (isOpportunityStateField(value.field)) {
     return true;
   }
   return Object.values(value).some(valueReferencesOpportunityState);
@@ -27,8 +24,36 @@ function valueReferencesOpportunityState(value) {
 function isOpportunityStatePreset(preset) {
   return preset?.name === 'Correction Survivors'
     || preset?.filters?.correctionSurvivor != null
-    || OPPORTUNITY_STATE_FIELDS.has(preset?.sort_by)
+    || isOpportunityStateField(preset?.sort_by)
     || valueReferencesOpportunityState(preset?.filters?.expression);
+}
+
+export function expressionReferencesOpportunityState(expression) {
+  const groups = [expression?.required, ...(expression?.groups ?? [])];
+  return groups.some((group) => (
+    group?.conditions?.some((condition) => isOpportunityStateField(condition?.field))
+  ));
+}
+
+export function queryReferencesOpportunityState(expression, sortBy) {
+  return expressionReferencesOpportunityState(expression) || isOpportunityStateField(sortBy);
+}
+
+function removeOpportunityStateConditions(expression) {
+  const canonical = canonicalizeExpression(expression);
+  const sanitizeGroup = (group) => ({
+    ...group,
+    conditions: group.conditions.filter(
+      (condition) => !isOpportunityStateField(condition.field),
+    ),
+  });
+  return {
+    ...canonical,
+    required: sanitizeGroup(canonical.required),
+    groups: canonical.groups
+      .map(sanitizeGroup)
+      .filter((group) => group.conditions.length > 0),
+  };
 }
 
 export function useScanFilterPresets({
@@ -41,6 +66,7 @@ export function useScanFilterPresets({
   applyQuery,
   expression = null,
   opportunityStateAvailable = false,
+  opportunityStateCapabilityResolved = true,
 }) {
   const [activePresetId, setActivePresetId] = useState(null);
   const [presetFiltersSnapshot, setPresetFiltersSnapshot] = useState(null);
@@ -65,6 +91,12 @@ export function useScanFilterPresets({
       : presets.filter((preset) => !isOpportunityStatePreset(preset))),
     [opportunityStateAvailable, presets],
   );
+  const availableActivePresetId = useMemo(
+    () => (availablePresets.some((preset) => preset.id === activePresetId)
+      ? activePresetId
+      : null),
+    [activePresetId, availablePresets],
+  );
 
   const clearActivePreset = useCallback(() => {
     setActivePresetId(null);
@@ -80,6 +112,31 @@ export function useScanFilterPresets({
       clearActivePreset();
     }
   }, [activePresetId, availablePresets, clearActivePreset]);
+
+  useEffect(() => {
+    if (opportunityStateAvailable || !opportunityStateCapabilityResolved) {
+      return;
+    }
+    const expressionNeedsCleanup = expressionReferencesOpportunityState(expression);
+    const sortNeedsCleanup = isOpportunityStateField(sortBy);
+    if (!expressionNeedsCleanup && !sortNeedsCleanup) {
+      return;
+    }
+    applyQuery({
+      expression: expressionNeedsCleanup
+        ? removeOpportunityStateConditions(expression)
+        : canonicalizeExpression(expression),
+      sortBy: sortNeedsCleanup ? SAFE_SCAN_SORT.sortBy : sortBy,
+      sortOrder: sortNeedsCleanup ? SAFE_SCAN_SORT.sortOrder : sortOrder,
+    });
+  }, [
+    applyQuery,
+    expression,
+    opportunityStateAvailable,
+    opportunityStateCapabilityResolved,
+    sortBy,
+    sortOrder,
+  ]);
 
   const hasUnsavedChanges = useCallback(() => {
     if (!activePresetId || !presetFiltersSnapshot) {
@@ -240,7 +297,7 @@ export function useScanFilterPresets({
 
   return {
     availablePresets,
-    activePresetId,
+    activePresetId: availableActivePresetId,
     hasUnsavedChanges,
     clearActivePreset,
     handleLoadPreset,

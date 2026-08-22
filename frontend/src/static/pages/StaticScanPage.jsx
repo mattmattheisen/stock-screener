@@ -428,6 +428,7 @@ function StaticScanPage() {
           setLogicBuilderOpen(false);
         }}
         filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
+        opportunityStateAvailable={showOpportunityState}
       />
     </Box>
   );

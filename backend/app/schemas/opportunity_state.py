@@ -1,8 +1,9 @@
 """Versioned HTTP contract for persisted opportunity-state evidence."""
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 ActionStateValue = Literal[
     "exit_risk",
@@ -13,6 +14,52 @@ ActionStateValue = Literal[
     "setup_ready",
     "watch",
 ]
+
+OPPORTUNITY_PROJECTION_KEYS = (
+    "correction_survivor",
+    "resilience_score",
+    "action_state",
+    "opportunity_state",
+)
+_SCORE_PILLAR_KEYS = (
+    "benchmark_leadership",
+    "multi_horizon_rs",
+    "trend_integrity",
+    "structure_tightness",
+    "liquidity_freshness",
+)
+
+
+def _validate_optional_json_number(value: object, name: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number or null")
+
+
+def validate_opportunity_projection_input(data: Any) -> Any:
+    """Reject partial or coercive raw projections before schema defaults run."""
+    if not isinstance(data, Mapping):
+        return data
+
+    present_keys = tuple(key for key in OPPORTUNITY_PROJECTION_KEYS if key in data)
+    if not present_keys:
+        return data
+    if len(present_keys) != len(OPPORTUNITY_PROJECTION_KEYS):
+        raise ValueError("opportunity projection must be all null or all present")
+    if all(data[key] is None for key in OPPORTUNITY_PROJECTION_KEYS):
+        return data
+    if (
+        data["correction_survivor"] is None
+        or data["action_state"] is None
+        or data["opportunity_state"] is None
+    ):
+        raise ValueError("opportunity projection must be all null or all present")
+
+    if type(data["correction_survivor"]) is not bool:
+        raise ValueError("correction_survivor must be a bool")
+    _validate_optional_json_number(data["resilience_score"], "resilience_score")
+    return data
 
 
 class ScorePillarsResponse(BaseModel):
@@ -25,6 +72,15 @@ class ScorePillarsResponse(BaseModel):
     trend_integrity: float | None
     structure_tightness: float | None
     liquidity_freshness: float | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_raw_numbers(cls, data: Any) -> Any:
+        if isinstance(data, Mapping):
+            for key in _SCORE_PILLAR_KEYS:
+                if key in data:
+                    _validate_optional_json_number(data[key], f"score_pillars.{key}")
+        return data
 
 
 class OpportunityStateResponse(BaseModel):
@@ -81,7 +137,9 @@ def validate_opportunity_projection(
 
 __all__ = [
     "ActionStateValue",
+    "OPPORTUNITY_PROJECTION_KEYS",
     "OpportunityStateResponse",
     "ScorePillarsResponse",
     "validate_opportunity_projection",
+    "validate_opportunity_projection_input",
 ]

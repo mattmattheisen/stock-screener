@@ -152,6 +152,53 @@ describe('StaticScanPage', () => {
     expect(screen.queryByText('Action')).not.toBeInTheDocument();
   });
 
+  it('keeps opportunity fields in the Logic Builder for a capable static bundle', async () => {
+    const user = userEvent.setup();
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            features: { opportunity_state: true },
+            pages: { scan: { path: 'scan/manifest.json' } },
+          }),
+        };
+      }
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            run_id: 10,
+            as_of_date: '2026-08-21',
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 1,
+            filter_options: {},
+            initial_rows: [{ symbol: 'READY', composite_score: 90 }],
+            preset_screens: [],
+            chunks: [],
+            charts: { available: false },
+          }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'Daily Scan' })).toBeInTheDocument();
+    act(() => filterPanelSpy.mock.lastCall[0].onOpenLogicBuilder());
+    await user.click(screen.getByRole('button', { name: /add named setup/i }));
+    await user.click(screen.getAllByRole('combobox')[1]);
+
+    expect(screen.getByRole('option', { name: /Correction survivor/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Resilience score/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Action state/i })).toBeInTheDocument();
+  });
+
   it('opens static opportunity evidence without a chart bundle and keeps mixed legacy rows non-interactive', async () => {
     resultsTableTestState.renderReal = true;
     globalThis.fetch = vi.fn(async (url) => {

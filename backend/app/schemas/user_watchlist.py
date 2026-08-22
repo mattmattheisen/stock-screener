@@ -1,6 +1,6 @@
 """Schemas for User-defined Watchlists"""
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Self
+from typing import Any, Dict, List, Literal, Optional, Self
 
 from pydantic import BaseModel, model_validator
 
@@ -9,6 +9,7 @@ from .opportunity_state import (
     ActionStateValue,
     OpportunityStateResponse,
     validate_opportunity_projection,
+    validate_opportunity_projection_input,
 )
 
 # ================= Watchlist Schemas =================
@@ -199,6 +200,11 @@ class WatchlistStewardshipItem(BaseModel):
     resilience_score: Optional[float] = None
     action_state: Optional[ActionStateValue] = None
     opportunity_state: Optional[OpportunityStateResponse] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_raw_opportunity_projection(cls, data: Any) -> Any:
+        return validate_opportunity_projection_input(data)
 
     @model_validator(mode="after")
     def _validate_opportunity_projection(self) -> Self:

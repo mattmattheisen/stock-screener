@@ -38,7 +38,10 @@ import {
 import {
   legacyFiltersToExpression,
 } from '../legacyFilterExpression';
-import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
+import {
+  queryReferencesOpportunityState,
+  useScanFilterPresets,
+} from '../hooks/useScanFilterPresets';
 import {
   createScanFilterQuery,
   stableScanFilterQueryKey,
@@ -134,6 +137,15 @@ function ScanPage() {
   });
   const opportunityStateAvailable = (
     displayedResultsData?.capabilities?.opportunity_state === true
+  );
+  const opportunityStateCapabilityResolved = displayedResultsData != null;
+  const opportunityStateCleanupPending = (
+    opportunityStateCapabilityResolved
+    && !opportunityStateAvailable
+    && queryReferencesOpportunityState(
+      displayedQuery.expression,
+      displayedQuery.sortBy,
+    )
   );
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
@@ -238,6 +250,7 @@ function ScanPage() {
     applyQuery: requestQuery,
     expression: draftExpression,
     opportunityStateAvailable,
+    opportunityStateCapabilityResolved,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -702,7 +715,7 @@ function ScanPage() {
 
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (
         <ScanResultsSection
-          resultsLoading={resultsLoading}
+          resultsLoading={resultsLoading || opportunityStateCleanupPending}
           resultsData={displayedResultsData}
           expression={displayedQuery.expression}
           resultsFetching={resultsFetching}
@@ -752,6 +765,7 @@ function ScanPage() {
             presetState.clearActivePreset();
           }}
           filterOptions={normalizedFilterOptions}
+          opportunityStateAvailable={opportunityStateAvailable}
         />
       )}
     </Container>

@@ -7,7 +7,63 @@ import { createEmptyExpression } from '../filterExpressionModel';
 import { EXPRESSION_LIMITS } from '../scanFilterFields';
 import GuidedFilterBuilderDialog from './GuidedFilterBuilderDialog';
 
+function expressionWithCompositeRule() {
+  const expression = createEmptyExpression();
+  expression.groups = [{
+    id: 'scores',
+    name: 'Scores',
+    match: 'all',
+    enabled: true,
+    conditions: [{
+      kind: 'range',
+      field: 'composite_score',
+      min: 80,
+      max: null,
+    }],
+  }];
+  return expression;
+}
+
 describe('GuidedFilterBuilderDialog', () => {
+  it('omits opportunity fields while retaining unrelated fields when unavailable', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <GuidedFilterBuilderDialog
+        open
+        expression={expressionWithCompositeRule()}
+        onClose={vi.fn()}
+        onApply={vi.fn()}
+        opportunityStateAvailable={false}
+      />,
+    );
+
+    await user.click(screen.getAllByRole('combobox')[1]);
+
+    expect(screen.getByRole('option', { name: /Composite score/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Correction survivor/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Resilience score/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Action state/i })).not.toBeInTheDocument();
+  });
+
+  it('shows all opportunity fields when the live scan declares capability', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <GuidedFilterBuilderDialog
+        open
+        expression={expressionWithCompositeRule()}
+        onClose={vi.fn()}
+        onApply={vi.fn()}
+        opportunityStateAvailable
+      />,
+    );
+
+    await user.click(screen.getAllByRole('combobox')[1]);
+
+    expect(screen.getByRole('option', { name: /Correction survivor/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Resilience score/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Action state/i })).toBeInTheDocument();
+  });
+
   it('keeps draft changes private until a valid expression is applied', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();

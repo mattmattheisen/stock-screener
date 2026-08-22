@@ -357,6 +357,31 @@ def test_legacy_watchlist_rows_remain_not_computed(session):
         assert item.opportunity_state is None
 
 
+def test_watchlist_partial_top_level_projection_raises_instead_of_becoming_legacy(session):
+    """Break caught: the adapter masking a supplied projection fragment as absent."""
+    watchlist = _seed_watchlist_stewardship_data(session)
+    current = (
+        session.query(StockFeatureDaily)
+        .filter(StockFeatureDaily.run_id == 10, StockFeatureDaily.symbol == "AAPL")
+        .one()
+    )
+    current.details_json = {
+        **current.details_json,
+        "correction_survivor": True,
+    }
+    session.commit()
+
+    with pytest.raises(ValueError, match="all null or all present"):
+        WatchlistStewardshipService(
+            event_context_service=_FakeEventContextService()
+        ).get_watchlist_stewardship(
+            session,
+            watchlist_id=watchlist.id,
+            as_of_date=date(2026, 4, 4),
+            profile="default",
+        )
+
+
 def test_watchlist_overlay_does_not_invent_cross_run_state_without_prior_row(session):
     """Break caught: treating a missing prior row as evidence for a live stewardship overlay."""
     watchlist = _seed_watchlist_stewardship_data(session)
