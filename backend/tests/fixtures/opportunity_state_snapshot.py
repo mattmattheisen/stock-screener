@@ -56,6 +56,7 @@ def _complete_inputs(**changes) -> OpportunityInputs:
         "invalidation_flags": (),
         "setup_payload_available": True,
         "pattern_primary": "vcp",
+        "pattern_primary_available": True,
         "squeeze": True,
         "tight_closes_count": 3,
         "quiet_days_count": 3,

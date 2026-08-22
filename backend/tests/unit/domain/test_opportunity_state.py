@@ -30,6 +30,7 @@ def complete_inputs(**changes):
         "invalidation_flags": (),
         "setup_payload_available": True,
         "pattern_primary": "vcp",
+        "pattern_primary_available": True,
         "squeeze": True,
         "tight_closes_count": 3,
         "quiet_days_count": 3,
@@ -206,7 +207,7 @@ def test_non_future_benchmark_lag_is_admissible_and_auditable():
         ("stage", None, False),
         ("ma_alignment", None, False),
         ("invalidation_flags", None, False),
-        ("pattern_primary", None, True),
+        ("pattern_primary_available", False, True),
         ("squeeze", None, True),
         ("tight_closes_count", None, True),
         ("quiet_days_count", None, True),
@@ -347,11 +348,65 @@ def test_primary_pattern_decides_structure_when_other_signals_are_unknown():
     assert result.action_state is ActionState.SETUP_READY
 
 
+def test_present_null_primary_pattern_is_known_false_with_alternate_structure_pass():
+    """Break caught: present-null pattern evidence preventing an otherwise complete score."""
+    result = evaluate_opportunity_state(
+        complete_inputs(
+            pattern_primary=None,
+            pattern_primary_available=True,
+        )
+    )
+
+    assert result.correction_survivor is True
+    assert result.resilience_score == 89.0
+    assert result.action_state is ActionState.SETUP_READY
+    assert result.metrics["pattern_primary"] is None
+
+
+def test_present_null_primary_pattern_and_failed_alternates_is_known_structure_failure():
+    """Break caught: known absence becoming data-limited instead of a failed structure gate."""
+    result = evaluate_opportunity_state(
+        complete_inputs(
+            pattern_primary=None,
+            pattern_primary_available=True,
+            squeeze=False,
+            tight_closes_count=2,
+            quiet_days_count=2,
+            volume_vs_50d=0.81,
+        )
+    )
+
+    assert result.correction_survivor is False
+    assert result.resilience_score == 77.0
+    assert result.action_state is ActionState.WATCH
+    assert "structure_gate" in result.failed_checks
+    assert result.metrics["pattern_primary"] is None
+
+
+def test_unavailable_primary_pattern_remains_unknown_when_alternates_fail():
+    """Break caught: missing primary-pattern evidence being coerced to a false score input."""
+    result = evaluate_opportunity_state(
+        complete_inputs(
+            pattern_primary=None,
+            pattern_primary_available=False,
+            squeeze=False,
+            tight_closes_count=2,
+            quiet_days_count=2,
+            volume_vs_50d=0.81,
+        )
+    )
+
+    assert result.correction_survivor is False
+    assert result.resilience_score is None
+    assert result.action_state is ActionState.DATA_LIMITED
+    assert "structure_gate" not in result.failed_checks
+
+
 def test_all_known_structure_failures_make_the_row_ineligible():
     """Break caught: an any-signal structure gate passing when every supported signal fails."""
     result = evaluate_opportunity_state(
         complete_inputs(
-            pattern_primary="",
+            pattern_primary=None,
             squeeze=False,
             tight_closes_count=2,
             quiet_days_count=2,
@@ -369,6 +424,7 @@ def test_structure_is_unknown_when_remaining_signal_is_missing():
     result = evaluate_opportunity_state(
         complete_inputs(
             pattern_primary=None,
+            pattern_primary_available=False,
             squeeze=False,
             tight_closes_count=2,
             quiet_days_count=2,
@@ -466,7 +522,7 @@ def test_market_and_as_of_provenance_are_required(changes):
         {"stage": 3},
         {"ma_alignment": False},
         {
-            "pattern_primary": "",
+            "pattern_primary": None,
             "squeeze": False,
             "tight_closes_count": 2,
             "quiet_days_count": 2,
@@ -577,7 +633,7 @@ def test_present_projection_rejects_setup_ready_non_survivor():
 
 
 def test_stewardship_exit_risk_outranks_persisted_setup_ready_state():
-    """Break caught: allowing a cross-run exit signal to be ignored by a lower persisted ready state."""
+    """Break caught: allowing a current exit signal to be ignored by a lower persisted ready state."""
     original = evaluate_opportunity_state(complete_inputs())
     overlaid = overlay_stewardship_state(original, "exit_risk", prior_run_available=True)
 
@@ -586,11 +642,49 @@ def test_stewardship_exit_risk_outranks_persisted_setup_ready_state():
     assert overlaid.metrics == original.metrics
 
 
-def test_stewardship_overlay_requires_prior_run_evidence():
-    """Break caught: applying a cross-run stewardship state when no prior run was requested or available."""
+def test_stewardship_exit_risk_overlays_without_prior_run_evidence():
+    """Break caught: prior-gating exit risk derived entirely from current evidence."""
+    original = evaluate_opportunity_state(complete_inputs())
+    overlaid = overlay_stewardship_state(
+        original,
+        "exit_risk",
+        prior_run_available=False,
+    )
+
+    assert overlaid.action_state is ActionState.EXIT_RISK
+    assert overlaid.action_reasons[-1] == "stewardship_exit_risk"
+
+
+def test_stewardship_deteriorating_requires_prior_run_evidence():
+    """Break caught: inventing a genuinely cross-run deterioration without a prior row."""
     original = evaluate_opportunity_state(complete_inputs())
 
-    assert overlay_stewardship_state(original, "exit_risk", prior_run_available=False) is original
+    assert (
+        overlay_stewardship_state(
+            original,
+            "deteriorating",
+            prior_run_available=False,
+        )
+        is original
+    )
+
+
+def test_no_prior_exit_overlay_preserves_equal_persisted_exit_risk():
+    """Break caught: replacing an equal-precedence persisted state during current overlay."""
+    original = evaluate_opportunity_state(
+        complete_inputs(
+            invalidation_flags=(InvalidationEvidence("failed_base", True),),
+        )
+    )
+
+    assert (
+        overlay_stewardship_state(
+            original,
+            "exit_risk",
+            prior_run_available=False,
+        )
+        is original
+    )
 
 
 def test_lower_priority_stewardship_state_leaves_result_unchanged():

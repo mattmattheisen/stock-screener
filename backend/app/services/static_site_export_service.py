@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
 import json
 import logging
-from pathlib import Path
 import shutil
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -22,54 +22,56 @@ from app.domain.scanning.default_filters import (
     resolve_default_scan_filters,
 )
 from app.domain.scanning.filter_expression_model import FilterExpression
-from app.infra.serialization import json_safe
+from app.domain.scanning.materialization import (
+    config_has_opportunity_state_materialization,
+)
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
+from app.infra.serialization import json_safe
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
-from app.services.key_market_history import build_key_market_entries
 from app.services.feature_run_rs_identity import resolve_feature_run_rs_identity
+from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
+from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
 from app.services.preset_screens import (
     PRESET_SCREENS,
     resolve_preset_screens_for_defaults,
 )
-from app.services.static_groups_rrg_export import (
-    StaticGroupsRRGDatabasePayloadSource,
-    StaticGroupsRRGUnavailableError,
-    StaticGroupsRRGPayloadSource,
-)
 from app.services.snapshot_date_coherence import (
     SnapshotSectionDates,
     build_snapshot_freshness,
-)
-from app.services.ui_snapshot_service import UISnapshotService
-from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
-from app.services.static_group_section_builder import StaticGroupSectionBuilder
-from app.services.static_site_errors import (
-    NoPublishedStaticMarketArtifact,
-    StaticSiteSectionUnavailableError,
 )
 from app.services.static_artifact_combiner import (
     StaticArtifactCombiner,
     StaticArtifactFormulaError,
 )
+from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
 from app.services.static_chart_bundle_exporter import (
     StaticChartBundleConfig,
     StaticChartBundleExporter,
 )
-from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
+from app.services.static_group_section_builder import StaticGroupSectionBuilder
+from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGDatabasePayloadSource,
+    StaticGroupsRRGPayloadSource,
+    StaticGroupsRRGUnavailableError,
+)
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
     STATIC_SITE_SCHEMA_VERSION,
 )
+from app.services.static_site_errors import (
+    NoPublishedStaticMarketArtifact,
+    StaticSiteSectionUnavailableError,
+)
+from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
     get_benchmark_cache,
     get_fundamentals_cache,
     get_group_rank_service,
     get_price_cache,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +314,9 @@ class StaticSiteExportService:
                 f"No published feature run is available for static-site export market {market}",
                 markets=(market,),
             )
+        opportunity_state_available = config_has_opportunity_state_materialization(
+            latest_run.config_json
+        )
 
         formula_version = (
             str(formula_version_override).strip()
@@ -462,7 +467,7 @@ class StaticSiteExportService:
             ),
             "features": {
                 "scan": True,
-                "opportunity_state": True,
+                "opportunity_state": opportunity_state_available,
                 "breadth": bool(breadth_payload.get("available", True)),
                 "groups": bool(groups_payload.get("available", False)),
                 "rrg": rrg_available,
@@ -756,9 +761,17 @@ class StaticSiteExportService:
             serialized_row.update(rs_metadata)
         self._annotate_percentile_ranks(serialized_rows)
         serialized_rows = self._sort_static_scan_rows(serialized_rows)
+        opportunity_state_available = config_has_opportunity_state_materialization(
+            run.config_json
+        )
         resolved_default_filters = self.resolve_static_default_filters(market)
         resolved_preset_screens = resolve_preset_screens_for_defaults(
-            PRESET_SCREENS,
+            [
+                preset
+                for preset in PRESET_SCREENS
+                if opportunity_state_available
+                or preset.get("id") != "correction_survivors"
+            ],
             resolved_default_filters,
         )
         default_filtered_rows = self._apply_static_default_filters(
@@ -788,7 +801,7 @@ class StaticSiteExportService:
 
         manifest = {
             "schema_version": SCAN_BUNDLE_SCHEMA_VERSION,
-            "features": {"opportunity_state": True},
+            "features": {"opportunity_state": opportunity_state_available},
             "generated_at": generated_at,
             "as_of_date": run.as_of_date.isoformat(),
             "run_id": run.id,

@@ -85,6 +85,7 @@ class OpportunityInputs:
     invalidation_flags: tuple[InvalidationEvidence, ...] | None
     setup_payload_available: bool | None
     pattern_primary: str | None
+    pattern_primary_available: bool | None
     squeeze: bool | None
     tight_closes_count: int | None
     quiet_days_count: int | None
@@ -306,12 +307,17 @@ def overlay_stewardship_state(
     stewardship_status: str | None,
     prior_run_available: bool,
 ) -> OpportunityStateResult:
-    """Apply a requested cross-run state only when it outranks the persisted state."""
-    if prior_run_available is not True or stewardship_status is None:
+    """Apply a supported stewardship state only when it outranks persisted state."""
+    if stewardship_status is None:
         return result
     try:
         stewardship_state = ActionState(stewardship_status)
     except ValueError:
+        return result
+    if (
+        stewardship_state is not ActionState.EXIT_RISK
+        and prior_run_available is not True
+    ):
         return result
     if _STATE_PRIORITY[stewardship_state] >= _STATE_PRIORITY[result.action_state]:
         return result
@@ -406,7 +412,6 @@ def _score_inputs_known(inputs: OpportunityInputs) -> bool:
         inputs.stage,
         inputs.ma_alignment,
         inputs.invalidation_flags,
-        inputs.pattern_primary,
         inputs.squeeze,
         inputs.tight_closes_count,
         inputs.quiet_days_count,
@@ -420,6 +425,7 @@ def _score_inputs_known(inputs: OpportunityInputs) -> bool:
         all(value is not None for value in values)
         and inputs.invalidation_evidence_available is True
         and inputs.setup_payload_available is True
+        and inputs.pattern_primary_available is True
         and inputs.liquidity_available is True
         and _valid_invalidation_flags(inputs.invalidation_flags)
     )
@@ -452,7 +458,9 @@ def _trend_gate(inputs: OpportunityInputs, hard_invalidation: bool | None) -> bo
 
 def _structure_gate(inputs: OpportunityInputs) -> bool | None:
     pattern_passes = (
-        None if inputs.pattern_primary is None else bool(inputs.pattern_primary)
+        bool(inputs.pattern_primary)
+        if inputs.pattern_primary_available is True
+        else None
     )
     tight_closes_pass = (
         None

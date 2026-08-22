@@ -4,7 +4,6 @@ from datetime import date
 
 import pandas as pd
 import pytest
-
 from app.analysis.patterns.config import SetupEngineParameters
 from app.scanners.base_screener import StockData
 from app.services.opportunity_state_service import (
@@ -170,6 +169,82 @@ def test_current_scan_does_not_invent_prior_run_deterioration(
 
     assert projection["action_state"] == "setup_ready"
     assert projection["opportunity_state"]["data_availability"]["prior_run"] == "not_requested"
+
+
+def test_present_null_primary_pattern_with_alternate_pass_has_numeric_score(
+    stock_data: StockData,
+    result: dict[str, object],
+):
+    """Break caught: the assembler collapsing a valid no-pattern result into unknown evidence."""
+    result["setup_engine"]["pattern_primary"] = None
+
+    projection = build_opportunity_projection(
+        result, stock_data, SetupEngineParameters()
+    )
+
+    assert projection["correction_survivor"] is True
+    assert projection["resilience_score"] == 89.0
+    assert projection["action_state"] == "setup_ready"
+    assert projection["opportunity_state"]["metrics"]["pattern_primary"] is None
+
+
+def test_present_null_primary_pattern_with_failed_alternates_is_watch(
+    stock_data: StockData,
+    result: dict[str, object],
+):
+    """Break caught: known absent structure being reported as unavailable evidence."""
+    setup = result["setup_engine"]
+    setup.update(
+        {
+            "pattern_primary": None,
+            "bb_squeeze": False,
+            "tight_closes_count": 2,
+            "quiet_days_10d": 2,
+            "volume_vs_50d": 0.81,
+        }
+    )
+
+    projection = build_opportunity_projection(
+        result, stock_data, SetupEngineParameters()
+    )
+
+    assert projection["correction_survivor"] is False
+    assert projection["resilience_score"] == 77.0
+    assert projection["action_state"] == "watch"
+    assert "structure_gate" in projection["opportunity_state"]["failed_checks"]
+    assert projection["opportunity_state"]["metrics"]["pattern_primary"] is None
+
+
+@pytest.mark.parametrize("pattern_value", [pytest.param(None, id="missing"), pytest.param([], id="malformed")])
+def test_missing_or_malformed_primary_pattern_remains_unknown(
+    stock_data: StockData,
+    result: dict[str, object],
+    pattern_value,
+):
+    """Break caught: absent or malformed pattern evidence becoming a known false score input."""
+    setup = result["setup_engine"]
+    if pattern_value is None:
+        setup.pop("pattern_primary")
+    else:
+        setup["pattern_primary"] = pattern_value
+    setup.update(
+        {
+            "bb_squeeze": False,
+            "tight_closes_count": 2,
+            "quiet_days_10d": 2,
+            "volume_vs_50d": 0.81,
+        }
+    )
+
+    projection = build_opportunity_projection(
+        result, stock_data, SetupEngineParameters()
+    )
+
+    assert projection["correction_survivor"] is False
+    assert projection["resilience_score"] is None
+    assert projection["action_state"] == "data_limited"
+    assert "structure_gate" not in projection["opportunity_state"]["failed_checks"]
+    assert projection["opportunity_state"]["metrics"]["pattern_primary"] is None
 
 
 def test_data_limited_projection_preserves_identity_and_safe_reason(

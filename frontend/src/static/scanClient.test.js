@@ -338,6 +338,27 @@ describe('static scan client', () => {
     expect(sorted.map((row) => row.symbol)).toEqual(['ALPHA', 'BETA', 'LOW', 'LEGACY']);
   });
 
+  it('sorts resilience ascending numerically with nulls last and symbol ties', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'LEGACY', resilience_score: null },
+      { symbol: 'BETA', resilience_score: 84 },
+      { symbol: 'LOW', resilience_score: 9 },
+      { symbol: 'ALPHA', resilience_score: 84 },
+    ], 'resilience_score', 'asc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['LOW', 'ALPHA', 'BETA', 'LEGACY']);
+  });
+
+  it('keeps ascending composite score nulls last on the shared score path', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'LEGACY', composite_score: null },
+      { symbol: 'HIGH', composite_score: 84 },
+      { symbol: 'LOW', composite_score: 9 },
+    ], 'composite_score', 'asc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['LOW', 'HIGH', 'LEGACY']);
+  });
+
   it('uses symbol tiebreaks for equal ascending composite scores', () => {
     const sorted = sortStaticScanRows([
       { symbol: 'ZFULL', scan_mode: 'full', composite_score: 80 },

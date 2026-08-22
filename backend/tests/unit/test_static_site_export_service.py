@@ -220,6 +220,146 @@ def _static_rrg_payload(market: str, as_of_date: str) -> dict:
     }
 
 
+def _export_zero_row_feature_run(
+    *,
+    service: StaticSiteExportService,
+    session_factory,
+    monkeypatch,
+    output_dir,
+    run_id: int,
+    config_json: dict,
+):
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=run_id,
+            as_of_date=date(2026, 8, 21),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 8, 21, 21, 30, 0),
+            config_json={"universe": {"market": "US"}, **config_json},
+        ),
+        pointer_run_id=run_id,
+        pointer_key="latest_published_market:US",
+    )
+    filter_options = SimpleNamespace(
+        ibd_industries=(),
+        gics_sectors=(),
+        ratings=(),
+    )
+    unavailable_section = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "available": False,
+        "payload": {},
+    }
+    monkeypatch.setattr(
+        service,
+        "_load_scan_export_source",
+        lambda *_args, **_kwargs: ([], filter_options),
+    )
+    monkeypatch.setattr(
+        service,
+        "_export_chart_bundle",
+        lambda **_kwargs: {
+            "path": "markets/us/charts/index.json",
+            "limit": 200,
+            "symbols_total": 0,
+            "available": False,
+            "skipped_symbols": [],
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_groups_payload",
+        lambda **_kwargs: unavailable_section,
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_groups_rrg_payload",
+        lambda **_kwargs: unavailable_section,
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_breadth_payload",
+        lambda **_kwargs: unavailable_section,
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_home_payload",
+        lambda **_kwargs: {
+            "schema_version": STATIC_SITE_SCHEMA_VERSION,
+            "as_of_date": "2026-08-21",
+            "freshness": {"scan_run_id": run_id},
+        },
+    )
+
+    service.export(
+        output_dir,
+        markets=("US",),
+        feature_run_ids_by_market={"US": run_id},
+    )
+    root_manifest = json.loads(
+        (output_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    scan_manifest = json.loads(
+        (output_dir / "markets" / "us" / "scan" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return root_manifest, scan_manifest
+
+
+def test_explicit_legacy_run_hides_static_opportunity_workflow(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    """Break caught: advertising capability or its preset for exact legacy run metadata."""
+    service, session_factory = service_and_session_factory
+
+    root_manifest, scan_manifest = _export_zero_row_feature_run(
+        service=service,
+        session_factory=session_factory,
+        monkeypatch=monkeypatch,
+        output_dir=tmp_path / "legacy-static",
+        run_id=120,
+        config_json={},
+    )
+
+    assert root_manifest["features"]["opportunity_state"] is False
+    assert root_manifest["markets"]["US"]["features"]["opportunity_state"] is False
+    assert scan_manifest["features"]["opportunity_state"] is False
+    assert "correction_survivors" not in {
+        preset["id"] for preset in scan_manifest["preset_screens"]
+    }
+
+
+def test_explicit_capable_zero_row_run_retains_static_opportunity_workflow(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    """Break caught: inferring capability from an empty row set instead of exact run metadata."""
+    service, session_factory = service_and_session_factory
+
+    root_manifest, scan_manifest = _export_zero_row_feature_run(
+        service=service,
+        session_factory=session_factory,
+        monkeypatch=monkeypatch,
+        output_dir=tmp_path / "capable-static",
+        run_id=121,
+        config_json={"materialization_versions": {"opportunity_state": 1}},
+    )
+
+    assert root_manifest["features"]["opportunity_state"] is True
+    assert root_manifest["markets"]["US"]["features"]["opportunity_state"] is True
+    assert scan_manifest["features"]["opportunity_state"] is True
+    assert "correction_survivors" in {
+        preset["id"] for preset in scan_manifest["preset_screens"]
+    }
+    assert scan_manifest["rows_total"] == 0
+
+
 def test_export_chart_bundle_does_not_rewire_exporter_dependencies(
     service_and_session_factory,
 ):
@@ -400,6 +540,7 @@ def test_export_writes_serializable_manifest_and_page_bundles(
                 "market_rs_run_id": 42,
                 "rs_as_of_date": "2026-03-31",
                 "rs_universe_size": 5000,
+                "materialization_versions": {"opportunity_state": 1},
             },
         ),
         pointer_run_id=7,
@@ -699,7 +840,10 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
             as_of_date=date(2026, 3, 31),
             run_type="daily_snapshot",
             status="published",
-            config_json={"market": "US"},
+            config_json={
+                "market": "US",
+                "materialization_versions": {"opportunity_state": 1},
+            },
             published_at=datetime(2026, 3, 31, 21, 30, 0),
         ),
         pointer_run_id=11,

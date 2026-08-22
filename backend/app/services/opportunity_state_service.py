@@ -38,6 +38,10 @@ def build_opportunity_projection(
     liquidity_floor = resolve_default_scan_filters(market).get("minVolume")
     avg_dollar_volume = _finite_float(result.get("avg_dollar_volume"))
     invalidation_flags = _invalidation_flags(setup)
+    pattern_primary, pattern_primary_available = _optional_text_field(
+        setup,
+        "pattern_primary",
+    )
 
     inputs = OpportunityInputs(
         market=market,
@@ -55,7 +59,8 @@ def build_opportunity_projection(
         invalidation_evidence_available=invalidation_flags is not None,
         invalidation_flags=invalidation_flags,
         setup_payload_available=setup is not None,
-        pattern_primary=_text_from(setup, "pattern_primary"),
+        pattern_primary=pattern_primary,
+        pattern_primary_available=pattern_primary_available,
         squeeze=_bool_from(setup, "bb_squeeze"),
         tight_closes_count=_integer_from(setup, "tight_closes_count"),
         quiet_days_count=_integer_from(setup, "quiet_days_10d"),
@@ -127,6 +132,7 @@ def build_data_limited_projection(
         invalidation_flags=None,
         setup_payload_available=False,
         pattern_primary=None,
+        pattern_primary_available=False,
         squeeze=None,
         tight_closes_count=None,
         quiet_days_count=None,
@@ -187,6 +193,19 @@ def _text_or_none(value: object) -> str | None:
 
 def _text_from(source: Mapping[str, object] | None, key: str) -> str | None:
     return _text_or_none(source.get(key)) if source is not None else None
+
+
+def _optional_text_field(
+    source: Mapping[str, object] | None,
+    key: str,
+) -> tuple[str | None, bool]:
+    if source is None or key not in source:
+        return None, False
+    raw = source[key]
+    if raw is None:
+        return None, True
+    normalized = _text_or_none(raw)
+    return normalized, normalized is not None
 
 
 def _finite_float(value: object) -> float | None:

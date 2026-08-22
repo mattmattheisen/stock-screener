@@ -14,6 +14,8 @@ const RATING_SORT_ORDER = {
   'Insufficient Data': 0,
 };
 
+const SCORE_SORT_FIELDS = new Set(['composite_score', 'resilience_score']);
+
 const compareValues = (left, right) => {
   if (left == null && right == null) return 0;
   if (left == null) return 1;
@@ -45,10 +47,7 @@ export const sortStaticScanRows = (
   return [...rows].sort((left, right) => {
     const leftValue = getSortValue(left, sortBy);
     const rightValue = getSortValue(right, sortBy);
-    if (
-      ['composite_score', 'resilience_score'].includes(sortBy)
-      && sortOrder === 'desc'
-    ) {
+    if (SCORE_SORT_FIELDS.has(sortBy)) {
       if (leftValue == null && rightValue != null) {
         return 1;
       }
