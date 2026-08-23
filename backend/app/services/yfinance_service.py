@@ -217,6 +217,14 @@ class YFinanceService:
 
             ticker = yf.Ticker(symbol)
             info = ticker.info
+            calendar_dates, calendar_available = (
+                self._get_upcoming_earnings_dates_from_ticker(
+                    ticker,
+                    symbol=symbol,
+                    limit=4,
+                )
+            )
+            calendar_as_of_date = datetime.now(UTC).date()
 
             result = {
                 "symbol": symbol,
@@ -240,14 +248,17 @@ class YFinanceService:
                 "description_yfinance": info.get("longBusinessSummary"),
                 # IPO date - yfinance provides this as milliseconds timestamp
                 "first_trade_date_ms": info.get("firstTradeDateMilliseconds"),
-                # Captured with the profile response so bulk scans can consume
-                # event evidence without issuing a second request per symbol.
-                "event_calendar_as_of_date": datetime.now(UTC).date(),
-                "next_earnings_date": self._normalize_provider_date(
-                    info.get("earningsTimestamp")
-                    or info.get("earningsTimestampStart")
-                ),
             }
+            if calendar_available:
+                result["event_calendar_as_of_date"] = calendar_as_of_date
+                result["next_earnings_date"] = next(
+                    (
+                        value
+                        for value in calendar_dates
+                        if value >= calendar_as_of_date
+                    ),
+                    None,
+                )
 
             # Calculate EPS Rating components from income statements
             eps_data = self._extract_eps_rating_data(ticker)
@@ -334,21 +345,33 @@ class YFinanceService:
             logger.error(f"Error fetching earnings history for {symbol}: {e}")
             return None
 
-    @staticmethod
-    def _normalize_provider_date(value: Any) -> date | None:
-        if value is None:
-            return None
+    def _get_upcoming_earnings_dates_from_ticker(
+        self,
+        ticker: Any,
+        *,
+        symbol: str,
+        limit: int,
+    ) -> tuple[List[date], bool]:
+        """Normalize one ticker calendar lookup without another rate-limit wait."""
         try:
-            if isinstance(value, (int, float)):
-                unit = "ms" if abs(value) >= 10_000_000_000 else "s"
-                timestamp = pd.to_datetime(value, unit=unit, utc=True)
-            else:
-                timestamp = pd.Timestamp(value)
-            if pd.isna(timestamp):
-                return None
-            return timestamp.date()
-        except (TypeError, ValueError, OverflowError):
-            return None
+            earnings_dates = ticker.earnings_dates
+            if earnings_dates is None or earnings_dates.empty:
+                return [], True
+
+            normalized = earnings_dates.reset_index()
+            result: List[date] = []
+            for row in normalized.head(limit).to_dict("records"):
+                raw_value = row.get("Earnings Date") or row.get("index") or row.get("Date")
+                if raw_value is None:
+                    continue
+                timestamp = pd.Timestamp(raw_value)
+                if pd.isna(timestamp):
+                    continue
+                result.append(timestamp.date())
+            return sorted({value for value in result}), True
+        except Exception as exc:
+            logger.error("Error fetching earnings dates for %s: %s", symbol, exc)
+            return [], False
 
     def get_upcoming_earnings_dates_with_status(
         self,
@@ -368,26 +391,15 @@ class YFinanceService:
         """
         try:
             self._wait_for_yfinance_rate_limit()
-
             ticker = yf.Ticker(symbol)
-            earnings_dates = ticker.earnings_dates
-            if earnings_dates is None or earnings_dates.empty:
-                return [], True
-
-            normalized = earnings_dates.reset_index()
-            result: List[date] = []
-            for row in normalized.head(limit).to_dict("records"):
-                raw_value = row.get("Earnings Date") or row.get("index") or row.get("Date")
-                if raw_value is None:
-                    continue
-                timestamp = pd.Timestamp(raw_value)
-                if pd.isna(timestamp):
-                    continue
-                result.append(timestamp.date())
-            return sorted({value for value in result}), True
         except Exception as e:
             logger.error(f"Error fetching earnings dates for {symbol}: {e}")
             return [], False
+        return self._get_upcoming_earnings_dates_from_ticker(
+            ticker,
+            symbol=symbol,
+            limit=limit,
+        )
 
     def get_upcoming_earnings_dates(self, symbol: str, limit: int = 4) -> List[date]:
         """Backward-compatible dates-only calendar lookup."""

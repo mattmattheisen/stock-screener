@@ -45,24 +45,56 @@ def test_stock_event_summary_propagates_calendar_fetch_status():
     ) == (None, None, False)
 
 
-def test_fundamentals_snapshot_carries_calendar_observation_without_extra_endpoint(
+def test_fundamentals_snapshot_reuses_ticker_for_authoritative_calendar_observation(
     monkeypatch,
 ):
     service = _service()
     service._extract_eps_rating_data = lambda _ticker: {}
     earnings_at = datetime(2026, 9, 3, 20, 0, tzinfo=UTC)
     ticker = SimpleNamespace(
-        info={
-            "symbol": "AAPL",
-            "earningsTimestamp": int(earnings_at.timestamp()),
-        }
+        info={"symbol": "AAPL"},
+        earnings_dates=pd.DataFrame(
+            {
+                "Earnings Date": [earnings_at],
+                "EPS Estimate": [1.25],
+            }
+        ).set_index("Earnings Date"),
     )
     monkeypatch.setattr(
         "app.services.yfinance_service.yf.Ticker", lambda _symbol: ticker
     )
 
+    observed_before = datetime.now(UTC).date()
     result = service.get_fundamentals("AAPL")
+    observed_after = datetime.now(UTC).date()
 
     assert result is not None
     assert result["next_earnings_date"] == date(2026, 9, 3)
-    assert result["event_calendar_as_of_date"] == datetime.now(UTC).date()
+    assert result["event_calendar_as_of_date"] in {
+        observed_before,
+        observed_after,
+    }
+
+
+def test_fundamentals_snapshot_omits_calendar_marker_when_lookup_fails(monkeypatch):
+    service = _service()
+    service._extract_eps_rating_data = lambda _ticker: {}
+
+    class FailingCalendarTicker:
+        def __init__(self):
+            self.info = {"symbol": "AAPL"}
+
+        @property
+        def earnings_dates(self):
+            raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(
+        "app.services.yfinance_service.yf.Ticker",
+        lambda _symbol: FailingCalendarTicker(),
+    )
+
+    result = service.get_fundamentals("AAPL")
+
+    assert result is not None
+    assert "event_calendar_as_of_date" not in result
+    assert "next_earnings_date" not in result
