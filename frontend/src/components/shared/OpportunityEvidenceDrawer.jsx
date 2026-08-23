@@ -27,6 +27,7 @@ const isRecord = (value) => value !== null && typeof value === 'object' && !Arra
 const formatValue = (value) => {
   if (value === null || value === undefined || value === '') return NOT_AVAILABLE;
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 };
 
@@ -75,6 +76,20 @@ function EvidenceList({ values, formatItem = formatCode }) {
       ))}
     </List>
   );
+}
+
+function EvidenceDetails({ values, formatValues = false }) {
+  if (!isRecord(values) || Object.keys(values).length === 0) {
+    return <Typography variant="body2" color="text.secondary">{NOT_AVAILABLE}</Typography>;
+  }
+
+  return Object.entries(values).map(([key, value]) => (
+    <Detail
+      key={key}
+      label={formatCode(key)}
+      value={formatValues && typeof value === 'string' ? formatCode(value) : value}
+    />
+  ));
 }
 
 function OpportunityEvidenceDrawer({
@@ -132,6 +147,14 @@ function OpportunityEvidenceDrawer({
 
       <Section title="Score pillars">
         {PILLARS.map(([key, label]) => <Detail key={key} label={label} value={scorePillars[key]} />)}
+      </Section>
+
+      <Section title="Data availability">
+        <EvidenceDetails values={evidence.data_availability} formatValues />
+      </Section>
+
+      <Section title="Metrics">
+        <EvidenceDetails values={evidence.metrics} />
       </Section>
 
       <Section title="Passed checks">

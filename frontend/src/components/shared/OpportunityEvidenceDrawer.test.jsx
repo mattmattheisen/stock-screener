@@ -73,6 +73,38 @@ describe('OpportunityEvidenceDrawer', () => {
     expect(screen.getAllByText('Not available').length).toBeGreaterThanOrEqual(10);
   });
 
+  it('renders persisted availability and metric evidence for data-limited rows', () => {
+    renderWithProviders(
+      <OpportunityEvidenceDrawer
+        open
+        row={{
+          action_state: 'data_limited',
+          resilience_score: null,
+          opportunity_state: {
+            data_availability: {
+              event_calendar: 'unavailable',
+              liquidity: 'available',
+            },
+            metrics: {
+              liquidity_passes: false,
+              volume_vs_50d: 0.7,
+            },
+          },
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Data availability')).toBeInTheDocument();
+    expect(screen.getByText('Event calendar')).toBeInTheDocument();
+    expect(screen.getByText('Unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Metrics')).toBeInTheDocument();
+    expect(screen.getByText('Liquidity passes')).toBeInTheDocument();
+    expect(screen.getByText('No')).toBeInTheDocument();
+    expect(screen.getByText('Volume vs 50d')).toBeInTheDocument();
+    expect(screen.getByText('0.7')).toBeInTheDocument();
+  });
+
   it('does not read the removed resilience_pillars alias', () => {
     renderWithProviders(
       <OpportunityEvidenceDrawer

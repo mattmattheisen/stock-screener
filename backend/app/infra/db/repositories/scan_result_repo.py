@@ -39,6 +39,32 @@ from app.services.market_taxonomy_service import (
 logger = logging.getLogger(__name__)
 
 
+def _normalize_legacy_setup_engine_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Backfill fields absent from setup-engine payloads written by older runs."""
+    explain = payload.get("explain")
+    if not isinstance(explain, dict):
+        return payload
+    invalidation_flags = explain.get("invalidation_flags")
+    if not isinstance(invalidation_flags, list):
+        return payload
+
+    normalized_flags: list[Any] = []
+    changed = False
+    for flag in invalidation_flags:
+        if isinstance(flag, dict) and "is_hard" not in flag:
+            normalized_flags.append({**flag, "is_hard": False})
+            changed = True
+        else:
+            normalized_flags.append(flag)
+
+    if not changed:
+        return payload
+    return {
+        **payload,
+        "explain": {**explain, "invalidation_flags": normalized_flags},
+    }
+
+
 def _rs_publication_identity(
     payload: dict[str, Any],
 ) -> tuple[str, int | None] | None:
@@ -159,6 +185,9 @@ def _map_orchestrator_result(scan_id: str, symbol: str, raw: dict) -> dict:
 
     setup_engine = raw.get("setup_engine")
     if isinstance(setup_engine, dict):
+        setup_engine = _normalize_legacy_setup_engine_payload(setup_engine)
+        if setup_engine is not raw.get("setup_engine"):
+            raw = {**raw, "setup_engine": setup_engine}
         validation_errors = validate_setup_engine_report_payload(setup_engine)
         if validation_errors:
             logger.warning(

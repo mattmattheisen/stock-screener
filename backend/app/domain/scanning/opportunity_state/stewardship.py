@@ -30,4 +30,13 @@ def overlay_stewardship_state(
     action_reasons = result.action_reasons
     if reason not in action_reasons:
         action_reasons += (reason,)
-    return replace(result, action_state=stewardship_state, action_reasons=action_reasons)
+    data_availability = {
+        **result.data_availability,
+        "prior_run": "available" if prior_run_available else "unavailable",
+    }
+    return replace(
+        result,
+        action_state=stewardship_state,
+        action_reasons=action_reasons,
+        data_availability=data_availability,
+    )

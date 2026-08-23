@@ -748,6 +748,7 @@ def test_stewardship_exit_risk_outranks_persisted_setup_ready_state():
     assert overlaid.action_state is ActionState.EXIT_RISK
     assert overlaid.action_reasons[-1] == "stewardship_exit_risk"
     assert overlaid.metrics == original.metrics
+    assert overlaid.data_availability["prior_run"] == "available"
 
 
 def test_stewardship_exit_risk_overlays_without_prior_run_evidence():
@@ -761,6 +762,20 @@ def test_stewardship_exit_risk_overlays_without_prior_run_evidence():
 
     assert overlaid.action_state is ActionState.EXIT_RISK
     assert overlaid.action_reasons[-1] == "stewardship_exit_risk"
+    assert overlaid.data_availability["prior_run"] == "unavailable"
+
+
+def test_stewardship_deteriorating_records_prior_run_as_available():
+    original = evaluate_opportunity_state(complete_inputs())
+
+    overlaid = overlay_stewardship_state(
+        original,
+        "deteriorating",
+        prior_run_available=True,
+    )
+
+    assert overlaid.action_state is ActionState.DETERIORATING
+    assert overlaid.data_availability["prior_run"] == "available"
 
 
 def test_stewardship_deteriorating_requires_prior_run_evidence():

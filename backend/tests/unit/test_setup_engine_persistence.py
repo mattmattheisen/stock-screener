@@ -553,6 +553,28 @@ class TestValidationGuard:
         assert "setup_engine" in mapped["details"]
         assert mapped["details"]["setup_engine"]["setup_score"] == pytest.approx(82.5)
 
+    def test_legacy_invalidation_flag_without_is_hard_is_backfilled_soft(self):
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
+        result_dict["setup_engine"]["explain"]["invalidation_flags"] = [
+            {
+                "code": "legacy_warning",
+                "message": "Serialized before hard flags were introduced",
+                "severity": "medium",
+            }
+        ]
+
+        mapped = _map_orchestrator_result("scan-1", "AAPL", result_dict)
+
+        flags = mapped["details"]["setup_engine"]["explain"]["invalidation_flags"]
+        assert flags == [
+            {
+                "code": "legacy_warning",
+                "message": "Serialized before hard flags were introduced",
+                "severity": "medium",
+                "is_hard": False,
+            }
+        ]
+
     def test_invalid_payload_dropped(self):
         """A setup_engine dict missing required keys should be dropped."""
         result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
