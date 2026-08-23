@@ -29,6 +29,11 @@ import {
   stableExpressionKey,
 } from '../../features/scan/filterExpressionModel';
 import {
+  presetRequiresOpportunityState,
+  queryRequiresOpportunityState,
+  sanitizeQueryForOpportunityCapability,
+} from '../../features/scan/opportunityCapabilityPolicy';
+import {
   legacyFiltersToExpression,
 } from '../../features/scan/legacyFilterExpression';
 import {
@@ -99,7 +104,7 @@ function StaticScanPage() {
     if (!Array.isArray(screens) || showOpportunityState) {
       return screens;
     }
-    return screens.filter((screen) => screen.id !== 'correction_survivors');
+    return screens.filter((screen) => !presetRequiresOpportunityState(screen));
   }, [scanManifestQuery.data?.preset_screens, showOpportunityState]);
 
   useEffect(() => {
@@ -210,6 +215,38 @@ function StaticScanPage() {
     allRows: hydratedRows,
     hydrationComplete,
   });
+
+  useEffect(() => {
+    if (
+      !scanManifestQuery.data
+      || showOpportunityState
+      || !queryRequiresOpportunityState({
+        expression: appliedExpression,
+        sortBy,
+      })
+    ) {
+      return;
+    }
+    const sanitized = sanitizeQueryForOpportunityCapability({
+      expression: appliedExpression,
+      sortBy,
+      sortOrder,
+    }, false);
+    dispatchFilterState({
+      type: 'apply-expression',
+      expression: sanitized.expression,
+    });
+    setSortBy(sanitized.sortBy);
+    setSortOrder(sanitized.sortOrder);
+    setActiveScreenId(null);
+  }, [
+    appliedExpression,
+    scanManifestQuery.data,
+    setActiveScreenId,
+    showOpportunityState,
+    sortBy,
+    sortOrder,
+  ]);
 
   const handleSelectScreen = useCallback((screenId) => {
     setActiveScreenId(screenId);

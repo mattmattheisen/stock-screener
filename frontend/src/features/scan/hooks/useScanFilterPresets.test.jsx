@@ -54,7 +54,7 @@ function setup(overrides = {}) {
 }
 
 describe('useScanFilterPresets', () => {
-  it('hides and blocks the Correction Survivors preset without API capability', () => {
+  it('does not apply capability heuristics to preset CRUD state', () => {
     const { hook, applyQuery } = setup({
       opportunityStateAvailable: false,
       presets: [
@@ -76,14 +76,15 @@ describe('useScanFilterPresets', () => {
     });
 
     expect(hook.result.current.availablePresets.map(({ name }) => name)).toEqual([
+      'Correction Survivors',
       'Momentum',
     ]);
 
     act(() => hook.result.current.handleLoadPreset('correction-survivors-live'));
-    expect(applyQuery).not.toHaveBeenCalled();
+    expect(applyQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('exposes the Correction Survivors preset for a capable scan', () => {
+  it('exposes the supplied presets unchanged', () => {
     const { hook } = setup({
       opportunityStateAvailable: true,
       presets: [{
@@ -98,58 +99,13 @@ describe('useScanFilterPresets', () => {
     expect(hook.result.current.availablePresets).toHaveLength(1);
   });
 
-  it('sanitizes manually authored opportunity query state once when capability is lost', () => {
+  it('does not mutate queries when capability props change', () => {
     const expression = createEmptyExpression([
-      { kind: 'range', field: 'price', min: 10, max: null },
       { kind: 'boolean', field: 'correction_survivor', value: true },
     ]);
-    expression.group_join = 'all';
-    expression.groups = [
-      {
-        id: 'mixed',
-        name: 'Mixed setup',
-        match: 'all',
-        enabled: true,
-        conditions: [
-          { kind: 'range', field: 'resilience_score', min: 80, max: null },
-          { kind: 'categorical', field: 'rating', values: ['Buy'], mode: 'include' },
-        ],
-      },
-      {
-        id: 'opportunity-only',
-        name: 'Opportunity only',
-        match: 'any',
-        enabled: true,
-        conditions: [
-          {
-            kind: 'categorical',
-            field: 'action_state',
-            values: ['setup_ready'],
-            mode: 'include',
-          },
-        ],
-      },
-      {
-        id: 'disabled-empty',
-        name: 'Disabled empty setup',
-        match: 'any',
-        enabled: false,
-        conditions: [],
-      },
-      {
-        id: 'unrelated',
-        name: 'Unrelated setup',
-        match: 'all',
-        enabled: false,
-        conditions: [
-          { kind: 'boolean', field: 'vcp_detected', value: true },
-        ],
-      },
-    ];
     const { hook, props, applyQuery } = setup({
       expression,
       sortBy: 'resilience_score',
-      sortOrder: 'asc',
       opportunityStateAvailable: true,
     });
 
@@ -158,68 +114,11 @@ describe('useScanFilterPresets', () => {
         ...props,
         expression,
         sortBy: 'resilience_score',
-        sortOrder: 'asc',
         opportunityStateAvailable: false,
       });
     });
 
-    const sanitizedExpression = {
-      expression_version: 1,
-      required: {
-        id: 'required',
-        name: 'Always require',
-        match: 'all',
-        enabled: true,
-        conditions: [
-          { kind: 'range', field: 'price', min: 10, max: null },
-        ],
-      },
-      group_join: 'all',
-      groups: [
-        {
-          id: 'mixed',
-          name: 'Mixed setup',
-          match: 'all',
-          enabled: true,
-          conditions: [
-            { kind: 'categorical', field: 'rating', values: ['Buy'], mode: 'include' },
-          ],
-        },
-        {
-          id: 'disabled-empty',
-          name: 'Disabled empty setup',
-          match: 'any',
-          enabled: false,
-          conditions: [],
-        },
-        {
-          id: 'unrelated',
-          name: 'Unrelated setup',
-          match: 'all',
-          enabled: false,
-          conditions: [
-            { kind: 'boolean', field: 'vcp_detected', value: true },
-          ],
-        },
-      ],
-    };
-    expect(applyQuery).toHaveBeenCalledTimes(1);
-    expect(applyQuery).toHaveBeenCalledWith({
-      expression: sanitizedExpression,
-      sortBy: 'composite_score',
-      sortOrder: 'desc',
-    });
-
-    act(() => {
-      hook.rerender({
-        ...props,
-        expression: sanitizedExpression,
-        sortBy: 'composite_score',
-        sortOrder: 'desc',
-        opportunityStateAvailable: false,
-      });
-    });
-    expect(applyQuery).toHaveBeenCalledTimes(1);
+    expect(applyQuery).not.toHaveBeenCalled();
   });
 
   it('does not sanitize opportunity query state while capability remains true', () => {

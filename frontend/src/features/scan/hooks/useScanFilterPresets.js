@@ -1,63 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   canonicalizeExpression,
   stableExpressionKey,
 } from '../filterExpressionModel';
 import { legacyLiveFiltersToExpression } from '../legacyFilterExpression';
-import { isOpportunityStateField } from '../scanFilterFields';
-
-const SAFE_SCAN_SORT = Object.freeze({ sortBy: 'composite_score', sortOrder: 'desc' });
-
-function valueReferencesOpportunityState(value) {
-  if (Array.isArray(value)) {
-    return value.some(valueReferencesOpportunityState);
-  }
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-  if (isOpportunityStateField(value.field)) {
-    return true;
-  }
-  return Object.values(value).some(valueReferencesOpportunityState);
-}
-
-function isOpportunityStatePreset(preset) {
-  return preset?.name === 'Correction Survivors'
-    || preset?.filters?.correctionSurvivor != null
-    || isOpportunityStateField(preset?.sort_by)
-    || valueReferencesOpportunityState(preset?.filters?.expression);
-}
-
-export function expressionReferencesOpportunityState(expression) {
-  const groups = [expression?.required, ...(expression?.groups ?? [])];
-  return groups.some((group) => (
-    group?.conditions?.some((condition) => isOpportunityStateField(condition?.field))
-  ));
-}
-
-export function queryReferencesOpportunityState(expression, sortBy) {
-  return expressionReferencesOpportunityState(expression) || isOpportunityStateField(sortBy);
-}
-
-function removeOpportunityStateConditions(expression) {
-  const canonical = canonicalizeExpression(expression);
-  const sanitizeGroup = (group) => ({
-    ...group,
-    conditions: group.conditions.filter(
-      (condition) => !isOpportunityStateField(condition.field),
-    ),
-  });
-  return {
-    ...canonical,
-    required: sanitizeGroup(canonical.required),
-    groups: canonical.groups.flatMap((group) => {
-      const sanitized = sanitizeGroup(group);
-      return group.conditions.length === 0 || sanitized.conditions.length > 0
-        ? [sanitized]
-        : [];
-    }),
-  };
-}
 
 export function useScanFilterPresets({
   presets,
@@ -68,8 +14,6 @@ export function useScanFilterPresets({
   sortOrder,
   applyQuery,
   expression = null,
-  opportunityStateAvailable = false,
-  opportunityStateCapabilityResolved = true,
 }) {
   const [activePresetId, setActivePresetId] = useState(null);
   const [presetFiltersSnapshot, setPresetFiltersSnapshot] = useState(null);
@@ -88,58 +32,13 @@ export function useScanFilterPresets({
     }),
     [expression],
   );
-  const availablePresets = useMemo(
-    () => (opportunityStateAvailable
-      ? presets
-      : presets.filter((preset) => !isOpportunityStatePreset(preset))),
-    [opportunityStateAvailable, presets],
-  );
-  const availableActivePresetId = useMemo(
-    () => (availablePresets.some((preset) => preset.id === activePresetId)
-      ? activePresetId
-      : null),
-    [activePresetId, availablePresets],
-  );
+  const availablePresets = presets;
 
   const clearActivePreset = useCallback(() => {
     setActivePresetId(null);
     setPresetFiltersSnapshot(null);
     setPresetSortSnapshot(null);
   }, []);
-
-  useEffect(() => {
-    if (
-      activePresetId != null
-      && !availablePresets.some((preset) => preset.id === activePresetId)
-    ) {
-      clearActivePreset();
-    }
-  }, [activePresetId, availablePresets, clearActivePreset]);
-
-  useEffect(() => {
-    if (opportunityStateAvailable || !opportunityStateCapabilityResolved) {
-      return;
-    }
-    const expressionNeedsCleanup = expressionReferencesOpportunityState(expression);
-    const sortNeedsCleanup = isOpportunityStateField(sortBy);
-    if (!expressionNeedsCleanup && !sortNeedsCleanup) {
-      return;
-    }
-    applyQuery({
-      expression: expressionNeedsCleanup
-        ? removeOpportunityStateConditions(expression)
-        : canonicalizeExpression(expression),
-      sortBy: sortNeedsCleanup ? SAFE_SCAN_SORT.sortBy : sortBy,
-      sortOrder: sortNeedsCleanup ? SAFE_SCAN_SORT.sortOrder : sortOrder,
-    });
-  }, [
-    applyQuery,
-    expression,
-    opportunityStateAvailable,
-    opportunityStateCapabilityResolved,
-    sortBy,
-    sortOrder,
-  ]);
 
   const hasUnsavedChanges = useCallback(() => {
     if (!activePresetId || !presetFiltersSnapshot) {
@@ -300,7 +199,7 @@ export function useScanFilterPresets({
 
   return {
     availablePresets,
-    activePresetId: availableActivePresetId,
+    activePresetId,
     hasUnsavedChanges,
     clearActivePreset,
     handleLoadPreset,

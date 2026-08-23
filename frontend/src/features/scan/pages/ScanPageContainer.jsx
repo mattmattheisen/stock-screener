@@ -39,9 +39,11 @@ import {
   legacyFiltersToExpression,
 } from '../legacyFilterExpression';
 import {
-  queryReferencesOpportunityState,
-  useScanFilterPresets,
-} from '../hooks/useScanFilterPresets';
+  presetRequiresOpportunityState,
+  queryRequiresOpportunityState,
+  sanitizeQueryForOpportunityCapability,
+} from '../opportunityCapabilityPolicy';
+import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
 import {
   createScanFilterQuery,
   stableScanFilterQueryKey,
@@ -142,10 +144,7 @@ function ScanPage() {
   const opportunityStateCleanupPending = (
     opportunityStateCapabilityResolved
     && !opportunityStateAvailable
-    && queryReferencesOpportunityState(
-      displayedQuery.expression,
-      displayedQuery.sortBy,
-    )
+    && queryRequiresOpportunityState(displayedQuery)
   );
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
@@ -240,8 +239,18 @@ function ScanPage() {
     isUpdating: presetIsUpdating,
   } = useFilterPresets();
 
-  const presetState = useScanFilterPresets({
+  const availablePresets = useMemo(() => (
+    !opportunityStateCapabilityResolved || opportunityStateAvailable
+      ? presets
+      : presets.filter((preset) => !presetRequiresOpportunityState(preset))
+  ), [
+    opportunityStateAvailable,
+    opportunityStateCapabilityResolved,
     presets,
+  ]);
+
+  const presetState = useScanFilterPresets({
+    presets: availablePresets,
     createPresetAsync,
     updatePresetAsync,
     deletePreset,
@@ -249,9 +258,35 @@ function ScanPage() {
     sortOrder,
     applyQuery: requestQuery,
     expression: draftExpression,
+  });
+  const activePresetId = presetState.activePresetId;
+  const clearActivePreset = presetState.clearActivePreset;
+
+  useEffect(() => {
+    if (
+      !opportunityStateCapabilityResolved
+      || opportunityStateAvailable
+    ) {
+      return;
+    }
+    if (queryRequiresOpportunityState(displayedQuery)) {
+      requestQuery(sanitizeQueryForOpportunityCapability(displayedQuery, false));
+    }
+    const activePreset = presets.find(
+      (preset) => preset.id === activePresetId,
+    );
+    if (activePreset && presetRequiresOpportunityState(activePreset)) {
+      clearActivePreset();
+    }
+  }, [
+    displayedQuery,
     opportunityStateAvailable,
     opportunityStateCapabilityResolved,
-  });
+    activePresetId,
+    clearActivePreset,
+    presets,
+    requestQuery,
+  ]);
 
   const scanBootstrapQuery = useQuery({
     queryKey: ['scanBootstrap', 'latest'],
