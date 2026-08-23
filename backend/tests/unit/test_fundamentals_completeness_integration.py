@@ -7,6 +7,7 @@ actually wired up: when something writes via ``store_all_caches`` /
 """
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,6 +51,69 @@ def captured_record():
 
 
 class TestStorageWritesCompletenessAndProvenance:
+    def test_event_calendar_observation_is_persisted_with_fundamentals(
+        self, captured_record
+    ):
+        service, captured = captured_record
+        payload = {
+            "event_calendar_as_of_date": date(2026, 8, 23),
+            "next_earnings_date": date(2026, 9, 3),
+        }
+
+        service._store_in_database(
+            "AAPL", payload, data_source="yfinance", market="US"
+        )
+
+        record = captured["added_record"]
+        assert record.event_calendar_as_of_date == date(2026, 8, 23)
+        assert record.next_earnings_date == date(2026, 9, 3)
+
+    def test_failed_calendar_refresh_preserves_previous_observation(self):
+        existing = StockFundamental(
+            symbol="AAPL",
+            event_calendar_as_of_date=date(2026, 8, 22),
+            next_earnings_date=date(2026, 9, 3),
+        )
+        fake_db = MagicMock()
+        fake_db.query.return_value.filter.return_value.first.return_value = existing
+        service = FundamentalsCacheService(
+            redis_client=None,
+            session_factory=lambda: fake_db,
+        )
+
+        service._store_in_database(
+            "AAPL", {"market_cap": 1}, data_source="yfinance", market="US"
+        )
+
+        assert existing.event_calendar_as_of_date == date(2026, 8, 22)
+        assert existing.next_earnings_date == date(2026, 9, 3)
+
+    def test_successful_empty_calendar_refresh_clears_previous_event(self):
+        existing = StockFundamental(
+            symbol="AAPL",
+            event_calendar_as_of_date=date(2026, 8, 22),
+            next_earnings_date=date(2026, 9, 3),
+        )
+        fake_db = MagicMock()
+        fake_db.query.return_value.filter.return_value.first.return_value = existing
+        service = FundamentalsCacheService(
+            redis_client=None,
+            session_factory=lambda: fake_db,
+        )
+
+        service._store_in_database(
+            "AAPL",
+            {
+                "event_calendar_as_of_date": date(2026, 8, 23),
+                "next_earnings_date": None,
+            },
+            data_source="yfinance",
+            market="US",
+        )
+
+        assert existing.event_calendar_as_of_date == date(2026, 8, 23)
+        assert existing.next_earnings_date is None
+
     def test_hk_full_yfinance_payload_scores_100_and_tags_yfinance(
         self, captured_record
     ):

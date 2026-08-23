@@ -9,7 +9,7 @@ from __future__ import annotations
 import yfinance as yf
 import pandas as pd
 from typing import TYPE_CHECKING, Optional, Dict, Any, List
-from datetime import date
+from datetime import UTC, date, datetime
 import logging
 from threading import RLock
 
@@ -240,6 +240,13 @@ class YFinanceService:
                 "description_yfinance": info.get("longBusinessSummary"),
                 # IPO date - yfinance provides this as milliseconds timestamp
                 "first_trade_date_ms": info.get("firstTradeDateMilliseconds"),
+                # Captured with the profile response so bulk scans can consume
+                # event evidence without issuing a second request per symbol.
+                "event_calendar_as_of_date": datetime.now(UTC).date(),
+                "next_earnings_date": self._normalize_provider_date(
+                    info.get("earningsTimestamp")
+                    or info.get("earningsTimestampStart")
+                ),
             }
 
             # Calculate EPS Rating components from income statements
@@ -327,16 +334,37 @@ class YFinanceService:
             logger.error(f"Error fetching earnings history for {symbol}: {e}")
             return None
 
-    def get_upcoming_earnings_dates(self, symbol: str, limit: int = 4) -> List[date]:
-        """
-        Get upcoming earnings dates from yfinance.
+    @staticmethod
+    def _normalize_provider_date(value: Any) -> date | None:
+        if value is None:
+            return None
+        try:
+            if isinstance(value, (int, float)):
+                unit = "ms" if abs(value) >= 10_000_000_000 else "s"
+                timestamp = pd.to_datetime(value, unit=unit, utc=True)
+            else:
+                timestamp = pd.Timestamp(value)
+            if pd.isna(timestamp):
+                return None
+            return timestamp.date()
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def get_upcoming_earnings_dates_with_status(
+        self,
+        symbol: str,
+        limit: int = 4,
+    ) -> tuple[List[date], bool]:
+        """Get upcoming dates and preserve whether Yahoo answered successfully.
 
         Args:
             symbol: Stock ticker symbol
             limit: Maximum number of upcoming earnings rows to inspect
 
         Returns:
-            List of upcoming earnings dates normalized to Python dates
+            A normalized date list and an availability flag. A successful
+            empty response is ``([], True)``; provider failure is
+            ``([], False)``.
         """
         try:
             self._wait_for_yfinance_rate_limit()
@@ -344,7 +372,7 @@ class YFinanceService:
             ticker = yf.Ticker(symbol)
             earnings_dates = ticker.earnings_dates
             if earnings_dates is None or earnings_dates.empty:
-                return []
+                return [], True
 
             normalized = earnings_dates.reset_index()
             result: List[date] = []
@@ -356,10 +384,18 @@ class YFinanceService:
                 if pd.isna(timestamp):
                     continue
                 result.append(timestamp.date())
-            return sorted({value for value in result})
+            return sorted({value for value in result}), True
         except Exception as e:
             logger.error(f"Error fetching earnings dates for {symbol}: {e}")
-            return []
+            return [], False
+
+    def get_upcoming_earnings_dates(self, symbol: str, limit: int = 4) -> List[date]:
+        """Backward-compatible dates-only calendar lookup."""
+        dates, _available = self.get_upcoming_earnings_dates_with_status(
+            symbol,
+            limit=limit,
+        )
+        return dates
 
     def get_quarterly_growth(
         self,

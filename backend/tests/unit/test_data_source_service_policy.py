@@ -6,6 +6,7 @@ unsupported provider calls.
 """
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
@@ -170,6 +171,20 @@ class TestGetFundamentalsPolicyGate:
         svc.get_fundamentals("AAPL", market="US")
         svc.finviz_service.get_fundamentals.assert_called_once_with("AAPL")
         assert svc.metrics["finviz_skipped_by_policy"] == 0
+
+    def test_us_finviz_result_keeps_yfinance_calendar_supplement(self):
+        svc = _make_service(
+            finviz_return={"market_cap": 2_000},
+            yfinance_return={
+                "event_calendar_as_of_date": date(2026, 8, 23),
+                "next_earnings_date": date(2026, 9, 3),
+            },
+        )
+
+        result = svc.get_fundamentals("AAPL", market="US")
+
+        assert result["event_calendar_as_of_date"] == date(2026, 8, 23)
+        assert result["next_earnings_date"] == date(2026, 9, 3)
 
     def test_none_market_defaults_to_us_behaviour(self):
         svc = _make_service(finviz_return={"market_cap": 2_000})

@@ -165,14 +165,40 @@ class StockEventContextService:
         *,
         as_of_date: date | None = None,
     ) -> tuple[date | None, int | None]:
+        next_earnings_date, days_until_earnings, _available = (
+            self.get_next_earnings_summary_with_status(
+                symbol,
+                as_of_date=as_of_date,
+            )
+        )
+        return next_earnings_date, days_until_earnings
+
+    def get_next_earnings_summary_with_status(
+        self,
+        symbol: str,
+        *,
+        as_of_date: date | None = None,
+    ) -> tuple[date | None, int | None, bool]:
+        """Return the next event while preserving provider availability."""
         effective_as_of_date = as_of_date or to_eastern_date(datetime.now(UTC))
+        upcoming_dates, available = (
+            self._yfinance_service.get_upcoming_earnings_dates_with_status(
+                symbol.upper()
+            )
+        )
+        if not available:
+            return None, None, False
         next_earnings_date = self._select_next_earnings_date(
-            self._get_upcoming_earnings_dates(symbol),
+            upcoming_dates,
             effective_as_of_date,
         )
         if next_earnings_date is None:
-            return None, None
-        return next_earnings_date, (next_earnings_date - effective_as_of_date).days
+            return None, None, True
+        return (
+            next_earnings_date,
+            (next_earnings_date - effective_as_of_date).days,
+            True,
+        )
 
     def _get_earnings_history(self, symbol: str) -> pd.DataFrame | None:
         return self._yfinance_service.get_earnings_history(symbol.upper())

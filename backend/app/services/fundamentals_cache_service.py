@@ -368,6 +368,8 @@ class FundamentalsCacheService:
                 "growth_metric_basis": record.growth_metric_basis,
                 "growth_comparable_period_date": record.growth_comparable_period_date,
                 "growth_reference_gap_days": record.growth_reference_gap_days,
+                "next_earnings_date": record.next_earnings_date,
+                "event_calendar_as_of_date": record.event_calendar_as_of_date,
                 # Alias for CANSLIM compatibility
                 "eps_growth_qq": record.eps_growth_quarterly,
                 # Profitability metrics
@@ -884,6 +886,13 @@ class FundamentalsCacheService:
                 existing_record.growth_metric_basis = data.get("growth_metric_basis")
                 existing_record.growth_comparable_period_date = data.get("growth_comparable_period_date")
                 existing_record.growth_reference_gap_days = data.get("growth_reference_gap_days")
+                if "event_calendar_as_of_date" in data:
+                    existing_record.event_calendar_as_of_date = self._coerce_date(
+                        data.get("event_calendar_as_of_date")
+                    )
+                    existing_record.next_earnings_date = self._coerce_date(
+                        data.get("next_earnings_date")
+                    )
 
                 # Profitability metrics
                 existing_record.profit_margin = data.get("profit_margin")
@@ -1026,6 +1035,10 @@ class FundamentalsCacheService:
                     growth_metric_basis=data.get("growth_metric_basis"),
                     growth_comparable_period_date=data.get("growth_comparable_period_date"),
                     growth_reference_gap_days=data.get("growth_reference_gap_days"),
+                    next_earnings_date=self._coerce_date(data.get("next_earnings_date")),
+                    event_calendar_as_of_date=self._coerce_date(
+                        data.get("event_calendar_as_of_date")
+                    ),
                     # Profitability metrics
                     profit_margin=data.get("profit_margin"),
                     operating_margin=data.get("operating_margin"),
@@ -1283,6 +1296,8 @@ class FundamentalsCacheService:
                     "growth_metric_basis": record.growth_metric_basis,
                     "growth_comparable_period_date": record.growth_comparable_period_date,
                     "growth_reference_gap_days": record.growth_reference_gap_days,
+                    "next_earnings_date": record.next_earnings_date,
+                    "event_calendar_as_of_date": record.event_calendar_as_of_date,
                     # Alias for CANSLIM compatibility
                     "eps_growth_qq": record.eps_growth_quarterly,
                     # Profitability metrics

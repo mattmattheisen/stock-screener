@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 _TRANSIENT_TYPES = (ConnectionError, TimeoutError, RateLimitTimeoutError)
 _RS_PERCENTILE_PERIODS = (21, 63, 252)
+_EVENT_CALENDAR_MAX_AGE_DAYS = 7
+_EVENT_CALENDAR_FUTURE_TOLERANCE_DAYS = 3
 
 
 class DataPreparationLayer:
@@ -87,19 +89,76 @@ class DataPreparationLayer:
         price_data: pd.DataFrame | None,
         requirements: DataRequirements,
         fetch_errors: dict[str, str],
+        fundamentals: dict | None = None,
+        allow_remote: bool = True,
     ) -> tuple[date | None, bool]:
         if not requirements.needs_event_calendar:
             return None, False
-        try:
-            next_earnings_date, _ = self.event_context_service.get_next_earnings_summary(
-                symbol,
-                as_of_date=self._as_of_date(price_data),
+
+        as_of_date = self._as_of_date(price_data)
+        persisted_date, persisted_available = self._persisted_event_calendar(
+            fundamentals,
+            as_of_date=as_of_date,
+        )
+        if persisted_available:
+            return persisted_date, True
+        if not allow_remote:
+            fetch_errors["event_calendar"] = (
+                "No current persisted event calendar evidence"
             )
+            return None, False
+        try:
+            next_earnings_date, _, available = (
+                self.event_context_service.get_next_earnings_summary_with_status(
+                    symbol,
+                    as_of_date=as_of_date,
+                )
+            )
+            if not available:
+                fetch_errors["event_calendar"] = "Event calendar provider unavailable"
+                return None, False
             return next_earnings_date, True
         except Exception as exc:
             logger.warning("Error fetching event calendar for %s: %s", symbol, exc)
             fetch_errors["event_calendar"] = str(exc)
             return None, False
+
+    @staticmethod
+    def _persisted_event_calendar(
+        fundamentals: dict | None,
+        *,
+        as_of_date: date | None,
+    ) -> tuple[date | None, bool]:
+        if not isinstance(fundamentals, dict) or as_of_date is None:
+            return None, False
+        raw_observed_at = fundamentals.get("event_calendar_as_of_date")
+        try:
+            observed_timestamp = pd.Timestamp(raw_observed_at)
+        except (TypeError, ValueError):
+            return None, False
+        if pd.isna(observed_timestamp):
+            return None, False
+        observed_at = observed_timestamp.date()
+        age_days = (as_of_date - observed_at).days
+        if (
+            age_days < -_EVENT_CALENDAR_FUTURE_TOLERANCE_DAYS
+            or age_days > _EVENT_CALENDAR_MAX_AGE_DAYS
+        ):
+            return None, False
+
+        raw_next_date = fundamentals.get("next_earnings_date")
+        if raw_next_date is None:
+            return None, True
+        try:
+            next_timestamp = pd.Timestamp(raw_next_date)
+        except (TypeError, ValueError):
+            return None, False
+        if pd.isna(next_timestamp):
+            return None, False
+        next_earnings_date = next_timestamp.date()
+        if next_earnings_date < as_of_date:
+            return None, False
+        return next_earnings_date, True
 
     def _resolve_identity(self, symbol: str):
         resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
@@ -421,7 +480,7 @@ class DataPreparationLayer:
 
         # 3. Fetch fundamentals (if needed, using cache)
         fundamentals = None
-        if requirements.needs_fundamentals:
+        if requirements.needs_fundamentals or requirements.needs_event_calendar:
             try:
                 # Use cache service instead of direct API call (no rate limiting needed - cache handles it)
                 fundamentals = self._fetch_with_retry(
@@ -430,7 +489,7 @@ class DataPreparationLayer:
                     force_refresh=False,  # Use cache by default
                     market=normalized_market,
                 )
-                if fundamentals is None:
+                if fundamentals is None and requirements.needs_fundamentals:
                     fetch_errors["fundamentals"] = "No fundamental data returned"
             except Exception as e:
                 logger.warning(f"Error fetching fundamentals for {normalized_symbol}: {e}")
@@ -457,6 +516,7 @@ class DataPreparationLayer:
             price_data=price_data,
             requirements=requirements,
             fetch_errors=fetch_errors,
+            fundamentals=fundamentals,
         )
 
         # Create StockData container
@@ -559,7 +619,7 @@ class DataPreparationLayer:
                 unique_canonical_symbols,
                 market_by_symbol=market_by_symbol,
             )
-            if requirements.needs_fundamentals
+            if requirements.needs_fundamentals or requirements.needs_event_calendar
             else {}
         )
 
@@ -662,6 +722,8 @@ class DataPreparationLayer:
                     price_data=price_data,
                     requirements=requirements,
                     fetch_errors=fetch_errors,
+                    fundamentals=fundamentals,
+                    allow_remote=False,
                 )
             )
 
