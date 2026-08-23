@@ -4,7 +4,7 @@ from .opportunity_state import (  # noqa: F401 – re-export for convenience
     ActionState,
     EventDateAvailability,
     InvalidationEvidence,
-    OpportunityInputs,
+    OpportunityEvidence,
     OpportunityStateResult,
     evaluate_opportunity_state,
     normalize_event_date,

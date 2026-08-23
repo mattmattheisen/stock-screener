@@ -10,10 +10,18 @@ from typing import TYPE_CHECKING
 from app.analysis.patterns.config import SetupEngineParameters
 from app.domain.scanning.default_filters import resolve_default_scan_filters
 from app.domain.scanning.opportunity_state import (
+    EvidenceValue,
     InvalidationEvidence,
-    OpportunityInputs,
+    LeadershipEvidence,
+    OpportunityEvidence,
+    ProvenanceEvidence,
+    RiskEvidence,
+    StructureEvidence,
+    TradabilityEvidence,
+    TrendEvidence,
     evaluate_opportunity_state,
     normalize_event_date,
+    serialize_opportunity_projection,
 )
 from app.services.security_master_service import SecurityMasterResolver
 
@@ -43,60 +51,76 @@ def build_opportunity_projection(
         "pattern_primary",
     )
 
-    inputs = OpportunityInputs(
-        market=market,
-        mic=SecurityMasterResolver.resolve_exchange_mic(market, stock_data.exchange),
-        as_of_date=as_of_date,
-        benchmark_symbol=_text_or_none(stock_data.benchmark_symbol),
-        benchmark_as_of_date=_last_frame_date(stock_data.benchmark_data),
-        benchmark_relative_return_65d=_number_from(setup, "rs_vs_spy_65d"),
-        rs_rating_1m=_finite_float(result.get("rs_rating_1m")),
-        rs_rating_3m=_finite_float(result.get("rs_rating_3m")),
-        rs_line_new_high=_bool_from(setup, "rs_line_new_high"),
-        rs_line_blue_dot=_bool_from(setup, "rs_line_blue_dot"),
-        stage=_integer_or_none(result.get("stage")),
-        ma_alignment=_bool_or_none(result.get("ma_alignment")),
-        invalidation_evidence_available=invalidation_flags is not None,
-        invalidation_flags=invalidation_flags,
-        setup_payload_available=setup is not None,
-        pattern_primary=pattern_primary,
-        pattern_primary_available=pattern_primary_available,
-        squeeze=_bool_from(setup, "bb_squeeze"),
-        tight_closes_count=_integer_from(setup, "tight_closes_count"),
-        quiet_days_count=_integer_from(setup, "quiet_days_10d"),
-        volume_vs_50d=_number_from(setup, "volume_vs_50d"),
-        volume_dry_up_max=parameters.volume_vs_50d_max_for_ready,
-        liquidity_available=(
-            liquidity_floor is not None and avg_dollar_volume is not None
+    evidence = OpportunityEvidence(
+        provenance=ProvenanceEvidence(
+            market=market,
+            mic=SecurityMasterResolver.resolve_exchange_mic(market, stock_data.exchange),
+            as_of_date=as_of_date,
+            benchmark_symbol=_text_or_none(stock_data.benchmark_symbol),
+            benchmark_as_of_date=_last_frame_date(stock_data.benchmark_data),
         ),
-        liquidity_passes=(
-            avg_dollar_volume >= liquidity_floor
-            if liquidity_floor is not None and avg_dollar_volume is not None
-            else None
+        leadership=LeadershipEvidence(
+            benchmark_relative_return_65d=_number_from(setup, "rs_vs_spy_65d"),
+            rs_rating_1m=_finite_float(result.get("rs_rating_1m")),
+            rs_rating_3m=_finite_float(result.get("rs_rating_3m")),
+            rs_line_new_high=_bool_from(setup, "rs_line_new_high"),
+            rs_line_blue_dot=_bool_from(setup, "rs_line_blue_dot"),
         ),
-        feature_status=_text_from(result, "data_status"),
-        is_scannable=_bool_or_none(result.get("is_scannable")),
-        event_calendar_available=event.available,
-        earnings_soon=(
-            _event_is_inside_window(
-                event.value,
-                as_of_date,
-                parameters.earnings_soon_window_days,
-            )
-            if event.available
-            else None
+        trend=TrendEvidence(
+            stage=_integer_or_none(result.get("stage")),
+            ma_alignment=_bool_or_none(result.get("ma_alignment")),
+            invalidation=EvidenceValue(
+                value=invalidation_flags,
+                available=invalidation_flags is not None,
+            ),
         ),
-        setup_ready=_bool_from(setup, "setup_ready"),
-        in_early_zone=_bool_from(setup, "in_early_zone"),
-        extended=_bool_from(setup, "extended_from_pivot"),
-        prior_run_required=False,
-        prior_run_available=False,
-        deterioration_confirmed=False,
-        stewardship_status=None,
+        structure=StructureEvidence(
+            setup_payload_available=setup is not None,
+            primary_pattern=EvidenceValue(
+                value=pattern_primary,
+                available=pattern_primary_available,
+            ),
+            squeeze=_bool_from(setup, "bb_squeeze"),
+            tight_closes_count=_integer_from(setup, "tight_closes_count"),
+            quiet_days_count=_integer_from(setup, "quiet_days_10d"),
+            volume_vs_50d=_number_from(setup, "volume_vs_50d"),
+            volume_dry_up_max=parameters.volume_vs_50d_max_for_ready,
+        ),
+        tradability=TradabilityEvidence(
+            liquidity=EvidenceValue(
+                value=(
+                    avg_dollar_volume >= liquidity_floor
+                    if liquidity_floor is not None and avg_dollar_volume is not None
+                    else None
+                ),
+                available=liquidity_floor is not None
+                and avg_dollar_volume is not None,
+            ),
+            feature_status=_text_from(result, "data_status"),
+            is_scannable=_bool_or_none(result.get("is_scannable")),
+        ),
+        risk=RiskEvidence(
+            event_risk=EvidenceValue(
+                value=(
+                    _event_is_inside_window(
+                        event.value,
+                        as_of_date,
+                        parameters.earnings_soon_window_days,
+                    )
+                    if event.available
+                    else None
+                ),
+                available=event.available,
+            ),
+            setup_ready=_bool_from(setup, "setup_ready"),
+            in_early_zone=_bool_from(setup, "in_early_zone"),
+            extended=_bool_from(setup, "extended_from_pivot"),
+        ),
     )
-    projection = evaluate_opportunity_state(inputs).projection()
-    _projection_metrics(projection)["liquidity_floor_local"] = liquidity_floor
-    return projection
+    assessment = evaluate_opportunity_state(evidence).with_metrics(
+        {"liquidity_floor_local": liquidity_floor}
+    )
+    return serialize_opportunity_projection(assessment)
 
 
 def build_data_limited_projection(
@@ -115,56 +139,46 @@ def build_data_limited_projection(
     liquidity_floor = resolve_default_scan_filters(market).get("minVolume")
     avg_dollar_volume = _finite_float(result.get("avg_dollar_volume"))
 
-    inputs = OpportunityInputs(
-        market=market,
-        mic=SecurityMasterResolver.resolve_exchange_mic(market, stock_data.exchange),
-        as_of_date=as_of_date,
-        benchmark_symbol=_text_or_none(stock_data.benchmark_symbol),
-        benchmark_as_of_date=_last_frame_date(stock_data.benchmark_data),
-        benchmark_relative_return_65d=None,
-        rs_rating_1m=None,
-        rs_rating_3m=None,
-        rs_line_new_high=None,
-        rs_line_blue_dot=None,
-        stage=None,
-        ma_alignment=None,
-        invalidation_evidence_available=False,
-        invalidation_flags=None,
-        setup_payload_available=False,
-        pattern_primary=None,
-        pattern_primary_available=False,
-        squeeze=None,
-        tight_closes_count=None,
-        quiet_days_count=None,
-        volume_vs_50d=None,
-        volume_dry_up_max=None,
-        liquidity_available=(
-            liquidity_floor is not None and avg_dollar_volume is not None
+    evidence = OpportunityEvidence(
+        provenance=ProvenanceEvidence(
+            market=market,
+            mic=SecurityMasterResolver.resolve_exchange_mic(market, stock_data.exchange),
+            as_of_date=as_of_date,
+            benchmark_symbol=_text_or_none(stock_data.benchmark_symbol),
+            benchmark_as_of_date=_last_frame_date(stock_data.benchmark_data),
         ),
-        liquidity_passes=(
-            avg_dollar_volume >= liquidity_floor
-            if liquidity_floor is not None and avg_dollar_volume is not None
-            else None
+        leadership=LeadershipEvidence(None, None, None, None, None),
+        trend=TrendEvidence(None, None, EvidenceValue(None, False)),
+        structure=StructureEvidence(
+            False,
+            EvidenceValue(None, False),
+            None,
+            None,
+            None,
+            None,
+            None,
         ),
-        feature_status=_text_from(result, "data_status"),
-        is_scannable=_bool_or_none(result.get("is_scannable")),
-        event_calendar_available=event.available,
-        earnings_soon=None,
-        setup_ready=None,
-        in_early_zone=None,
-        extended=None,
-        prior_run_required=False,
-        prior_run_available=False,
-        deterioration_confirmed=False,
-        stewardship_status=None,
+        tradability=TradabilityEvidence(
+            liquidity=EvidenceValue(
+                value=(
+                    avg_dollar_volume >= liquidity_floor
+                    if liquidity_floor is not None and avg_dollar_volume is not None
+                    else None
+                ),
+                available=liquidity_floor is not None
+                and avg_dollar_volume is not None,
+            ),
+            feature_status=_text_from(result, "data_status"),
+            is_scannable=_bool_or_none(result.get("is_scannable")),
+        ),
+        risk=RiskEvidence(EvidenceValue(None, event.available), None, None, None),
     )
-    projection = evaluate_opportunity_state(inputs).projection()
-    evidence = projection.get("opportunity_state")
-    if not isinstance(evidence, dict):  # pragma: no cover - evaluator contract guard
-        raise TypeError("Opportunity policy returned no evidence payload")
-    evidence["action_reasons"] = [reason]
-    _projection_metrics(projection)["liquidity_floor_local"] = liquidity_floor
-    return projection
+    assessment = (
+        evaluate_opportunity_state(evidence)
+        .with_action_reasons((reason,))
+        .with_metrics({"liquidity_floor_local": liquidity_floor})
+    )
+    return serialize_opportunity_projection(assessment)
 
 
 def _mapping_or_none(value: object) -> dict[str, object] | None:
@@ -300,16 +314,6 @@ def _invalidation_flags(
             return None
         flags.append(InvalidationEvidence(code=code, is_hard=is_hard))
     return tuple(flags)
-
-
-def _projection_metrics(projection: Mapping[str, object]) -> dict[str, object]:
-    evidence = projection.get("opportunity_state")
-    if not isinstance(evidence, dict):  # pragma: no cover - evaluator contract guard
-        raise TypeError("Opportunity policy returned malformed evidence")
-    metrics = evidence.get("metrics")
-    if not isinstance(metrics, dict):  # pragma: no cover - evaluator contract guard
-        raise TypeError("Opportunity policy returned malformed metrics")
-    return metrics
 
 
 __all__ = ["build_data_limited_projection", "build_opportunity_projection"]

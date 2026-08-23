@@ -11,7 +11,6 @@ from .model import (
     EventDateAvailability,
     InvalidationEvidence,
     OpportunityEvidence,
-    OpportunityInputs,
     OpportunityStateResult,
 )
 
@@ -35,14 +34,11 @@ def normalize_event_date(raw: object, *, key_present: bool) -> EventDateAvailabi
     return EventDateAvailability(None, False, "invalid_next_earnings_date")
 
 
-def evaluate_opportunity_state(
-    inputs: OpportunityEvidence | OpportunityInputs,
-) -> OpportunityStateResult:
+def evaluate_opportunity_state(inputs: OpportunityEvidence) -> OpportunityStateResult:
     """Evaluate one snapshot without consulting external state or market posture."""
-    if isinstance(inputs, OpportunityEvidence):
-        inputs = _legacy_inputs_from_evidence(inputs)
     hard_invalidation = _hard_invalidation(
-        inputs.invalidation_flags, inputs.invalidation_evidence_available
+        inputs.trend.invalidation.value,
+        inputs.trend.invalidation.available,
     )
     benchmark_is_future = _benchmark_is_future(inputs)
     leadership_gate = _leadership_gate(inputs)
@@ -105,70 +101,29 @@ def evaluate_opportunity_state(
         action_reasons=action_reasons,
         metrics=_metrics(inputs, hard_invalidation),
         data_availability=_data_availability(inputs, required_complete, benchmark_is_future),
-        market=inputs.market,
-        mic=inputs.mic,
-        as_of_date=inputs.as_of_date,
-        benchmark_symbol=inputs.benchmark_symbol,
-        benchmark_as_of_date=inputs.benchmark_as_of_date,
-    )
-
-
-def _legacy_inputs_from_evidence(evidence: OpportunityEvidence) -> OpportunityInputs:
-    """Bridge grouped evidence while the pure policy helpers are migrated."""
-    return OpportunityInputs(
-        market=evidence.provenance.market,
-        mic=evidence.provenance.mic,
-        as_of_date=evidence.provenance.as_of_date,
-        benchmark_symbol=evidence.provenance.benchmark_symbol,
-        benchmark_as_of_date=evidence.provenance.benchmark_as_of_date,
-        benchmark_relative_return_65d=evidence.leadership.benchmark_relative_return_65d,
-        rs_rating_1m=evidence.leadership.rs_rating_1m,
-        rs_rating_3m=evidence.leadership.rs_rating_3m,
-        rs_line_new_high=evidence.leadership.rs_line_new_high,
-        rs_line_blue_dot=evidence.leadership.rs_line_blue_dot,
-        stage=evidence.trend.stage,
-        ma_alignment=evidence.trend.ma_alignment,
-        invalidation_evidence_available=evidence.trend.invalidation_evidence_available,
-        invalidation_flags=evidence.trend.invalidation_flags,
-        setup_payload_available=evidence.structure.setup_payload_available,
-        pattern_primary=evidence.structure.pattern_primary,
-        pattern_primary_available=evidence.structure.pattern_primary_available,
-        squeeze=evidence.structure.squeeze,
-        tight_closes_count=evidence.structure.tight_closes_count,
-        quiet_days_count=evidence.structure.quiet_days_count,
-        volume_vs_50d=evidence.structure.volume_vs_50d,
-        volume_dry_up_max=evidence.structure.volume_dry_up_max,
-        liquidity_available=evidence.tradability.liquidity_available,
-        liquidity_passes=evidence.tradability.liquidity_passes,
-        feature_status=evidence.tradability.feature_status,
-        is_scannable=evidence.tradability.is_scannable,
-        event_calendar_available=evidence.risk.event_calendar_available,
-        earnings_soon=evidence.risk.earnings_soon,
-        setup_ready=evidence.risk.setup_ready,
-        in_early_zone=evidence.risk.in_early_zone,
-        extended=evidence.risk.extended,
-        prior_run_required=False,
-        prior_run_available=None,
-        deterioration_confirmed=False,
-        stewardship_status=None,
+        market=inputs.provenance.market,
+        mic=inputs.provenance.mic,
+        as_of_date=inputs.provenance.as_of_date,
+        benchmark_symbol=inputs.provenance.benchmark_symbol,
+        benchmark_as_of_date=inputs.provenance.benchmark_as_of_date,
     )
 
 
 def _required_evidence_complete(
-    inputs: OpportunityInputs,
+    inputs: OpportunityEvidence,
     benchmark_is_future: bool,
     *,
     gates: tuple[bool | None, ...],
 ) -> bool:
     provenance_complete = (
-        bool(inputs.market)
-        and inputs.as_of_date is not None
-        and bool(inputs.benchmark_symbol)
-        and inputs.benchmark_as_of_date is not None
+        bool(inputs.provenance.market)
+        and inputs.provenance.as_of_date is not None
+        and bool(inputs.provenance.benchmark_symbol)
+        and inputs.provenance.benchmark_as_of_date is not None
     )
     event_evidence_complete = (
-        inputs.event_calendar_available is True
-        and inputs.earnings_soon is not None
+        inputs.risk.event_risk.available is True
+        and inputs.risk.event_risk.value is not None
     )
     return (
         not benchmark_is_future
@@ -179,37 +134,48 @@ def _required_evidence_complete(
 
 
 def _score_pillars(
-    inputs: OpportunityInputs, benchmark_is_future: bool
+    inputs: OpportunityEvidence, benchmark_is_future: bool
 ) -> dict[str, float | None]:
     if benchmark_is_future or not _score_inputs_known(inputs):
         return {key: None for key in _SCORE_PILLAR_KEYS}
 
     hard_invalidation = _hard_invalidation(
-        inputs.invalidation_flags, inputs.invalidation_evidence_available
+        inputs.trend.invalidation.value,
+        inputs.trend.invalidation.available,
     )
     leadership = float(
-        (12 if inputs.benchmark_relative_return_65d > 0 else 0)
-        + (8 if inputs.rs_line_new_high or inputs.rs_line_blue_dot else 0)
+        (12 if inputs.leadership.benchmark_relative_return_65d > 0 else 0)
+        + (
+            8
+            if inputs.leadership.rs_line_new_high
+            or inputs.leadership.rs_line_blue_dot
+            else 0
+        )
     )
     multi_horizon = (
-        10 * _clamp(inputs.rs_rating_1m) / 100
-        + 10 * _clamp(inputs.rs_rating_3m) / 100
+        10 * _clamp(inputs.leadership.rs_rating_1m) / 100
+        + 10 * _clamp(inputs.leadership.rs_rating_3m) / 100
     )
     trend = float(
-        8 * (inputs.stage in (1, 2))
-        + 8 * bool(inputs.ma_alignment)
+        8 * (inputs.trend.stage in (1, 2))
+        + 8 * bool(inputs.trend.ma_alignment)
         + 4 * (not hard_invalidation)
     )
     structure = float(
-        8 * bool(inputs.pattern_primary)
-        + 4 * bool(inputs.squeeze)
-        + 3 * (inputs.tight_closes_count >= 3)
-        + 3 * (inputs.quiet_days_count >= 3)
-        + 2 * (inputs.volume_vs_50d <= inputs.volume_dry_up_max)
+        8 * bool(inputs.structure.primary_pattern.value)
+        + 4 * bool(inputs.structure.squeeze)
+        + 3 * (inputs.structure.tight_closes_count >= 3)
+        + 3 * (inputs.structure.quiet_days_count >= 3)
+        + 2
+        * (inputs.structure.volume_vs_50d <= inputs.structure.volume_dry_up_max)
     )
     tradability = float(
-        10 * bool(inputs.liquidity_passes)
-        + 10 * (inputs.feature_status == "complete" and inputs.is_scannable is True)
+        10 * bool(inputs.tradability.liquidity.value)
+        + 10
+        * (
+            inputs.tradability.feature_status == "complete"
+            and inputs.tradability.is_scannable is True
+        )
     )
     return {
         "benchmark_leadership": leadership,
@@ -227,47 +193,55 @@ def _resilience_score(score_pillars: Mapping[str, float | None]) -> float | None
     return round(sum(values), 1)
 
 
-def _score_inputs_known(inputs: OpportunityInputs) -> bool:
+def _score_inputs_known(inputs: OpportunityEvidence) -> bool:
     values = (
-        inputs.benchmark_relative_return_65d,
-        inputs.rs_rating_1m,
-        inputs.rs_rating_3m,
-        inputs.rs_line_new_high,
-        inputs.rs_line_blue_dot,
-        inputs.stage,
-        inputs.ma_alignment,
-        inputs.invalidation_flags,
-        inputs.squeeze,
-        inputs.tight_closes_count,
-        inputs.quiet_days_count,
-        inputs.volume_vs_50d,
-        inputs.volume_dry_up_max,
-        inputs.liquidity_passes,
-        inputs.feature_status,
-        inputs.is_scannable,
+        inputs.leadership.benchmark_relative_return_65d,
+        inputs.leadership.rs_rating_1m,
+        inputs.leadership.rs_rating_3m,
+        inputs.leadership.rs_line_new_high,
+        inputs.leadership.rs_line_blue_dot,
+        inputs.trend.stage,
+        inputs.trend.ma_alignment,
+        inputs.trend.invalidation.value,
+        inputs.structure.squeeze,
+        inputs.structure.tight_closes_count,
+        inputs.structure.quiet_days_count,
+        inputs.structure.volume_vs_50d,
+        inputs.structure.volume_dry_up_max,
+        inputs.tradability.liquidity.value,
+        inputs.tradability.feature_status,
+        inputs.tradability.is_scannable,
     )
     return (
         all(value is not None for value in values)
-        and inputs.invalidation_evidence_available is True
-        and inputs.setup_payload_available is True
-        and inputs.pattern_primary_available is True
-        and inputs.liquidity_available is True
-        and _valid_invalidation_flags(inputs.invalidation_flags)
+        and inputs.trend.invalidation.available is True
+        and inputs.structure.setup_payload_available is True
+        and inputs.structure.primary_pattern.available is True
+        and inputs.tradability.liquidity.available is True
+        and _valid_invalidation_flags(inputs.trend.invalidation.value)
     )
 
 
-def _leadership_gate(inputs: OpportunityInputs) -> bool | None:
+def _leadership_gate(inputs: OpportunityEvidence) -> bool | None:
     benchmark_leadership = (
         None
-        if inputs.benchmark_relative_return_65d is None
-        else inputs.benchmark_relative_return_65d > 0
+        if inputs.leadership.benchmark_relative_return_65d is None
+        else inputs.leadership.benchmark_relative_return_65d > 0
     )
     rs_line_leadership = _tri_or(
-        inputs.rs_line_new_high,
-        inputs.rs_line_blue_dot,
+        inputs.leadership.rs_line_new_high,
+        inputs.leadership.rs_line_blue_dot,
     )
-    one_month = None if inputs.rs_rating_1m is None else inputs.rs_rating_1m >= 80
-    three_month = None if inputs.rs_rating_3m is None else inputs.rs_rating_3m >= 70
+    one_month = (
+        None
+        if inputs.leadership.rs_rating_1m is None
+        else inputs.leadership.rs_rating_1m >= 80
+    )
+    three_month = (
+        None
+        if inputs.leadership.rs_rating_3m is None
+        else inputs.leadership.rs_rating_3m >= 70
+    )
     return _tri_and(
         _tri_or(benchmark_leadership, rs_line_leadership),
         one_month,
@@ -275,51 +249,56 @@ def _leadership_gate(inputs: OpportunityInputs) -> bool | None:
     )
 
 
-def _trend_gate(inputs: OpportunityInputs, hard_invalidation: bool | None) -> bool | None:
-    stage_passes = None if inputs.stage is None else inputs.stage in (1, 2)
+def _trend_gate(inputs: OpportunityEvidence, hard_invalidation: bool | None) -> bool | None:
+    stage_passes = None if inputs.trend.stage is None else inputs.trend.stage in (1, 2)
     invalidation_passes = None if hard_invalidation is None else not hard_invalidation
-    return _tri_and(stage_passes, inputs.ma_alignment, invalidation_passes)
+    return _tri_and(stage_passes, inputs.trend.ma_alignment, invalidation_passes)
 
 
-def _structure_gate(inputs: OpportunityInputs) -> bool | None:
+def _structure_gate(inputs: OpportunityEvidence) -> bool | None:
     pattern_passes = (
-        bool(inputs.pattern_primary)
-        if inputs.pattern_primary_available is True
+        bool(inputs.structure.primary_pattern.value)
+        if inputs.structure.primary_pattern.available is True
         else None
     )
     tight_closes_pass = (
         None
-        if inputs.tight_closes_count is None
-        else inputs.tight_closes_count >= 3
+        if inputs.structure.tight_closes_count is None
+        else inputs.structure.tight_closes_count >= 3
     )
     quiet_days_pass = (
-        None if inputs.quiet_days_count is None else inputs.quiet_days_count >= 3
+        None
+        if inputs.structure.quiet_days_count is None
+        else inputs.structure.quiet_days_count >= 3
     )
     dry_up_pass = (
         None
-        if inputs.volume_vs_50d is None or inputs.volume_dry_up_max is None
-        else inputs.volume_vs_50d <= inputs.volume_dry_up_max
+        if inputs.structure.volume_vs_50d is None
+        or inputs.structure.volume_dry_up_max is None
+        else inputs.structure.volume_vs_50d <= inputs.structure.volume_dry_up_max
     )
     return _tri_or(
         pattern_passes,
-        inputs.squeeze,
+        inputs.structure.squeeze,
         tight_closes_pass,
         quiet_days_pass,
         dry_up_pass,
     )
 
 
-def _liquidity_gate(inputs: OpportunityInputs) -> bool | None:
-    if inputs.liquidity_available is not True:
+def _liquidity_gate(inputs: OpportunityEvidence) -> bool | None:
+    if inputs.tradability.liquidity.available is not True:
         return None
-    return inputs.liquidity_passes
+    return inputs.tradability.liquidity.value
 
 
-def _freshness_gate(inputs: OpportunityInputs) -> bool | None:
+def _freshness_gate(inputs: OpportunityEvidence) -> bool | None:
     status_passes = (
-        None if inputs.feature_status is None else inputs.feature_status == "complete"
+        None
+        if inputs.tradability.feature_status is None
+        else inputs.tradability.feature_status == "complete"
     )
-    return _tri_and(status_passes, inputs.is_scannable)
+    return _tri_and(status_passes, inputs.tradability.is_scannable)
 
 
 def _hard_invalidation(
@@ -336,50 +315,43 @@ def _valid_invalidation_flags(flags: tuple[InvalidationEvidence, ...] | None) ->
     return isinstance(flags, tuple) and all(isinstance(flag, InvalidationEvidence) for flag in flags)
 
 
-def _benchmark_is_future(inputs: OpportunityInputs) -> bool:
+def _benchmark_is_future(inputs: OpportunityEvidence) -> bool:
     return (
-        inputs.as_of_date is not None
-        and inputs.benchmark_as_of_date is not None
-        and inputs.benchmark_as_of_date > inputs.as_of_date
+        inputs.provenance.as_of_date is not None
+        and inputs.provenance.benchmark_as_of_date is not None
+        and inputs.provenance.benchmark_as_of_date > inputs.provenance.as_of_date
     )
 
 
-def _benchmark_is_lagged(inputs: OpportunityInputs) -> bool:
+def _benchmark_is_lagged(inputs: OpportunityEvidence) -> bool:
     return (
-        inputs.as_of_date is not None
-        and inputs.benchmark_as_of_date is not None
-        and inputs.benchmark_as_of_date < inputs.as_of_date
+        inputs.provenance.as_of_date is not None
+        and inputs.provenance.benchmark_as_of_date is not None
+        and inputs.provenance.benchmark_as_of_date < inputs.provenance.as_of_date
     )
 
 
 def _resolve_action_state(
-    inputs: OpportunityInputs,
+    inputs: OpportunityEvidence,
     hard_invalidation: bool | None,
     required_complete: bool,
     benchmark_is_future: bool,
     correction_survivor: bool,
 ) -> tuple[ActionState, tuple[str, ...]]:
     if hard_invalidation is True:
-        return ActionState.EXIT_RISK, _hard_invalidation_reasons(inputs.invalidation_flags)
-    if inputs.deterioration_confirmed is True:
-        return ActionState.DETERIORATING, ("deterioration_confirmed",)
-    if inputs.earnings_soon is True:
-        return ActionState.EVENT_RISK, ("earnings_soon",)
-    if inputs.extended is True:
-        return ActionState.EXTENDED, ("extended",)
-    prior_run_complete = (
-        not inputs.prior_run_required
-        or (
-            inputs.prior_run_available is True
-            and inputs.deterioration_confirmed is not None
+        return ActionState.EXIT_RISK, _hard_invalidation_reasons(
+            inputs.trend.invalidation.value
         )
-    )
-    if not required_complete or inputs.extended is None or not prior_run_complete:
+    if inputs.risk.event_risk.value is True:
+        return ActionState.EVENT_RISK, ("earnings_soon",)
+    if inputs.risk.extended is True:
+        return ActionState.EXTENDED, ("extended",)
+    if not required_complete or inputs.risk.extended is None:
         reasons = ("future_benchmark_date",) if benchmark_is_future else ("required_evidence",)
         return ActionState.DATA_LIMITED, reasons
     if not correction_survivor:
         return ActionState.WATCH, ("watch",)
-    setup_ready = _tri_and(inputs.setup_ready, inputs.in_early_zone)
+    setup_ready = _tri_and(inputs.risk.setup_ready, inputs.risk.in_early_zone)
     if setup_ready is None:
         return ActionState.DATA_LIMITED, ("required_evidence",)
     if setup_ready:
@@ -395,43 +367,43 @@ def _hard_invalidation_reasons(
     return tuple(f"hard_invalidation:{flag.code}" for flag in flags if flag.is_hard)
 
 
-def _metrics(inputs: OpportunityInputs, hard_invalidation: bool | None) -> dict[str, object]:
+def _metrics(inputs: OpportunityEvidence, hard_invalidation: bool | None) -> dict[str, object]:
     return {
-        "benchmark_relative_return_65d": inputs.benchmark_relative_return_65d,
-        "rs_rating_1m": inputs.rs_rating_1m,
-        "rs_rating_3m": inputs.rs_rating_3m,
-        "rs_line_new_high": inputs.rs_line_new_high,
-        "rs_line_blue_dot": inputs.rs_line_blue_dot,
-        "stage": inputs.stage,
-        "ma_alignment": inputs.ma_alignment,
+        "benchmark_relative_return_65d": inputs.leadership.benchmark_relative_return_65d,
+        "rs_rating_1m": inputs.leadership.rs_rating_1m,
+        "rs_rating_3m": inputs.leadership.rs_rating_3m,
+        "rs_line_new_high": inputs.leadership.rs_line_new_high,
+        "rs_line_blue_dot": inputs.leadership.rs_line_blue_dot,
+        "stage": inputs.trend.stage,
+        "ma_alignment": inputs.trend.ma_alignment,
         "hard_invalidation": hard_invalidation,
-        "pattern_primary": inputs.pattern_primary,
-        "squeeze": inputs.squeeze,
-        "tight_closes_count": inputs.tight_closes_count,
-        "quiet_days_count": inputs.quiet_days_count,
-        "volume_vs_50d": inputs.volume_vs_50d,
-        "volume_dry_up_max": inputs.volume_dry_up_max,
-        "liquidity_passes": inputs.liquidity_passes,
-        "feature_status": inputs.feature_status,
-        "is_scannable": inputs.is_scannable,
+        "pattern_primary": inputs.structure.primary_pattern.value,
+        "squeeze": inputs.structure.squeeze,
+        "tight_closes_count": inputs.structure.tight_closes_count,
+        "quiet_days_count": inputs.structure.quiet_days_count,
+        "volume_vs_50d": inputs.structure.volume_vs_50d,
+        "volume_dry_up_max": inputs.structure.volume_dry_up_max,
+        "liquidity_passes": inputs.tradability.liquidity.value,
+        "feature_status": inputs.tradability.feature_status,
+        "is_scannable": inputs.tradability.is_scannable,
     }
 
 
 def _data_availability(
-    inputs: OpportunityInputs, required_complete: bool, benchmark_is_future: bool
+    inputs: OpportunityEvidence, required_complete: bool, benchmark_is_future: bool
 ) -> dict[str, str]:
     return {
         "required_evidence": "complete" if required_complete else "incomplete",
-        "benchmark": "future" if benchmark_is_future else _availability(inputs.benchmark_as_of_date),
-        "invalidation": _availability_flag(inputs.invalidation_evidence_available),
-        "setup": _availability_flag(inputs.setup_payload_available),
-        "liquidity": _availability_flag(inputs.liquidity_available),
-        "event_calendar": _availability_flag(inputs.event_calendar_available),
-        "prior_run": (
-            "not_requested"
-            if not inputs.prior_run_required
-            else _availability_flag(inputs.prior_run_available)
+        "benchmark": "future"
+        if benchmark_is_future
+        else _availability(inputs.provenance.benchmark_as_of_date),
+        "invalidation": _availability_flag(
+            inputs.trend.invalidation.available
         ),
+        "setup": _availability_flag(inputs.structure.setup_payload_available),
+        "liquidity": _availability_flag(inputs.tradability.liquidity.available),
+        "event_calendar": _availability_flag(inputs.risk.event_risk.available),
+        "prior_run": "not_requested",
     }
 
 

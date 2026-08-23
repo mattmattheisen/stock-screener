@@ -1,15 +1,16 @@
 from datetime import date, datetime, timezone
 
 import pytest
+
 import app.domain.scanning.opportunity_state as opportunity_state
 from app.domain.scanning.opportunity_state import (
     ActionState,
     InvalidationEvidence,
-    OpportunityInputs,
     evaluate_opportunity_state,
     normalize_event_date,
     opportunity_result_from_projection,
     overlay_stewardship_state,
+    serialize_opportunity_projection,
 )
 
 
@@ -21,6 +22,7 @@ def test_domain_exposes_grouped_opportunity_evidence_boundary():
     assert hasattr(opportunity_state, "TrendEvidence")
     assert hasattr(opportunity_state, "TradabilityEvidence")
     assert hasattr(opportunity_state, "RiskEvidence")
+    assert hasattr(opportunity_state, "EvidenceValue")
 
 
 def test_policy_evaluates_grouped_evidence_without_flat_input_bag():
@@ -43,13 +45,11 @@ def test_policy_evaluates_grouped_evidence_without_flat_input_bag():
         trend=opportunity_state.TrendEvidence(
             stage=2,
             ma_alignment=True,
-            invalidation_evidence_available=True,
-            invalidation_flags=(),
+            invalidation=opportunity_state.EvidenceValue((), True),
         ),
         structure=opportunity_state.StructureEvidence(
             setup_payload_available=True,
-            pattern_primary="vcp",
-            pattern_primary_available=True,
+            primary_pattern=opportunity_state.EvidenceValue("vcp", True),
             squeeze=True,
             tight_closes_count=3,
             quiet_days_count=3,
@@ -57,14 +57,12 @@ def test_policy_evaluates_grouped_evidence_without_flat_input_bag():
             volume_dry_up_max=0.80,
         ),
         tradability=opportunity_state.TradabilityEvidence(
-            liquidity_available=True,
-            liquidity_passes=True,
+            liquidity=opportunity_state.EvidenceValue(True, True),
             feature_status="complete",
             is_scannable=True,
         ),
         risk=opportunity_state.RiskEvidence(
-            event_calendar_available=True,
-            earnings_soon=False,
+            event_risk=opportunity_state.EvidenceValue(False, True),
             setup_ready=True,
             in_early_zone=True,
             extended=False,
@@ -111,13 +109,61 @@ def complete_inputs(**changes):
         "setup_ready": True,
         "in_early_zone": True,
         "extended": False,
-        "prior_run_required": False,
-        "prior_run_available": False,
-        "deterioration_confirmed": False,
-        "stewardship_status": None,
     }
     values.update(changes)
-    return OpportunityInputs(**values)
+    return opportunity_state.OpportunityEvidence(
+        provenance=opportunity_state.ProvenanceEvidence(
+            market=values["market"],
+            mic=values["mic"],
+            as_of_date=values["as_of_date"],
+            benchmark_symbol=values["benchmark_symbol"],
+            benchmark_as_of_date=values["benchmark_as_of_date"],
+        ),
+        leadership=opportunity_state.LeadershipEvidence(
+            benchmark_relative_return_65d=values["benchmark_relative_return_65d"],
+            rs_rating_1m=values["rs_rating_1m"],
+            rs_rating_3m=values["rs_rating_3m"],
+            rs_line_new_high=values["rs_line_new_high"],
+            rs_line_blue_dot=values["rs_line_blue_dot"],
+        ),
+        trend=opportunity_state.TrendEvidence(
+            stage=values["stage"],
+            ma_alignment=values["ma_alignment"],
+            invalidation=opportunity_state.EvidenceValue(
+                values["invalidation_flags"],
+                values["invalidation_evidence_available"],
+            ),
+        ),
+        structure=opportunity_state.StructureEvidence(
+            setup_payload_available=values["setup_payload_available"],
+            primary_pattern=opportunity_state.EvidenceValue(
+                values["pattern_primary"],
+                values["pattern_primary_available"],
+            ),
+            squeeze=values["squeeze"],
+            tight_closes_count=values["tight_closes_count"],
+            quiet_days_count=values["quiet_days_count"],
+            volume_vs_50d=values["volume_vs_50d"],
+            volume_dry_up_max=values["volume_dry_up_max"],
+        ),
+        tradability=opportunity_state.TradabilityEvidence(
+            liquidity=opportunity_state.EvidenceValue(
+                values["liquidity_passes"],
+                values["liquidity_available"],
+            ),
+            feature_status=values["feature_status"],
+            is_scannable=values["is_scannable"],
+        ),
+        risk=opportunity_state.RiskEvidence(
+            event_risk=opportunity_state.EvidenceValue(
+                values["earnings_soon"],
+                values["event_calendar_available"],
+            ),
+            setup_ready=values["setup_ready"],
+            in_early_zone=values["in_early_zone"],
+            extended=values["extended"],
+        ),
+    )
 
 
 def test_complete_survivor_has_exact_score_and_setup_ready_state():
@@ -129,9 +175,24 @@ def test_complete_survivor_has_exact_score_and_setup_ready_state():
     assert result.action_state is ActionState.SETUP_READY
 
 
+def test_assessment_metrics_are_immutable_and_enriched_by_copy():
+    """Break caught: application services mutating serialized or assessed evidence in place."""
+    result = evaluate_opportunity_state(complete_inputs())
+
+    with pytest.raises(TypeError):
+        result.metrics["liquidity_floor_local"] = 1_000_000
+
+    enriched = result.with_metrics({"liquidity_floor_local": 1_000_000})
+
+    assert "liquidity_floor_local" not in result.metrics
+    assert enriched.metrics["liquidity_floor_local"] == 1_000_000
+
+
 def test_complete_survivor_persists_the_five_canonical_score_pillars():
     """Break caught: a persisted row omits its backend-calculated pillar totals."""
-    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    projection = serialize_opportunity_projection(
+        evaluate_opportunity_state(complete_inputs())
+    )
 
     assert projection["opportunity_state"]["score_pillars"] == {
         "benchmark_leadership": 20.0,
@@ -146,7 +207,6 @@ def test_complete_survivor_persists_the_five_canonical_score_pillars():
     ("changes", "expected"),
     [
         ({"invalidation_flags": (InvalidationEvidence("breaks_50d_support", True),)}, ActionState.EXIT_RISK),
-        ({"deterioration_confirmed": True}, ActionState.DETERIORATING),
         ({"earnings_soon": True}, ActionState.EVENT_RISK),
         ({"extended": True}, ActionState.EXTENDED),
         ({"event_calendar_available": False}, ActionState.DATA_LIMITED),
@@ -183,23 +243,12 @@ def test_missing_invalidation_evidence_remains_unknown_in_metrics():
         (
             {
                 "invalidation_flags": (InvalidationEvidence("failed_base", True),),
-                "deterioration_confirmed": True,
                 "earnings_soon": True,
                 "extended": True,
                 "event_calendar_available": False,
                 "setup_ready": False,
             },
             ActionState.EXIT_RISK,
-        ),
-        (
-            {
-                "deterioration_confirmed": True,
-                "earnings_soon": True,
-                "extended": True,
-                "event_calendar_available": False,
-                "setup_ready": False,
-            },
-            ActionState.DETERIORATING,
         ),
         (
             {
@@ -554,17 +603,6 @@ def test_setup_payload_availability_does_not_override_decidable_survivor_gates()
     assert result.action_state is ActionState.SETUP_READY
 
 
-def test_missing_requested_prior_run_limits_action_state_not_current_survivor_status():
-    """Break caught: allowing optional cross-run stewardship data to change current eligibility."""
-    result = evaluate_opportunity_state(
-        complete_inputs(prior_run_required=True, prior_run_available=False)
-    )
-
-    assert result.correction_survivor is True
-    assert result.action_state is ActionState.DATA_LIMITED
-    assert "required_evidence" not in result.failed_checks
-
-
 @pytest.mark.parametrize("changes", [{"market": None}, {"as_of_date": None}])
 def test_market_and_as_of_provenance_are_required(changes):
     """Break caught: classifying a survivor without its Market or point-in-time row date."""
@@ -607,18 +645,12 @@ def test_known_eligibility_failures_cannot_resolve_setup_ready(changes):
     assert result.action_state is ActionState.WATCH
 
 
-def test_current_only_row_ignores_absent_prior_run_data():
-    """Break caught: requiring cross-run evidence for a current-only state calculation."""
-    result = evaluate_opportunity_state(complete_inputs(prior_run_required=False, prior_run_available=False))
-
-    assert result.correction_survivor is True
-    assert result.action_state is ActionState.SETUP_READY
-
-
 def test_projection_round_trip_preserves_typed_state():
     """Break caught: serializing a typed result into a projection that cannot be restored exactly."""
     original = evaluate_opportunity_state(complete_inputs())
-    restored = opportunity_result_from_projection(original.projection())
+    restored = opportunity_result_from_projection(
+        serialize_opportunity_projection(original)
+    )
 
     assert restored == original
     assert restored.action_state is ActionState.SETUP_READY
@@ -639,7 +671,9 @@ def test_absent_legacy_projection_is_ignored():
 
 def test_malformed_present_projection_is_rejected():
     """Break caught: accepting a present but invalid persisted action state as trusted evidence."""
-    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    projection = serialize_opportunity_projection(
+        evaluate_opportunity_state(complete_inputs())
+    )
     projection["action_state"] = "not-a-real-state"
 
     with pytest.raises(ValueError, match="action_state"):
@@ -648,7 +682,9 @@ def test_malformed_present_projection_is_rejected():
 
 def test_present_projection_rejects_missing_required_evidence_key():
     """Break caught: accepting a truncated present payload as if omitted metadata were a null value."""
-    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    projection = serialize_opportunity_projection(
+        evaluate_opportunity_state(complete_inputs())
+    )
     del projection["opportunity_state"]["market"]
 
     with pytest.raises(ValueError, match="market"):
@@ -667,7 +703,9 @@ def test_present_projection_rejects_missing_required_evidence_key():
 )
 def test_present_projection_rejects_unknown_versioned_keys(mutation):
     """Break caught: silently ignoring schema drift in persisted policy evidence."""
-    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    projection = serialize_opportunity_projection(
+        evaluate_opportunity_state(complete_inputs())
+    )
     mutation(projection)
 
     with pytest.raises(ValueError, match="unexpected"):
@@ -682,7 +720,9 @@ def test_present_projection_rejects_partial_top_level_materialization():
 
 def test_present_projection_rejects_incoherent_score_sum():
     """Break caught: trusting a score that disagrees with its persisted decomposition."""
-    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    projection = serialize_opportunity_projection(
+        evaluate_opportunity_state(complete_inputs())
+    )
     projection["resilience_score"] = 96.0
 
     with pytest.raises(ValueError, match="pillar sum"):
@@ -691,7 +731,9 @@ def test_present_projection_rejects_incoherent_score_sum():
 
 def test_present_projection_rejects_setup_ready_non_survivor():
     """Break caught: accepting an impossible action/eligibility combination from storage."""
-    projection = evaluate_opportunity_state(complete_inputs()).projection()
+    projection = serialize_opportunity_projection(
+        evaluate_opportunity_state(complete_inputs())
+    )
     projection["correction_survivor"] = False
 
     with pytest.raises(ValueError, match="setup_ready"):

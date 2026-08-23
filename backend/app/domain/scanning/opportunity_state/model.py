@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import date
 from enum import Enum
+from types import MappingProxyType
+from typing import Generic, TypeVar
 
 POLICY_VERSION = "correction-survivors-v1"
 SCHEMA_VERSION = 1
@@ -51,6 +54,14 @@ SCORE_PILLAR_KEYS = (
     "liquidity_freshness",
 )
 
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class EvidenceValue(Generic[T]):
+    value: T | None
+    available: bool
+
 
 @dataclass(frozen=True)
 class InvalidationEvidence:
@@ -87,15 +98,13 @@ class LeadershipEvidence:
 class TrendEvidence:
     stage: int | None
     ma_alignment: bool | None
-    invalidation_evidence_available: bool
-    invalidation_flags: tuple[InvalidationEvidence, ...] | None
+    invalidation: EvidenceValue[tuple[InvalidationEvidence, ...]]
 
 
 @dataclass(frozen=True)
 class StructureEvidence:
     setup_payload_available: bool
-    pattern_primary: str | None
-    pattern_primary_available: bool
+    primary_pattern: EvidenceValue[str]
     squeeze: bool | None
     tight_closes_count: int | None
     quiet_days_count: int | None
@@ -105,16 +114,14 @@ class StructureEvidence:
 
 @dataclass(frozen=True)
 class TradabilityEvidence:
-    liquidity_available: bool
-    liquidity_passes: bool | None
+    liquidity: EvidenceValue[bool]
     feature_status: str | None
     is_scannable: bool | None
 
 
 @dataclass(frozen=True)
 class RiskEvidence:
-    event_calendar_available: bool
-    earnings_soon: bool | None
+    event_risk: EvidenceValue[bool]
     setup_ready: bool | None
     in_early_zone: bool | None
     extended: bool | None
@@ -131,69 +138,36 @@ class OpportunityEvidence:
 
 
 @dataclass(frozen=True)
-class OpportunityInputs:
-    """Temporary flat compatibility input; new producers use OpportunityEvidence."""
-
-    market: str | None
-    mic: str | None
-    as_of_date: date | None
-    benchmark_symbol: str | None
-    benchmark_as_of_date: date | None
-    benchmark_relative_return_65d: float | None
-    rs_rating_1m: float | None
-    rs_rating_3m: float | None
-    rs_line_new_high: bool | None
-    rs_line_blue_dot: bool | None
-    stage: int | None
-    ma_alignment: bool | None
-    invalidation_evidence_available: bool | None
-    invalidation_flags: tuple[InvalidationEvidence, ...] | None
-    setup_payload_available: bool | None
-    pattern_primary: str | None
-    pattern_primary_available: bool | None
-    squeeze: bool | None
-    tight_closes_count: int | None
-    quiet_days_count: int | None
-    volume_vs_50d: float | None
-    volume_dry_up_max: float | None
-    liquidity_available: bool | None
-    liquidity_passes: bool | None
-    feature_status: str | None
-    is_scannable: bool | None
-    event_calendar_available: bool | None
-    earnings_soon: bool | None
-    setup_ready: bool | None
-    in_early_zone: bool | None
-    extended: bool | None
-    prior_run_required: bool
-    prior_run_available: bool | None
-    deterioration_confirmed: bool | None
-    stewardship_status: str | None
-
-
-@dataclass(frozen=True)
 class OpportunityAssessment:
     correction_survivor: bool
     resilience_score: float | None
-    score_pillars: dict[str, float | None]
+    score_pillars: Mapping[str, float | None]
     action_state: ActionState
     passed_checks: tuple[str, ...]
     failed_checks: tuple[str, ...]
     warnings: tuple[str, ...]
     action_reasons: tuple[str, ...]
-    metrics: dict[str, object]
-    data_availability: dict[str, str]
+    metrics: Mapping[str, object]
+    data_availability: Mapping[str, str]
     market: str | None
     mic: str | None
     as_of_date: date | None
     benchmark_symbol: str | None
     benchmark_as_of_date: date | None
 
-    def projection(self) -> dict[str, object]:
-        """Compatibility shim for callers migrating to the projection codec."""
-        from .projection import serialize_opportunity_projection
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "score_pillars", MappingProxyType(dict(self.score_pillars)))
+        object.__setattr__(self, "metrics", MappingProxyType(dict(self.metrics)))
+        object.__setattr__(
+            self,
+            "data_availability",
+            MappingProxyType(dict(self.data_availability)),
+        )
 
-        return serialize_opportunity_projection(self)
+    def with_metrics(self, metrics: Mapping[str, object]) -> OpportunityAssessment:
+        return replace(self, metrics={**self.metrics, **metrics})
 
+    def with_action_reasons(self, reasons: tuple[str, ...]) -> OpportunityAssessment:
+        return replace(self, action_reasons=tuple(reasons))
 
 OpportunityStateResult = OpportunityAssessment

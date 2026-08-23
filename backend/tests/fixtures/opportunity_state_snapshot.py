@@ -10,6 +10,9 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from app.contracts.filter_expression import expression_from_payload
 from app.database import Base
 from app.domain.common.query import SortOrder, SortSpec
@@ -17,9 +20,18 @@ from app.domain.scanning.filter_expression_evaluator import evaluate_expression
 from app.domain.scanning.filter_expression_model import FilterExpression
 from app.domain.scanning.legacy_filter_expression import legacy_filters_to_expression
 from app.domain.scanning.opportunity_state import (
+    EvidenceValue,
     InvalidationEvidence,
-    OpportunityInputs,
+    LeadershipEvidence,
+    OpportunityEvidence,
+    ProvenanceEvidence,
+    RiskEvidence,
+    StructureEvidence,
+    TradabilityEvidence,
+    TrendEvidence,
     evaluate_opportunity_state,
+    overlay_stewardship_state,
+    serialize_opportunity_projection,
 )
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
@@ -30,15 +42,13 @@ from app.models.stock_universe import StockUniverse
 from app.schemas.scanning import ScanResultItem
 from app.services.preset_screens import PRESET_SCREENS
 from app.services.static_site_export_service import StaticSiteExportService
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 AS_OF_DATE = date(2026, 8, 21)
 RUN_ID = 1201
 SCAN_ID = "00000000-0000-0000-0000-000000001201"
 
 
-def _complete_inputs(**changes) -> OpportunityInputs:
+def _complete_inputs(**changes) -> OpportunityEvidence:
     values = {
         "market": "US",
         "mic": "XNAS",
@@ -71,16 +81,64 @@ def _complete_inputs(**changes) -> OpportunityInputs:
         "setup_ready": True,
         "in_early_zone": True,
         "extended": False,
-        "prior_run_required": False,
-        "prior_run_available": False,
-        "deterioration_confirmed": False,
-        "stewardship_status": None,
     }
     values.update(changes)
-    return OpportunityInputs(**values)
+    return OpportunityEvidence(
+        provenance=ProvenanceEvidence(
+            values["market"],
+            values["mic"],
+            values["as_of_date"],
+            values["benchmark_symbol"],
+            values["benchmark_as_of_date"],
+        ),
+        leadership=LeadershipEvidence(
+            values["benchmark_relative_return_65d"],
+            values["rs_rating_1m"],
+            values["rs_rating_3m"],
+            values["rs_line_new_high"],
+            values["rs_line_blue_dot"],
+        ),
+        trend=TrendEvidence(
+            values["stage"],
+            values["ma_alignment"],
+            EvidenceValue(
+                values["invalidation_flags"],
+                values["invalidation_evidence_available"],
+            ),
+        ),
+        structure=StructureEvidence(
+            values["setup_payload_available"],
+            EvidenceValue(
+                values["pattern_primary"],
+                values["pattern_primary_available"],
+            ),
+            values["squeeze"],
+            values["tight_closes_count"],
+            values["quiet_days_count"],
+            values["volume_vs_50d"],
+            values["volume_dry_up_max"],
+        ),
+        tradability=TradabilityEvidence(
+            EvidenceValue(
+                values["liquidity_passes"],
+                values["liquidity_available"],
+            ),
+            values["feature_status"],
+            values["is_scannable"],
+        ),
+        risk=RiskEvidence(
+            EvidenceValue(
+                values["earnings_soon"],
+                values["event_calendar_available"],
+            ),
+            values["setup_ready"],
+            values["in_early_zone"],
+            values["extended"],
+        ),
+    )
 
 
-def _opportunity_inputs_by_symbol() -> dict[str, OpportunityInputs]:
+def _opportunity_inputs_by_symbol() -> dict[str, OpportunityEvidence]:
     return {
         "EXIT": _complete_inputs(
             invalidation_flags=(
@@ -90,9 +148,6 @@ def _opportunity_inputs_by_symbol() -> dict[str, OpportunityInputs]:
         "DETERIORATING": _complete_inputs(
             rs_rating_1m=80.0,
             rs_rating_3m=70.0,
-            prior_run_required=True,
-            prior_run_available=True,
-            deterioration_confirmed=True,
         ),
         "EVENT": _complete_inputs(
             benchmark_as_of_date=date(2026, 8, 20),
@@ -261,7 +316,14 @@ def build_parity_snapshot(database_path: Path) -> OpportunityStateParitySnapshot
             )
         )
         for index, (symbol, inputs) in enumerate(opportunity_inputs.items()):
-            projection = evaluate_opportunity_state(inputs).projection()
+            assessment = evaluate_opportunity_state(inputs)
+            if symbol == "DETERIORATING":
+                assessment = overlay_stewardship_state(
+                    assessment,
+                    "deteriorating",
+                    prior_run_available=True,
+                ).with_action_reasons(("deterioration_confirmed",))
+            projection = serialize_opportunity_projection(assessment)
             db.add(
                 StockUniverse(
                     symbol=symbol,
