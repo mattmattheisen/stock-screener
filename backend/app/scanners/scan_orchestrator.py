@@ -5,8 +5,10 @@ Coordinates running multiple screeners on a single stock, with data
 fetched once and shared across all screeners. Combines results and
 calculates composite scores.
 """
+
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from app.analysis.patterns.config import (
@@ -242,6 +244,93 @@ def _insufficient_screener_reason(
     return "Insufficient data from runnable screeners: " + ", ".join(parts)
 
 
+@dataclass(frozen=True)
+class _ScreenerExecution:
+    results: dict[str, ScreenerResult]
+    unavailable: list[str]
+    hard_errors: list[str]
+    insufficient: dict[str, str | None]
+
+
+def _composite_method(value: str) -> CompositeMethod:
+    try:
+        return CompositeMethod(value)
+    except ValueError:
+        logger.warning(
+            "Unknown composite method '%s', defaulting to weighted_average",
+            value,
+        )
+        return CompositeMethod.WEIGHTED_AVERAGE
+
+
+def _partition_screeners(
+    screeners: dict[str, BaseStockScreener],
+    history_bars: int,
+) -> tuple[dict[str, BaseStockScreener], list[str]]:
+    runnable: dict[str, BaseStockScreener] = {}
+    unavailable: list[str] = []
+    for name, screener in screeners.items():
+        if history_bars < _required_bars_for_screener(name):
+            unavailable.append(name)
+        else:
+            runnable[name] = screener
+    return runnable, unavailable
+
+
+def _run_screeners(
+    *,
+    symbol: str,
+    stock_data: StockData,
+    criteria: Optional[Dict],
+    runnable: dict[str, BaseStockScreener],
+    unavailable: list[str],
+) -> _ScreenerExecution:
+    def run_one(
+        name: str,
+        screener: BaseStockScreener,
+    ) -> tuple[str, Optional[ScreenerResult]]:
+        try:
+            result = screener.scan_stock(symbol, stock_data, criteria)
+            logger.info(
+                "%s - %s: score=%.1f, passes=%s, rating=%s",
+                symbol,
+                name,
+                result.score,
+                result.passes,
+                result.rating,
+            )
+            return name, result
+        except Exception as exc:
+            logger.error("Error running %s screener on %s: %s", name, symbol, exc)
+            return name, None
+
+    results: dict[str, ScreenerResult] = {}
+    hard_errors: list[str] = []
+    insufficient: dict[str, str | None] = {}
+    unavailable = list(unavailable)
+    with ThreadPoolExecutor(max_workers=min(len(runnable), 5)) as executor:
+        futures = {
+            executor.submit(run_one, name, screener): name
+            for name, screener in runnable.items()
+        }
+        for future in as_completed(futures):
+            name, result = future.result()
+            if result is None:
+                hard_errors.append(name)
+            elif result.rating == "Insufficient Data":
+                unavailable.append(name)
+                details = result.details if isinstance(result.details, dict) else {}
+                insufficient[name] = details.get("reason") or details.get("error")
+            else:
+                results[name] = result
+    return _ScreenerExecution(
+        results=results,
+        unavailable=unavailable,
+        hard_errors=hard_errors,
+        insufficient=insufficient,
+    )
+
+
 class ScanOrchestrator:
     """
     Orchestrates multi-screener stock analysis.
@@ -285,10 +374,12 @@ class ScanOrchestrator:
 
         screeners = self._registry.get_multiple(screener_names)
         return _requirements_with_rs_line_fields(
-            DataRequirements.merge_all([
-                screener.get_data_requirements(criteria)
-                for screener in screeners.values()
-            ])
+            DataRequirements.merge_all(
+                [
+                    screener.get_data_requirements(criteria)
+                    for screener in screeners.values()
+                ]
+            )
         )
 
     def scan_stock_multi(
@@ -317,252 +408,327 @@ class ScanOrchestrator:
             Dict with combined results from all screeners
         """
         try:
-            # Parse composite_method string defensively
-            try:
-                method_enum = CompositeMethod(composite_method)
-            except ValueError:
-                logger.warning("Unknown composite method '%s', defaulting to weighted_average", composite_method)
-                method_enum = CompositeMethod.WEIGHTED_AVERAGE
-
-            # 1. Filter disabled screeners (silent — no per-symbol warning)
-            if not settings.setup_engine_enabled:
-                screener_names = [n for n in screener_names if n != "setup_engine"]
+            method_enum = _composite_method(composite_method)
+            screener_names = self._enabled_screener_names(screener_names)
             if not screener_names:
-                return {
-                    "symbol": symbol,
-                    "composite_score": 0,
-                    "rating": "Error",
-                    "error": "All requested screeners are disabled",
-                    "current_price": None,
-                    "screeners_run": [],
-                }
+                return self._all_screeners_disabled_result(symbol)
 
-            # 2. Get screener instances from registry
             try:
                 screeners = self._registry.get_multiple(screener_names)
-            except ValueError as e:
-                logger.error(f"Error getting screeners: {e}")
-                return self._error_result(symbol, str(e))
+            except ValueError as exc:
+                logger.error("Error getting screeners: %s", exc)
+                return self._error_result(symbol, str(exc))
 
-            # 2. Get stock data (use pre-fetched if available)
-            if pre_fetched_data:
-                # Use pre-fetched data from batch processing (NO rate limiting!)
-                stock_data = pre_fetched_data
-                logger.debug(f"Using pre-fetched data for {symbol}")
-            else:
-                # Merge requirements and fetch data (legacy path)
-                if pre_merged_requirements:
-                    requirements = _requirements_with_rs_line_fields(pre_merged_requirements)
-                    logger.debug(f"Using pre-merged requirements for {symbol}")
-                else:
-                    requirements = _requirements_with_rs_line_fields(
-                        DataRequirements.merge_all([
-                            screener.get_data_requirements(criteria)
-                            for screener in screeners.values()
-                        ])
-                    )
-                    logger.info(f"Merged data requirements for {symbol}: {requirements}")
-
-                # Fetch data ONCE
-                stock_data = self._data_provider.prepare_data(symbol, requirements)
-
-            if stock_data.rs_source is None and market_rs_resolution is not None:
-                self._data_provider.apply_market_rs_resolution(
-                    {stock_data.symbol.strip().upper(): stock_data},
-                    market_rs_resolution,
-                )
-            elif stock_data.rs_source is None and self._market_rs_reader is not None:
-                resolution = self._market_rs_reader.get(
-                    market=str(stock_data.market or "US").strip().upper(),
-                    symbols=(stock_data.symbol.strip().upper(),),
-                    as_of_date=None,
-                    formula_version=None,
-                )
-                self._data_provider.apply_market_rs_resolution(
-                    {stock_data.symbol.strip().upper(): stock_data}, resolution
-                )
+            stock_data = self._prepare_stock_data(
+                symbol=symbol,
+                screeners=screeners,
+                criteria=criteria,
+                pre_merged_requirements=pre_merged_requirements,
+                pre_fetched_data=pre_fetched_data,
+                market_rs_resolution=market_rs_resolution,
+            )
 
             history_bars = _history_bar_count(stock_data)
-
-            if stock_data.precomputed_scan_context is None and history_bars > 0:
-                try:
-                    stock_data.precomputed_scan_context = _build_precomputed_scan_context(stock_data)
-                except CanonicalStockRsUnavailable as exc:
-                    return self._insufficient_data_result(
-                        symbol,
-                        stock_data,
-                        composite_method=composite_method,
-                        history_bars=history_bars,
-                        applicable_screeners=[],
-                        unavailable_screeners=screener_names,
-                        reason=str(exc),
-                    )
-
-            unavailable_screeners: list[str] = []
-            runnable_screeners: dict[str, BaseStockScreener] = {}
-            for name, screener in screeners.items():
-                if history_bars < _required_bars_for_screener(name):
-                    unavailable_screeners.append(name)
-                    continue
-                runnable_screeners[name] = screener
-
-            if history_bars < LISTING_ONLY_MIN_BARS or not runnable_screeners:
-                return self._insufficient_data_result(
-                    symbol,
-                    stock_data,
-                    composite_method=composite_method,
-                    history_bars=history_bars,
-                    applicable_screeners=[],
-                    unavailable_screeners=screener_names,
-                    reason=stock_data.get_error_summary() or "Insufficient price history",
-                )
-
-            # 5. Run applicable screeners in parallel on the same data
-            screener_results: Dict[str, ScreenerResult] = {}
-            hard_error_screeners: list[str] = []
-            insufficient_screeners: dict[str, str | None] = {}
-
-            def run_screener(name: str, screener: BaseStockScreener) -> tuple[str, Optional[ScreenerResult]]:
-                """Run a single screener and return (name, result) tuple."""
-                try:
-                    result = screener.scan_stock(symbol, stock_data, criteria)
-                    logger.info(
-                        f"{symbol} - {name}: score={result.score:.1f}, "
-                        f"passes={result.passes}, rating={result.rating}"
-                    )
-                    return (name, result)
-                except Exception as e:
-                    logger.error(f"Error running {name} screener on {symbol}: {e}")
-                    return (name, None)
-
-            # Execute screeners in parallel (max 5 workers for 5 screeners)
-            with ThreadPoolExecutor(max_workers=min(len(runnable_screeners), 5)) as executor:
-                # Submit all screener tasks
-                futures = {
-                    executor.submit(run_screener, name, screener): name
-                    for name, screener in runnable_screeners.items()
-                }
-
-                # Collect results as they complete
-                for future in as_completed(futures):
-                    name, result = future.result()
-                    if result is None:
-                        hard_error_screeners.append(name)
-                    elif result.rating == "Insufficient Data":
-                        unavailable_screeners.append(name)
-                        details = result.details if isinstance(result.details, dict) else {}
-                        insufficient_screeners[name] = (
-                            details.get("reason")
-                            or details.get("error")
-                        )
-                    else:
-                        screener_results[name] = result
-
-            if hard_error_screeners:
-                failed_screeners = ", ".join(sorted(hard_error_screeners))
-                return self._error_result(
-                    symbol,
-                    f"Screener execution failed: {failed_screeners}",
-                )
-
-            if insufficient_screeners:
-                return self._insufficient_data_result(
-                    symbol,
-                    stock_data,
-                    composite_method=composite_method,
-                    history_bars=history_bars,
-                    applicable_screeners=[
-                        name for name in screener_names if name in screener_results
-                    ],
-                    unavailable_screeners=[
-                        name for name in screener_names if name in unavailable_screeners
-                    ],
-                    reason=_insufficient_screener_reason(insufficient_screeners),
-                )
-
-            if not screener_results:
-                return self._insufficient_data_result(
-                    symbol,
-                    stock_data,
-                    composite_method=composite_method,
-                    history_bars=history_bars,
-                    applicable_screeners=[],
-                    unavailable_screeners=screener_names,
-                    reason=stock_data.get_error_summary() or "Insufficient data for applicable screeners",
-                )
-
-            # 6. Calculate composite score using domain functions
-            domain_outputs = {name: _to_domain_output(name, r) for name, r in screener_results.items()}
-            composite_score = calculate_composite_score(domain_outputs, method_enum)
-            ipo_score = screener_results.get("ipo").score if screener_results.get("ipo") is not None else None
-            ipo_bonus = _compute_ipo_bonus(ipo_score, history_bars)
-            composite_reason = None
-            scan_mode = "full"
-            data_status = "complete"
-            if history_bars < FULL_SCAN_MIN_BARS:
-                scan_mode = _scan_mode_for_history(history_bars)
-                data_status = "insufficient_history"
-                if ipo_bonus > 0:
-                    composite_score = min(100.0, composite_score + ipo_bonus)
-                    composite_reason = "ipo_uplift"
-
-            # 7. Determine overall rating
-            rating_category = calculate_overall_rating(composite_score, domain_outputs)
-
-            # 7b. Apply quality-aware fallback (T4): low completeness scores
-            #     downgrade or exclude the rating. Tie-break behaviour is
-            #     documented in scoring.py; we expose field_completeness_score
-            #     in the result so consumers can use it as a secondary sort.
-            completeness = None
-            if stock_data.fundamentals:
-                completeness = stock_data.fundamentals.get(
-                    "field_completeness_score"
-                )
-            adjustment = apply_quality_policy(rating_category, completeness)
-            overall_rating = adjustment.rating.value
-
-            # 8. Combine results
-            opportunity_parameters = build_setup_engine_parameters(
-                (criteria or {}).get("setup_engine_parameters")
+            context_error = self._prepare_scan_context(
+                symbol=symbol,
+                stock_data=stock_data,
+                composite_method=composite_method,
+                history_bars=history_bars,
+                screener_names=screener_names,
             )
-            combined_result = self._result_assembler.assemble(
-                ScanResultAssemblyRequest(
-                    symbol=symbol,
-                    stock_data=stock_data,
-                    screener_results=screener_results,
-                    composite_score=composite_score,
-                    overall_rating=overall_rating,
-                    composite_method=composite_method,
-                    applicable_screeners=tuple(
-                        name
-                        for name in screener_names
-                        if name in screener_results
-                    ),
-                    unavailable_screeners=tuple(
-                        name
-                        for name in screener_names
-                        if name in unavailable_screeners
-                    ),
-                    history_bars=history_bars,
-                    scan_mode=scan_mode,
-                    data_status=data_status,
-                    is_scannable=True,
-                    ipo_bonus=ipo_bonus,
-                    composite_reason=composite_reason,
-                    quality_downgrade_reason=adjustment.reason,
-                    field_completeness_score=completeness,
-                    opportunity_parameters=opportunity_parameters,
-                )
+            if context_error is not None:
+                return context_error
+
+            runnable, unavailable = _partition_screeners(screeners, history_bars)
+            preparation_error = self._pre_execution_result(
+                symbol=symbol,
+                stock_data=stock_data,
+                composite_method=composite_method,
+                history_bars=history_bars,
+                screener_names=screener_names,
+                runnable=runnable,
             )
-            if data_status == "insufficient_history":
-                for key, value in partial_history_metrics(stock_data).items():
-                    combined_result.setdefault(key, value)
+            if preparation_error is not None:
+                return preparation_error
 
-            return combined_result
+            execution = _run_screeners(
+                symbol=symbol,
+                stock_data=stock_data,
+                criteria=criteria,
+                runnable=runnable,
+                unavailable=unavailable,
+            )
+            execution_error = self._post_execution_result(
+                symbol=symbol,
+                stock_data=stock_data,
+                composite_method=composite_method,
+                history_bars=history_bars,
+                screener_names=screener_names,
+                execution=execution,
+            )
+            if execution_error is not None:
+                return execution_error
 
-        except Exception as e:
-            logger.error(f"Error orchestrating scan for {symbol}: {e}")
-            return self._error_result(symbol, str(e))
+            return self._assemble_success_result(
+                symbol=symbol,
+                stock_data=stock_data,
+                criteria=criteria,
+                composite_method=composite_method,
+                method_enum=method_enum,
+                history_bars=history_bars,
+                screener_names=screener_names,
+                execution=execution,
+            )
+
+        except Exception as exc:
+            logger.error("Error orchestrating scan for %s: %s", symbol, exc)
+            return self._error_result(symbol, str(exc))
+
+    @staticmethod
+    def _enabled_screener_names(screener_names: List[str]) -> List[str]:
+        if settings.setup_engine_enabled:
+            return screener_names
+        return [name for name in screener_names if name != "setup_engine"]
+
+    @staticmethod
+    def _all_screeners_disabled_result(symbol: str) -> Dict:
+        return {
+            "symbol": symbol,
+            "composite_score": 0,
+            "rating": "Error",
+            "error": "All requested screeners are disabled",
+            "current_price": None,
+            "screeners_run": [],
+        }
+
+    def _prepare_stock_data(
+        self,
+        *,
+        symbol: str,
+        screeners: dict[str, BaseStockScreener],
+        criteria: Optional[Dict],
+        pre_merged_requirements: Optional[DataRequirements],
+        pre_fetched_data: Optional[StockData],
+        market_rs_resolution: MarketRsResolution | None,
+    ) -> StockData:
+        if pre_fetched_data is not None:
+            stock_data = pre_fetched_data
+            logger.debug("Using pre-fetched data for %s", symbol)
+        else:
+            requirements = self._scan_requirements(
+                symbol=symbol,
+                screeners=screeners,
+                criteria=criteria,
+                pre_merged_requirements=pre_merged_requirements,
+            )
+            stock_data = self._data_provider.prepare_data(symbol, requirements)
+        self._apply_market_rs(stock_data, market_rs_resolution)
+        return stock_data
+
+    @staticmethod
+    def _scan_requirements(
+        *,
+        symbol: str,
+        screeners: dict[str, BaseStockScreener],
+        criteria: Optional[Dict],
+        pre_merged_requirements: Optional[DataRequirements],
+    ) -> DataRequirements:
+        if pre_merged_requirements is not None:
+            logger.debug("Using pre-merged requirements for %s", symbol)
+            return _requirements_with_rs_line_fields(pre_merged_requirements)
+        requirements = _requirements_with_rs_line_fields(
+            DataRequirements.merge_all(
+                [
+                    screener.get_data_requirements(criteria)
+                    for screener in screeners.values()
+                ]
+            )
+        )
+        logger.info("Merged data requirements for %s: %s", symbol, requirements)
+        return requirements
+
+    def _apply_market_rs(
+        self,
+        stock_data: StockData,
+        market_rs_resolution: MarketRsResolution | None,
+    ) -> None:
+        if stock_data.rs_source is not None:
+            return
+        resolution = market_rs_resolution
+        if resolution is None and self._market_rs_reader is not None:
+            resolution = self._market_rs_reader.get(
+                market=str(stock_data.market or "US").strip().upper(),
+                symbols=(stock_data.symbol.strip().upper(),),
+                as_of_date=None,
+                formula_version=None,
+            )
+        if resolution is not None:
+            self._data_provider.apply_market_rs_resolution(
+                {stock_data.symbol.strip().upper(): stock_data},
+                resolution,
+            )
+
+    def _prepare_scan_context(
+        self,
+        *,
+        symbol: str,
+        stock_data: StockData,
+        composite_method: str,
+        history_bars: int,
+        screener_names: List[str],
+    ) -> Dict | None:
+        if stock_data.precomputed_scan_context is not None or history_bars == 0:
+            return None
+        try:
+            stock_data.precomputed_scan_context = _build_precomputed_scan_context(
+                stock_data
+            )
+        except CanonicalStockRsUnavailable as exc:
+            return self._insufficient_data_result(
+                symbol,
+                stock_data,
+                composite_method=composite_method,
+                history_bars=history_bars,
+                applicable_screeners=[],
+                unavailable_screeners=screener_names,
+                reason=str(exc),
+            )
+        return None
+
+    def _pre_execution_result(
+        self,
+        *,
+        symbol: str,
+        stock_data: StockData,
+        composite_method: str,
+        history_bars: int,
+        screener_names: List[str],
+        runnable: dict[str, BaseStockScreener],
+    ) -> Dict | None:
+        if history_bars >= LISTING_ONLY_MIN_BARS and runnable:
+            return None
+        return self._insufficient_data_result(
+            symbol,
+            stock_data,
+            composite_method=composite_method,
+            history_bars=history_bars,
+            applicable_screeners=[],
+            unavailable_screeners=screener_names,
+            reason=stock_data.get_error_summary() or "Insufficient price history",
+        )
+
+    def _post_execution_result(
+        self,
+        *,
+        symbol: str,
+        stock_data: StockData,
+        composite_method: str,
+        history_bars: int,
+        screener_names: List[str],
+        execution: _ScreenerExecution,
+    ) -> Dict | None:
+        if execution.hard_errors:
+            failed = ", ".join(sorted(execution.hard_errors))
+            return self._error_result(symbol, f"Screener execution failed: {failed}")
+        if execution.insufficient:
+            return self._insufficient_data_result(
+                symbol,
+                stock_data,
+                composite_method=composite_method,
+                history_bars=history_bars,
+                applicable_screeners=[
+                    name for name in screener_names if name in execution.results
+                ],
+                unavailable_screeners=[
+                    name for name in screener_names if name in execution.unavailable
+                ],
+                reason=_insufficient_screener_reason(execution.insufficient),
+            )
+        if execution.results:
+            return None
+        return self._insufficient_data_result(
+            symbol,
+            stock_data,
+            composite_method=composite_method,
+            history_bars=history_bars,
+            applicable_screeners=[],
+            unavailable_screeners=screener_names,
+            reason=(
+                stock_data.get_error_summary()
+                or "Insufficient data for applicable screeners"
+            ),
+        )
+
+    def _assemble_success_result(
+        self,
+        *,
+        symbol: str,
+        stock_data: StockData,
+        criteria: Optional[Dict],
+        composite_method: str,
+        method_enum: CompositeMethod,
+        history_bars: int,
+        screener_names: List[str],
+        execution: _ScreenerExecution,
+    ) -> Dict:
+        domain_outputs = {
+            name: _to_domain_output(name, result)
+            for name, result in execution.results.items()
+        }
+        composite_score = calculate_composite_score(domain_outputs, method_enum)
+        ipo_result = execution.results.get("ipo")
+        ipo_bonus = _compute_ipo_bonus(
+            ipo_result.score if ipo_result is not None else None,
+            history_bars,
+        )
+        scan_mode = "full"
+        data_status = "complete"
+        composite_reason = None
+        if history_bars < FULL_SCAN_MIN_BARS:
+            scan_mode = _scan_mode_for_history(history_bars)
+            data_status = "insufficient_history"
+            if ipo_bonus > 0:
+                composite_score = min(100.0, composite_score + ipo_bonus)
+                composite_reason = "ipo_uplift"
+
+        rating = calculate_overall_rating(composite_score, domain_outputs)
+        completeness = (
+            stock_data.fundamentals.get("field_completeness_score")
+            if stock_data.fundamentals
+            else None
+        )
+        adjustment = apply_quality_policy(rating, completeness)
+        result = self._result_assembler.assemble(
+            ScanResultAssemblyRequest(
+                symbol=symbol,
+                stock_data=stock_data,
+                screener_results=execution.results,
+                composite_score=composite_score,
+                overall_rating=adjustment.rating.value,
+                composite_method=composite_method,
+                applicable_screeners=tuple(
+                    name for name in screener_names if name in execution.results
+                ),
+                unavailable_screeners=tuple(
+                    name for name in screener_names if name in execution.unavailable
+                ),
+                history_bars=history_bars,
+                scan_mode=scan_mode,
+                data_status=data_status,
+                is_scannable=True,
+                ipo_bonus=ipo_bonus,
+                composite_reason=composite_reason,
+                quality_downgrade_reason=adjustment.reason,
+                field_completeness_score=completeness,
+                opportunity_parameters=build_setup_engine_parameters(
+                    (criteria or {}).get("setup_engine_parameters")
+                ),
+            )
+        )
+        if data_status == "insufficient_history":
+            for key, value in partial_history_metrics(stock_data).items():
+                result.setdefault(key, value)
+        return result
 
     def _error_result(self, symbol: str, error: str) -> Dict:
         """Return result for errors."""
@@ -618,7 +784,9 @@ class ScanOrchestrator:
             **market_rs_audit_fields(stock_data),
             "details": {
                 "screeners": {},
-                "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None,
+                "data_errors": stock_data.fetch_errors
+                if stock_data.fetch_errors
+                else None,
                 **market_rs_audit_fields(stock_data),
             },
         }
