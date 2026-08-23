@@ -4,7 +4,6 @@ from datetime import date
 
 import pandas as pd
 import pytest
-
 from app.analysis.patterns.config import SetupEngineParameters
 from app.scanners.base_screener import StockData
 from app.services.opportunity_state_service import (
@@ -28,7 +27,9 @@ def stock_data() -> StockData:
         symbol="TEST",
         price_data=price_data,
         benchmark_data=benchmark_data,
-        fundamentals={"next_earnings_date": None},
+        fundamentals={},
+        next_earnings_date=None,
+        event_calendar_available=True,
         market="US",
         exchange="NASDAQ",
         benchmark_symbol="SPY",
@@ -97,7 +98,7 @@ def test_missing_event_key_is_data_limited(
     result: dict[str, object],
 ):
     """Break caught: treating an unavailable calendar as known no-event evidence."""
-    stock_data.fundamentals.pop("next_earnings_date", None)
+    stock_data.event_calendar_available = False
 
     projection = build_opportunity_projection(
         result, stock_data, SetupEngineParameters()
@@ -112,6 +113,10 @@ def test_present_null_event_is_available_and_does_not_invent_event_risk(
     result: dict[str, object],
 ):
     """Break caught: conflating an available calendar with no event and a missing calendar."""
+    stock_data.fundamentals = {}
+    stock_data.event_calendar_available = True
+    stock_data.next_earnings_date = None
+
     projection = build_opportunity_projection(
         result, stock_data, SetupEngineParameters()
     )
@@ -125,7 +130,7 @@ def test_event_inside_window_has_event_risk_precedence(
     result: dict[str, object],
 ):
     """Break caught: failing to compare the normalized event against the row as-of date."""
-    stock_data.fundamentals["next_earnings_date"] = date(2026, 8, 28)
+    stock_data.next_earnings_date = date(2026, 8, 28)
 
     projection = build_opportunity_projection(
         result,
@@ -253,7 +258,7 @@ def test_data_limited_projection_preserves_identity_and_safe_reason(
     result: dict[str, object],
 ):
     """Break caught: returning an unstructured fallback or leaking exception text."""
-    stock_data.fundamentals["next_earnings_date"] = date(2026, 8, 21)
+    stock_data.next_earnings_date = date(2026, 8, 21)
     projection = build_data_limited_projection(
         result,
         stock_data,

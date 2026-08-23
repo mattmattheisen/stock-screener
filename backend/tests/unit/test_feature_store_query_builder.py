@@ -5,8 +5,9 @@ have the expected entries, and that se_* fields are consistent
 between scan_result_query and feature_store_query.
 """
 
-import pytest
+from typing import ClassVar
 
+import pytest
 from app.infra.query import scan_result_query as srq
 from app.infra.query.feature_store_query import (
     _FIELD_BINDINGS,
@@ -43,7 +44,7 @@ _JSON_SORT_NUMERIC = _json_sort_numeric(_FIELD_BINDINGS)
 class TestSetupEngineFieldCoverage:
     """Verify all setup_engine query fields are registered."""
 
-    SE_NUMERIC_FIELDS = [
+    SE_NUMERIC_FIELDS: ClassVar[list[str]] = [
         "se_setup_score", "se_quality_score", "se_readiness_score",
         "se_pattern_confidence", "se_pivot_price", "se_distance_to_pivot_pct",
         "se_base_length_weeks", "se_base_depth_pct", "se_support_tests_count",
@@ -54,7 +55,7 @@ class TestSetupEngineFieldCoverage:
         "se_rs_vs_spy_65d", "se_rs_vs_spy_trend_20d",
     ]
 
-    SE_BOOLEAN_FIELDS = [
+    SE_BOOLEAN_FIELDS: ClassVar[list[str]] = [
         "se_setup_ready",
         "se_rs_line_new_high",
         "se_in_early_zone",
@@ -62,9 +63,11 @@ class TestSetupEngineFieldCoverage:
         "se_bb_squeeze",
     ]
 
-    SE_STRING_FIELDS = ["se_pattern_primary", "se_pivot_type"]
+    SE_STRING_FIELDS: ClassVar[list[str]] = ["se_pattern_primary", "se_pivot_type"]
 
-    SE_ALL_FIELDS = SE_NUMERIC_FIELDS + SE_BOOLEAN_FIELDS + SE_STRING_FIELDS
+    SE_ALL_FIELDS: ClassVar[list[str]] = (
+        SE_NUMERIC_FIELDS + SE_BOOLEAN_FIELDS + SE_STRING_FIELDS
+    )
 
     @pytest.mark.parametrize("field", SE_ALL_FIELDS)
     def test_se_field_in_json_field_map(self, field):
@@ -107,7 +110,7 @@ class TestJsonSortNumericConsistency:
 
 
 class TestOpportunityFieldCoverage:
-    EXPECTED_PATHS = {
+    EXPECTED_PATHS: ClassVar[dict[str, tuple[str, ...]]] = {
         "correction_survivor": ("correction_survivor",),
         "resilience_score": ("resilience_score",),
         "action_state": ("action_state",),

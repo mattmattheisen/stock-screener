@@ -8,19 +8,28 @@ performance when running multiple screeners on the same stock.
 import logging
 import random
 import time
-from typing import List, Dict, Optional
+from datetime import date
+from typing import Dict, List, Optional
+
 import pandas as pd
 
-from .base_screener import DataRequirements, StockData
-from .criteria.relative_strength import RelativeStrengthCalculator
 from ..domain.common.errors import DataFetchError
 from ..domain.scanning.ports import LegacyMarketRsSource, MarketRsResolution
-from ..services.benchmark_cache_service import BenchmarkCacheService, BenchmarkDataBundle
+from ..services.benchmark_cache_service import (
+    BenchmarkCacheService,
+    BenchmarkDataBundle,
+)
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
 from ..services.rate_limiter import RateLimitTimeoutError
-from ..services.security_master_service import SecurityMasterResolver, security_master_resolver
+from ..services.security_master_service import (
+    SecurityMasterResolver,
+    security_master_resolver,
+)
+from ..services.stock_event_context_service import StockEventContextService
 from ..wiring.bootstrap import get_rate_limiter, get_yfinance_service
+from .base_screener import DataRequirements, StockData
+from .criteria.relative_strength import RelativeStrengthCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +51,7 @@ class DataPreparationLayer:
         price_cache: PriceCacheService,
         benchmark_cache: BenchmarkCacheService,
         fundamentals_cache: FundamentalsCacheService,
+        event_context_service: StockEventContextService | None = None,
         max_retries: int = 0,
         retry_base_delay: float = 1.0,
         defer_market_rs_resolution: bool = False,
@@ -50,6 +60,9 @@ class DataPreparationLayer:
         self.price_cache = price_cache
         self.benchmark_cache = benchmark_cache
         self.fundamentals_cache = fundamentals_cache
+        self.event_context_service = event_context_service or StockEventContextService(
+            price_cache=price_cache
+        )
         self._max_retries = max_retries
         self._retry_base_delay = retry_base_delay
         self._defer_market_rs_resolution = defer_market_rs_resolution
@@ -57,6 +70,36 @@ class DataPreparationLayer:
         self._rate_limiter = get_rate_limiter()
         self._security_master = security_master_resolver
         self._rs_calc = RelativeStrengthCalculator()
+
+    @staticmethod
+    def _as_of_date(price_data: pd.DataFrame | None) -> date | None:
+        if price_data is None or price_data.empty:
+            return None
+        try:
+            return pd.Timestamp(price_data.index[-1]).date()
+        except (TypeError, ValueError):
+            return None
+
+    def _prepare_event_calendar(
+        self,
+        *,
+        symbol: str,
+        price_data: pd.DataFrame | None,
+        requirements: DataRequirements,
+        fetch_errors: dict[str, str],
+    ) -> tuple[date | None, bool]:
+        if not requirements.needs_event_calendar:
+            return None, False
+        try:
+            next_earnings_date, _ = self.event_context_service.get_next_earnings_summary(
+                symbol,
+                as_of_date=self._as_of_date(price_data),
+            )
+            return next_earnings_date, True
+        except Exception as exc:
+            logger.warning("Error fetching event calendar for %s: %s", symbol, exc)
+            fetch_errors["event_calendar"] = str(exc)
+            return None, False
 
     def _resolve_identity(self, symbol: str):
         resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
@@ -409,6 +452,13 @@ class DataPreparationLayer:
         # CANSLIM now uses eps_growth_yy from fundamentals instead
         earnings_history = None
 
+        next_earnings_date, event_calendar_available = self._prepare_event_calendar(
+            symbol=canonical_symbol,
+            price_data=price_data,
+            requirements=requirements,
+            fetch_errors=fetch_errors,
+        )
+
         # Create StockData container
         stock_data = StockData(
             symbol=canonical_symbol,
@@ -417,6 +467,8 @@ class DataPreparationLayer:
             fundamentals=fundamentals,
             quarterly_growth=quarterly_growth,
             earnings_history=earnings_history,
+            next_earnings_date=next_earnings_date,
+            event_calendar_available=event_calendar_available,
             benchmark_symbol=(
                 benchmark_bundle.benchmark_symbol
                 if benchmark_bundle is not None
@@ -604,6 +656,15 @@ class DataPreparationLayer:
             # CANSLIM now uses eps_growth_yy from fundamentals instead
             earnings_history = None
 
+            next_earnings_date, event_calendar_available = (
+                self._prepare_event_calendar(
+                    symbol=symbol,
+                    price_data=price_data,
+                    requirements=requirements,
+                    fetch_errors=fetch_errors,
+                )
+            )
+
             # Create StockData
             market_benchmark_bundle = (
                 benchmark_bundle_by_market.get(normalized_market)
@@ -632,6 +693,8 @@ class DataPreparationLayer:
                 fundamentals=fundamentals,
                 quarterly_growth=quarterly_growth,
                 earnings_history=earnings_history,
+                next_earnings_date=next_earnings_date,
+                event_calendar_available=event_calendar_available,
                 benchmark_symbol=(
                     market_benchmark_bundle.benchmark_symbol
                     if market_benchmark_bundle is not None
@@ -691,6 +754,7 @@ class DataPreparationLayer:
         """
         try:
             import yfinance as yf
+
             from ..config import settings
             self._rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
 

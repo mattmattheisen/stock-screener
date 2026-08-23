@@ -1,5 +1,6 @@
 """Versioned HTTP contract for persisted opportunity-state evidence."""
 
+import math
 from collections.abc import Mapping
 from typing import Any, Literal
 
@@ -22,6 +23,8 @@ def _validate_optional_json_number(value: object, name: str) -> None:
         return
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a number or null")
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
 
 
 def validate_opportunity_projection_input(data: Any) -> Any:

@@ -196,11 +196,11 @@ def _required_bars_for_screener(name: str) -> int:
     return _SCREENER_MIN_BARS.get(name, _DEFAULT_SCREENER_MIN_BARS)
 
 
-def _requirements_with_rs_line_fields(
+def _requirements_with_opportunity_state_fields(
     requirements: DataRequirements,
 ) -> DataRequirements:
-    """Row-level RS leadership fields need benchmark data for every scan row."""
-    if requirements.needs_benchmark:
+    """Opportunity rows need benchmark leadership and event-calendar context."""
+    if requirements.needs_benchmark and requirements.needs_event_calendar:
         return requirements
     return DataRequirements(
         price_period=requirements.price_period,
@@ -208,6 +208,7 @@ def _requirements_with_rs_line_fields(
         needs_quarterly_growth=requirements.needs_quarterly_growth,
         needs_benchmark=True,
         needs_earnings_history=requirements.needs_earnings_history,
+        needs_event_calendar=True,
     )
 
 
@@ -373,7 +374,7 @@ class ScanOrchestrator:
             return DataRequirements()
 
         screeners = self._registry.get_multiple(screener_names)
-        return _requirements_with_rs_line_fields(
+        return _requirements_with_opportunity_state_fields(
             DataRequirements.merge_all(
                 [
                     screener.get_data_requirements(criteria)
@@ -535,8 +536,8 @@ class ScanOrchestrator:
     ) -> DataRequirements:
         if pre_merged_requirements is not None:
             logger.debug("Using pre-merged requirements for %s", symbol)
-            return _requirements_with_rs_line_fields(pre_merged_requirements)
-        requirements = _requirements_with_rs_line_fields(
+            return _requirements_with_opportunity_state_fields(pre_merged_requirements)
+        requirements = _requirements_with_opportunity_state_fields(
             DataRequirements.merge_all(
                 [
                     screener.get_data_requirements(criteria)

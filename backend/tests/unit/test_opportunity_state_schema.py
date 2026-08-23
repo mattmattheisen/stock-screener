@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-from pydantic import ValidationError
+import math
 
 import app.schemas.opportunity_state as opportunity_schema
+import pytest
 from app.domain.scanning.models import ScanResultItemDomain
 from app.domain.scanning.opportunity_state.model import (
     OPPORTUNITY_PROJECTION_KEYS as DOMAIN_PROJECTION_KEYS,
@@ -16,6 +16,7 @@ from app.domain.scanning.opportunity_state.model import (
 from app.schemas.opportunity_state import OpportunityStateResponse
 from app.schemas.scanning import ScanResultItem
 from app.schemas.user_watchlist import WatchlistStewardshipItem
+from pydantic import ValidationError
 
 
 def test_wire_schema_reuses_canonical_domain_contract_keys():
@@ -139,6 +140,18 @@ def test_scan_result_rejects_unknown_action_state_literal():
     """Break caught: a free-form action state crossing the live API boundary."""
     with pytest.raises(ValidationError):
         ScanResultItem.model_validate(_current_item(action_state="future_state"))
+
+
+@pytest.mark.parametrize("non_finite", [math.nan, math.inf, -math.inf])
+def test_projection_rejects_non_finite_scores(non_finite):
+    """Break caught: NaN/Infinity escaping through the JSON response contract."""
+    payload = _current_item(resilience_score=non_finite)
+    payload["opportunity_state"]["score_pillars"]["benchmark_leadership"] = (
+        non_finite
+    )
+
+    with pytest.raises(ValidationError):
+        ScanResultItem.model_validate(payload)
 
 
 @pytest.mark.parametrize(

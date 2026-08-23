@@ -3,9 +3,8 @@
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
-import pytest
-
 import app.services.daily_snapshot_service as daily_snapshot_service
+import pytest
 from app.domain.common.query import (
     BooleanFilter,
     CategoricalFilter,
@@ -128,8 +127,18 @@ class FakeDailyOpportunitySummaryReader:
             survivor_action_state_counts=survivor_action_state_counts,
         )
 
-    def for_feature_run(self, _run_id):  # pragma: no cover - contract guard
-        raise AssertionError("Daily snapshots aggregate by scan, not feature run")
+    def for_feature_run(self, run_id):
+        return self.for_scan(str(run_id))
+
+
+class FeatureRunBackedSummaryReader(FakeDailyOpportunitySummaryReader):
+    """Expose different stores so the test observes which one production reads."""
+
+    def for_scan(self, _scan_id):
+        return FakeDailyOpportunitySummaryReader([]).for_scan(_scan_id)
+
+    def for_feature_run(self, run_id):
+        return super().for_scan(run_id)
 
 
 def _daily_snapshot_row(
@@ -262,6 +271,30 @@ def survivor_snapshot_fixture(monkeypatch):
 
 
 class TestDailySnapshotCorrectionSurvivors:
+    def test_feature_run_backed_scan_aggregates_the_feature_store(
+        self, survivor_snapshot_fixture
+    ):
+        """Break caught: survivor rows paired with zero scan_results counts."""
+        rows = survivor_snapshot_fixture["opportunity_summary_reader"].rows
+        survivor_snapshot_fixture["opportunity_summary_reader"] = (
+            FeatureRunBackedSummaryReader(rows)
+        )
+
+        summary = daily_snapshot_service.build_daily_snapshot_payload(
+            **survivor_snapshot_fixture
+        )["correction_survivors"]
+
+        assert summary["count"] == 3
+        assert summary["counts_by_action_state"] == {
+            "exit_risk": 0,
+            "deteriorating": 0,
+            "event_risk": 1,
+            "extended": 0,
+            "data_limited": 0,
+            "setup_ready": 1,
+            "watch": 1,
+        }
+
     def test_contains_ranked_persisted_survivor_summary(
         self, survivor_snapshot_fixture
     ):

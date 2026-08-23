@@ -15,11 +15,11 @@ Covers:
 from __future__ import annotations
 
 import logging
+from datetime import date
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-
 from app.analysis.patterns.aggregator import DetectorExecutionTrace
 from app.analysis.patterns.models import validate_setup_engine_payload
 from app.scanners.base_screener import DataRequirements, ScreenerResult, StockData
@@ -369,7 +369,8 @@ class TestOperationalFlagsIntegration:
     def test_iso_earnings_date_triggers_event_flag(self):
         """A persisted ISO earnings date is evaluated against the latest price bar."""
         data = _make_stock_data(num_days=350)
-        data.fundamentals = {"next_earnings_date": "2026-08-25"}
+        data.next_earnings_date = date(2026, 8, 25)
+        data.event_calendar_available = True
         data.price_data.index = data.price_data.index[:-1].append(
             pd.DatetimeIndex(["2026-08-21"])
         )

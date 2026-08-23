@@ -1,6 +1,6 @@
 # Correction Survivors and Action State Design
 
-**Status:** Implemented in Releases A1 and A2; repository-wide verification retains 7 documented environment-gated failures; Setup Follow-Through remains deferred
+**Status:** Implemented in Releases A1 and A2; final-v2 verification recorded 3 protected-theme authentication failures and 4 calibrated-simulator self-skips; Setup Follow-Through remains deferred
 
 **Date:** 2026-08-21
 
@@ -132,6 +132,13 @@ Each computed feature row will expose this versioned contract:
     "passed_checks": ["benchmark_leadership", "trend_integrity"],
     "failed_checks": [],
     "warnings": [],
+    "score_pillars": {
+      "benchmark_leadership": 20.0,
+      "multi_horizon_rs": 17.0,
+      "trend_integrity": 18.0,
+      "structure_tightness": 15.0,
+      "liquidity_freshness": 14.0
+    },
     "metrics": {
       "benchmark_relative_return_65d": 0.083,
       "rs_rating_1m": 94.0,

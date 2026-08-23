@@ -36,10 +36,9 @@ def build_opportunity_projection(
 ) -> dict[str, object]:
     """Assemble current scan evidence and evaluate the policy exactly once."""
     setup = _mapping_or_none(result.get("setup_engine"))
-    fundamentals = _mapping_or_empty(stock_data.fundamentals)
     event = normalize_event_date(
-        fundamentals.get("next_earnings_date"),
-        key_present="next_earnings_date" in fundamentals,
+        stock_data.next_earnings_date,
+        key_present=stock_data.event_calendar_available,
     )
     market = _normalized_market(stock_data.market)
     as_of_date = _last_frame_date(stock_data.price_data)
@@ -131,10 +130,9 @@ def build_data_limited_projection(
     """Build an explicit structured fallback while preserving row identity."""
     market = _normalized_market(stock_data.market)
     as_of_date = _last_frame_date(stock_data.price_data)
-    fundamentals = _mapping_or_empty(stock_data.fundamentals)
     event = normalize_event_date(
-        fundamentals.get("next_earnings_date"),
-        key_present="next_earnings_date" in fundamentals,
+        stock_data.next_earnings_date,
+        key_present=stock_data.event_calendar_available,
     )
     liquidity_floor = resolve_default_scan_filters(market).get("minVolume")
     avg_dollar_volume = _finite_float(result.get("avg_dollar_volume"))

@@ -14,7 +14,6 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
-
 from app.domain.relative_strength import BALANCED_RS_FORMULA_VERSION
 from app.domain.scanning.ports import MarketRsResolution, StockDataProvider
 from app.scanners.base_screener import (
@@ -740,8 +739,8 @@ class TestScanOrchestratorDataFlow:
         stock_data.benchmark_symbol = "SPY"
         stock_data.fundamentals = {
             "avg_volume": 2_000_000,
-            "next_earnings_date": None,
         }
+        stock_data.event_calendar_available = True
         provider = FakeDataProvider({"TEST": stock_data})
         registry = ScreenerRegistry()
 
@@ -853,7 +852,7 @@ class TestScanOrchestratorDataFlow:
         assert result["opportunity_state"]["market"] == "HK"
         assert result["opportunity_state"]["mic"] == "XHKG"
 
-    def test_merged_requirements_request_benchmark_for_row_rs_fields(self):
+    def test_merged_requirements_request_opportunity_evidence(self):
         stock_data = _make_stock_data("TEST", n_days=260)
         provider = FakeDataProvider({"TEST": stock_data})
         registry = ScreenerRegistry()
@@ -863,8 +862,9 @@ class TestScanOrchestratorDataFlow:
         requirements = orch.get_merged_requirements(["alpha"])
 
         assert requirements.needs_benchmark is True
+        assert requirements.needs_event_calendar is True
 
-    def test_pre_merged_requirements_are_upgraded_for_row_rs_fields(self):
+    def test_pre_merged_requirements_are_upgraded_for_opportunity_evidence(self):
         stock_data = _make_stock_data("TEST", n_days=260)
         provider = FakeDataProvider({"TEST": stock_data})
         registry = ScreenerRegistry()
@@ -879,6 +879,7 @@ class TestScanOrchestratorDataFlow:
         )
 
         assert provider.last_requirements.needs_benchmark is True
+        assert provider.last_requirements.needs_event_calendar is True
 
     def test_pre_fetched_data_skips_provider(self):
         """When pre_fetched_data is passed, provider.prepare_data is not called."""

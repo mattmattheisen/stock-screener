@@ -115,6 +115,7 @@ function StaticHomePage() {
     [marketCapMin, scanDefaultFilters]
   );
   const scanRows = scanBundleQuery.data?.rows ?? EMPTY_RESULTS;
+  const scanBundleComplete = scanBundleQuery.data?.complete === true;
   const topResults = useMemo(() => {
     return sortStaticScanRows(
       filterStaticScanRows(scanRows, topCandidateFilters),
@@ -323,55 +324,65 @@ function StaticHomePage() {
         />
       ) : null}
 
-      <DailyScanRowsTable
-        testId="top-scan-candidates-section"
-        title="Top Scan Candidates"
-        subtitle={
-          topCandidateFilters.minVolume == null
-            ? 'No default liquidity floor. Click a row for chart details.'
-            : `Dollar volume >= ${formatNumber(topCandidateFilters.minVolume)}. Click a row for chart details.`
-        }
-        rows={topResults}
-        chartEnabledSymbols={chartEnabledSymbols}
-        navigationSymbols={topNavigationSymbols}
-        onOpenChart={handleRowClick}
-        emptyMessage="No scan candidates match the current filters."
-        showRating
-        action={(
-          <TextField
-            select
-            size="small"
-            label="Mkt Cap"
-            value={marketCapMin}
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              setMarketCapMin(nextValue === '' ? '' : Number(nextValue));
-            }}
-            sx={{ minWidth: 140 }}
-          >
-            <MenuItem value="">All</MenuItem>
-            {MARKET_CAP_OPTIONS.map((option) => (
-              <MenuItem key={option.value} value={option.value}>
-                {option.label}
-              </MenuItem>
-            ))}
-          </TextField>
-        )}
-      />
+      {!scanBundleComplete ? (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Scan rankings unavailable
+        </Alert>
+      ) : null}
 
-      <DailyScanRowsTable
-        testId="leaders-in-leading-groups-section"
-        title="Leaders in Leading Groups"
-        subtitle={leadingGroupSubtitle}
-        rows={leadingGroupRows}
-        chartEnabledSymbols={chartEnabledSymbols}
-        navigationSymbols={leadingGroupNavigationSymbols}
-        onOpenChart={handleRowClick}
-        emptyMessage="No leaders in leading groups match the current snapshot."
-        showRs
-        priceSparklineWidth={195}
-        priceSparklineInnerWidth={150}
-      />
+      {scanBundleComplete ? (
+        <DailyScanRowsTable
+          testId="top-scan-candidates-section"
+          title="Top Scan Candidates"
+          subtitle={
+            topCandidateFilters.minVolume == null
+              ? 'No default liquidity floor. Click a row for chart details.'
+              : `Dollar volume >= ${formatNumber(topCandidateFilters.minVolume)}. Click a row for chart details.`
+          }
+          rows={topResults}
+          chartEnabledSymbols={chartEnabledSymbols}
+          navigationSymbols={topNavigationSymbols}
+          onOpenChart={handleRowClick}
+          emptyMessage="No scan candidates match the current filters."
+          showRating
+          action={(
+            <TextField
+              select
+              size="small"
+              label="Mkt Cap"
+              value={marketCapMin}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setMarketCapMin(nextValue === '' ? '' : Number(nextValue));
+              }}
+              sx={{ minWidth: 140 }}
+            >
+              <MenuItem value="">All</MenuItem>
+              {MARKET_CAP_OPTIONS.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+        />
+      ) : null}
+
+      {scanBundleComplete ? (
+        <DailyScanRowsTable
+          testId="leaders-in-leading-groups-section"
+          title="Leaders in Leading Groups"
+          subtitle={leadingGroupSubtitle}
+          rows={leadingGroupRows}
+          chartEnabledSymbols={chartEnabledSymbols}
+          navigationSymbols={leadingGroupNavigationSymbols}
+          onOpenChart={handleRowClick}
+          emptyMessage="No leaders in leading groups match the current snapshot."
+          showRs
+          priceSparklineWidth={195}
+          priceSparklineInnerWidth={150}
+        />
+      ) : null}
 
       <Paper elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider' }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>

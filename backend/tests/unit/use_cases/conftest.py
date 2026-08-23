@@ -18,7 +18,6 @@ from typing import Any
 
 import pandas as pd
 import pytest
-
 from app.domain.common.errors import EntityNotFoundError, InvalidTransitionError
 from app.domain.common.query import PageSpec
 from app.domain.common.uow import UnitOfWork
@@ -457,6 +456,13 @@ def with_test_opportunity_projection(result: dict) -> dict:
             "passed_checks": [],
             "failed_checks": ["required_evidence"],
             "warnings": [],
+            "score_pillars": {
+                "benchmark_leadership": None,
+                "multi_horizon_rs": None,
+                "trend_integrity": None,
+                "structure_tightness": None,
+                "liquidity_freshness": None,
+            },
             "metrics": {},
             "data_availability": {"required_evidence": "incomplete"},
             "action_reasons": ["test_fixture"],

@@ -378,6 +378,7 @@ describe('StaticHomePage', () => {
       },
     ];
     scanManifestPayload.chunks = [];
+    scanManifestPayload.rows_total = scanManifestPayload.initial_rows.length;
 
     renderWithProviders(<StaticHomePage />);
 
@@ -405,6 +406,7 @@ describe('StaticHomePage', () => {
       }),
     ];
     scanManifestPayload.chunks = [];
+    scanManifestPayload.rows_total = scanManifestPayload.initial_rows.length;
 
     renderWithProviders(<StaticHomePage />);
 
@@ -428,6 +430,7 @@ describe('StaticHomePage', () => {
       }),
     ];
     scanManifestPayload.chunks = [];
+    scanManifestPayload.rows_total = scanManifestPayload.initial_rows.length;
 
     renderWithProviders(<StaticHomePage />);
 
@@ -474,6 +477,7 @@ describe('StaticHomePage', () => {
 
       if (path === 'markets/us/scan/manifest.json') {
         return {
+          rows_total: leaderRows.length + rejectedRows.length,
           initial_rows: [],
           chunks: [
             { path: 'markets/us/scan/chunks/chunk-0001.json' },
@@ -613,7 +617,7 @@ describe('StaticHomePage', () => {
     expect(correctionPanelSpy).not.toHaveBeenCalled();
   });
 
-  it('retains successful home sections but marks survivor data incomplete after a chunk failure', async () => {
+  it('retains independent home sections but suppresses partial scan rankings after a chunk failure', async () => {
     manifest.markets.US.features = { opportunity_state: true };
     scanManifestPayload.rows_total = 4;
     scanManifestPayload.preset_screens.push(makeCorrectionSurvivorsPresetScreen());
@@ -621,9 +625,10 @@ describe('StaticHomePage', () => {
 
     renderWithProviders(<StaticHomePage />);
 
-    expect(await screen.findByText('0700.HK')).toBeInTheDocument();
-    expect(screen.getByText('Top Scan Candidates')).toBeInTheDocument();
-    expect(screen.getByText('Leaders in Leading Groups')).toBeInTheDocument();
+    expect(await screen.findByText('Scan rankings unavailable')).toBeInTheDocument();
+    expect(screen.getByTestId('market-health-exposure')).toBeInTheDocument();
+    expect(screen.queryByText('Top Scan Candidates')).not.toBeInTheDocument();
+    expect(screen.queryByText('Leaders in Leading Groups')).not.toBeInTheDocument();
     expect(screen.getByText('Survivor data incomplete')).toBeInTheDocument();
     expect(screen.queryByText('No correction survivors in this snapshot.')).not.toBeInTheDocument();
   });

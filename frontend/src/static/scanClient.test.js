@@ -349,6 +349,15 @@ describe('static scan client', () => {
     expect(sorted.map((row) => row.symbol)).toEqual(['LOW', 'ALPHA', 'BETA', 'LEGACY']);
   });
 
+  it('uses symbol ties when both resilience scores are omitted', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'LEGACY-Z' },
+      { symbol: 'LEGACY-A' },
+    ], 'resilience_score', 'desc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['LEGACY-A', 'LEGACY-Z']);
+  });
+
   it('keeps ascending composite score nulls last on the shared score path', () => {
     const sorted = sortStaticScanRows([
       { symbol: 'LEGACY', composite_score: null },

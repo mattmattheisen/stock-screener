@@ -153,6 +153,7 @@ class OpportunityStateResult:
     passed_checks: tuple[str, ...]
     failed_checks: tuple[str, ...]
     warnings: tuple[str, ...]
+    score_pillars: dict[str, float | None]
     action_reasons: tuple[str, ...]
     metrics: dict[str, object]
     data_availability: dict[str, str]
@@ -174,6 +175,7 @@ class OpportunityStateResult:
             "passed_checks": list(self.passed_checks),
             "failed_checks": list(self.failed_checks),
             "warnings": list(self.warnings),
+            "score_pillars": self.score_pillars,
             "metrics": self.metrics,
             "data_availability": self.data_availability,
             "action_reasons": list(self.action_reasons),
@@ -484,6 +486,14 @@ Expected: FAIL because fields are neither registered nor serialized.
 - [ ] **Step 3: Add the typed contract and both adapter bindings**
 
 ```python
+class ScorePillarsResponse(BaseModel):
+    benchmark_leadership: float | None
+    multi_horizon_rs: float | None
+    trend_integrity: float | None
+    structure_tightness: float | None
+    liquidity_freshness: float | None
+
+
 class OpportunityStateResponse(BaseModel):
     schema_version: Literal[1]
     policy_version: Literal["correction-survivors-v1"]
@@ -495,6 +505,7 @@ class OpportunityStateResponse(BaseModel):
     passed_checks: list[str] = Field(default_factory=list)
     failed_checks: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    score_pillars: ScorePillarsResponse
     metrics: dict[str, Any] = Field(default_factory=dict)
     data_availability: dict[str, str] = Field(default_factory=dict)
     action_reasons: list[str] = Field(default_factory=list)

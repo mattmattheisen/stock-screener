@@ -294,6 +294,12 @@ def _empty_correction_survivor_summary(*, available: bool) -> dict[str, Any]:
     }
 
 
+def _read_opportunity_summary(reader: Any, scan: Scan):
+    if scan.feature_run_id is not None:
+        return reader.for_feature_run(scan.feature_run_id)
+    return reader.for_scan(scan.scan_id)
+
+
 def _build_correction_survivor_summary(
     *,
     scan: Scan | None,
@@ -323,9 +329,9 @@ def _build_correction_survivor_summary(
 
     if opportunity_summary_reader is None:
         with uow:
-            aggregate = uow.opportunity_summaries.for_scan(scan.scan_id)
+            aggregate = _read_opportunity_summary(uow.opportunity_summaries, scan)
     else:
-        aggregate = opportunity_summary_reader.for_scan(scan.scan_id)
+        aggregate = _read_opportunity_summary(opportunity_summary_reader, scan)
     counts_by_action_state = {
         state.value: aggregate.survivor_action_state_counts[state]
         for state in ActionState

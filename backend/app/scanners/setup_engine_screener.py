@@ -241,10 +241,9 @@ class SetupEngineScanner(BaseStockScreener):
         adtv_series = dollar_volume.rolling(50, min_periods=50).mean()
         adtv_usd = float(adtv_series.iloc[-1]) if not pd.isna(adtv_series.iloc[-1]) else None
 
-        fundamentals = data.fundamentals if isinstance(data.fundamentals, dict) else {}
         event_date = normalize_event_date(
-            fundamentals.get("next_earnings_date"),
-            key_present="next_earnings_date" in fundamentals,
+            data.next_earnings_date,
+            key_present=data.event_calendar_available,
         )
         next_earnings_date = event_date.value if event_date.available else None
 

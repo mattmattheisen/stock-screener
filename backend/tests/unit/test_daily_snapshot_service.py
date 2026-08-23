@@ -4,12 +4,10 @@ import json
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
-import pytest
-from pydantic import ValidationError
-
 import app.services.daily_snapshot_service as daily_snapshot_service
 import app.services.key_market_history as key_market_history
 import app.services.snapshot_date_coherence as snapshot_date_coherence
+import pytest
 from app.api.v1.market_scan import _if_none_match_matches
 from app.schemas.market_scan import DailySnapshotResponse
 from app.services.daily_snapshot_service import (
@@ -26,6 +24,7 @@ from app.services.daily_snapshot_service import (
 )
 from app.services.price_refresh_plan_builder import _key_market_refresh_symbols
 from app.services.snapshot_date_coherence import coherence_status
+from pydantic import ValidationError
 
 
 def _norm(market):
@@ -825,6 +824,20 @@ class TestDailySnapshotResponseSchema:
     def test_requires_all_seven_action_state_counts(self):
         payload = self._payload()
         del payload["correction_survivors"]["counts_by_action_state"]["watch"]
+        with pytest.raises(ValidationError):
+            DailySnapshotResponse.model_validate(payload)
+
+    def test_rejects_negative_survivor_counts(self):
+        """Break caught: impossible negative aggregates crossing the API boundary."""
+        payload = self._payload()
+        payload["correction_survivors"]["counts_by_action_state"]["watch"] = -1
+        with pytest.raises(ValidationError):
+            DailySnapshotResponse.model_validate(payload)
+
+    def test_rejects_survivor_total_that_disagrees_with_state_counts(self):
+        """Break caught: one headline total contradicting its complete partition."""
+        payload = self._payload()
+        payload["correction_survivors"]["count"] = 2
         with pytest.raises(ValidationError):
             DailySnapshotResponse.model_validate(payload)
 

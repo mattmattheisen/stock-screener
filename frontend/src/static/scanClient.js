@@ -48,6 +48,9 @@ export const sortStaticScanRows = (
     const leftValue = getSortValue(left, sortBy);
     const rightValue = getSortValue(right, sortBy);
     if (SCORE_SORT_FIELDS.has(sortBy)) {
+      if (leftValue == null && rightValue == null) {
+        return compareValues(left.symbol, right.symbol);
+      }
       if (leftValue == null && rightValue != null) {
         return 1;
       }
