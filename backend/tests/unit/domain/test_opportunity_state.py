@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 import pytest
+import app.domain.scanning.opportunity_state as opportunity_state
 from app.domain.scanning.opportunity_state import (
     ActionState,
     InvalidationEvidence,
@@ -10,6 +11,71 @@ from app.domain.scanning.opportunity_state import (
     opportunity_result_from_projection,
     overlay_stewardship_state,
 )
+
+
+def test_domain_exposes_grouped_opportunity_evidence_boundary():
+    """Break caught: policy inputs collapsing back into one flat field bag."""
+    assert hasattr(opportunity_state, "OpportunityEvidence")
+    assert hasattr(opportunity_state, "LeadershipEvidence")
+    assert hasattr(opportunity_state, "StructureEvidence")
+    assert hasattr(opportunity_state, "TrendEvidence")
+    assert hasattr(opportunity_state, "TradabilityEvidence")
+    assert hasattr(opportunity_state, "RiskEvidence")
+
+
+def test_policy_evaluates_grouped_evidence_without_flat_input_bag():
+    """Break caught: the policy still depending on the 35-field OpportunityInputs bag."""
+    evidence = opportunity_state.OpportunityEvidence(
+        provenance=opportunity_state.ProvenanceEvidence(
+            market="US",
+            mic="XNAS",
+            as_of_date=date(2026, 8, 21),
+            benchmark_symbol="SPY",
+            benchmark_as_of_date=date(2026, 8, 21),
+        ),
+        leadership=opportunity_state.LeadershipEvidence(
+            benchmark_relative_return_65d=0.08,
+            rs_rating_1m=90.0,
+            rs_rating_3m=80.0,
+            rs_line_new_high=True,
+            rs_line_blue_dot=False,
+        ),
+        trend=opportunity_state.TrendEvidence(
+            stage=2,
+            ma_alignment=True,
+            invalidation_evidence_available=True,
+            invalidation_flags=(),
+        ),
+        structure=opportunity_state.StructureEvidence(
+            setup_payload_available=True,
+            pattern_primary="vcp",
+            pattern_primary_available=True,
+            squeeze=True,
+            tight_closes_count=3,
+            quiet_days_count=3,
+            volume_vs_50d=0.70,
+            volume_dry_up_max=0.80,
+        ),
+        tradability=opportunity_state.TradabilityEvidence(
+            liquidity_available=True,
+            liquidity_passes=True,
+            feature_status="complete",
+            is_scannable=True,
+        ),
+        risk=opportunity_state.RiskEvidence(
+            event_calendar_available=True,
+            earnings_soon=False,
+            setup_ready=True,
+            in_early_zone=True,
+            extended=False,
+        ),
+    )
+
+    result = evaluate_opportunity_state(evidence)
+
+    assert result.correction_survivor is True
+    assert result.resilience_score == 97.0
+    assert result.action_state is ActionState.SETUP_READY
 
 
 def complete_inputs(**changes):

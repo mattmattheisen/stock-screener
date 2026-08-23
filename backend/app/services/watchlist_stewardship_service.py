@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 from app.domain.scanning.opportunity_state import (
     opportunity_result_from_projection,
     overlay_stewardship_state,
+    serialize_opportunity_projection,
 )
+from app.domain.scanning.opportunity_state.model import OPPORTUNITY_PROJECTION_KEYS
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse
@@ -34,14 +36,6 @@ from app.utils.market_hours import eastern_day_bounds_utc, to_eastern_date
 
 SUPPORTED_THEME_ALERT_TYPES = ("breakout", "velocity_spike")
 THEME_SUPPORT_LOOKBACK_DAYS = 7
-OPPORTUNITY_PROJECTION_KEYS = (
-    "correction_survivor",
-    "resilience_score",
-    "action_state",
-    "opportunity_state",
-)
-
-
 def _round_or_none(value: float | None, digits: int = 4) -> float | None:
     if value is None:
         return None
@@ -93,11 +87,13 @@ def _overlaid_opportunity_projection(
     current_result = opportunity_result_from_projection(projection)
     if current_result is None:
         return {}
-    return overlay_stewardship_state(
-        current_result,
-        stewardship_status=stewardship_status,
-        prior_run_available=prior_run_available,
-    ).projection()
+    return serialize_opportunity_projection(
+        overlay_stewardship_state(
+            current_result,
+            stewardship_status=stewardship_status,
+            prior_run_available=prior_run_available,
+        )
+    )
 
 
 def _compute_regime_label(breadth: MarketBreadth | None, latest_run: FeatureRun | None, as_of_date: date) -> str:

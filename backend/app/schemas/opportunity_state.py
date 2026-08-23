@@ -5,29 +5,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-ActionStateValue = Literal[
-    "exit_risk",
-    "deteriorating",
-    "event_risk",
-    "extended",
-    "data_limited",
-    "setup_ready",
-    "watch",
-]
+from app.domain.scanning.opportunity_state.model import (
+    OPPORTUNITY_PROJECTION_KEYS,
+    SCORE_PILLAR_KEYS,
+    ActionState,
+)
+from app.domain.scanning.opportunity_state.projection import (
+    validate_projection_coherence,
+)
 
-OPPORTUNITY_PROJECTION_KEYS = (
-    "correction_survivor",
-    "resilience_score",
-    "action_state",
-    "opportunity_state",
-)
-_SCORE_PILLAR_KEYS = (
-    "benchmark_leadership",
-    "multi_horizon_rs",
-    "trend_integrity",
-    "structure_tightness",
-    "liquidity_freshness",
-)
+ActionStateValue = ActionState
 
 
 def _validate_optional_json_number(value: object, name: str) -> None:
@@ -77,7 +64,7 @@ class ScorePillarsResponse(BaseModel):
     @classmethod
     def _validate_raw_numbers(cls, data: Any) -> Any:
         if isinstance(data, Mapping):
-            for key in _SCORE_PILLAR_KEYS:
+            for key in SCORE_PILLAR_KEYS:
                 if key in data:
                     _validate_optional_json_number(data[key], f"score_pillars.{key}")
         return data
@@ -120,24 +107,18 @@ def validate_opportunity_projection(
     if correction_survivor is None or action_state is None or opportunity_state is None:
         raise ValueError("opportunity projection must be all null or all present")
 
-    pillars = tuple(opportunity_state.score_pillars.model_dump().values())
-    if resilience_score is None:
-        if any(pillar is not None for pillar in pillars):
-            raise ValueError("score pillars must be all null when resilience_score is null")
-    else:
-        if any(pillar is None for pillar in pillars):
-            raise ValueError("score pillars must all be present when resilience_score is present")
-        pillar_sum = round(sum(pillar for pillar in pillars if pillar is not None), 1)
-        if pillar_sum != round(resilience_score, 1):
-            raise ValueError("resilience_score must equal the score pillar sum")
-
-    if action_state == "setup_ready" and correction_survivor is not True:
-        raise ValueError("setup_ready requires correction_survivor=true")
+    validate_projection_coherence(
+        correction_survivor=correction_survivor,
+        resilience_score=resilience_score,
+        score_pillars=opportunity_state.score_pillars.model_dump(),
+        action_state=ActionState(action_state),
+    )
 
 
 __all__ = [
     "ActionStateValue",
     "OPPORTUNITY_PROJECTION_KEYS",
+    "SCORE_PILLAR_KEYS",
     "OpportunityStateResponse",
     "ScorePillarsResponse",
     "validate_opportunity_projection",

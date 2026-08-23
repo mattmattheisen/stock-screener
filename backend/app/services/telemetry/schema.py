@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from app.domain.scanning.opportunity_state import ActionState
+
 # Bump when payload shape changes in a non-additive way. Additive (new
 # optional fields) does NOT require a bump — readers must tolerate missing
 # optional fields. Non-additive changes (renaming, removing, type change)
@@ -29,17 +31,7 @@ class MetricKey:
     OPPORTUNITY_EVIDENCE_OPEN = "opportunity_evidence_open"
 
 
-# Fixed v1 action-state order. Keeping the telemetry schema explicit avoids
-# importing the scan-policy dependency graph into this foundation module.
-OPPORTUNITY_ACTION_STATES = (
-    "exit_risk",
-    "deteriorating",
-    "event_risk",
-    "extended",
-    "data_limited",
-    "setup_ready",
-    "watch",
-)
+OPPORTUNITY_ACTION_STATES = tuple(state.value for state in ActionState)
 
 
 def opportunity_state_payload(

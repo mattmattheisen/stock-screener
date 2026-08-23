@@ -5,10 +5,21 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+import app.schemas.opportunity_state as opportunity_schema
+from app.domain.scanning.opportunity_state.model import (
+    OPPORTUNITY_PROJECTION_KEYS as DOMAIN_PROJECTION_KEYS,
+    SCORE_PILLAR_KEYS as DOMAIN_SCORE_PILLAR_KEYS,
+)
 from app.domain.scanning.models import ScanResultItemDomain
 from app.schemas.opportunity_state import OpportunityStateResponse
 from app.schemas.scanning import ScanResultItem
 from app.schemas.user_watchlist import WatchlistStewardshipItem
+
+
+def test_wire_schema_reuses_canonical_domain_contract_keys():
+    """Break caught: schema key lists drifting from the projection codec."""
+    assert opportunity_schema.OPPORTUNITY_PROJECTION_KEYS is DOMAIN_PROJECTION_KEYS
+    assert getattr(opportunity_schema, "SCORE_PILLAR_KEYS", None) is DOMAIN_SCORE_PILLAR_KEYS
 
 
 def _evidence(**changes):

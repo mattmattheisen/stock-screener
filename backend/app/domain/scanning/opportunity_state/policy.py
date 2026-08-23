@@ -3,152 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
 from datetime import date, datetime
-from enum import Enum
 
-POLICY_VERSION = "correction-survivors-v1"
-SCHEMA_VERSION = 1
-
-
-class ActionState(str, Enum):
-    EXIT_RISK = "exit_risk"
-    DETERIORATING = "deteriorating"
-    EVENT_RISK = "event_risk"
-    EXTENDED = "extended"
-    DATA_LIMITED = "data_limited"
-    SETUP_READY = "setup_ready"
-    WATCH = "watch"
-
-
-_STATE_PRECEDENCE = tuple(ActionState)
-_STATE_PRIORITY = {state: index for index, state in enumerate(_STATE_PRECEDENCE)}
-_PROJECTION_KEYS = (
-    "correction_survivor",
-    "resilience_score",
-    "action_state",
-    "opportunity_state",
-)
-_EVIDENCE_KEYS = (
-    "schema_version",
-    "policy_version",
-    "as_of_date",
-    "market",
-    "mic",
-    "benchmark_symbol",
-    "benchmark_as_of_date",
-    "passed_checks",
-    "failed_checks",
-    "warnings",
-    "score_pillars",
-    "metrics",
-    "data_availability",
-    "action_reasons",
-)
-_SCORE_PILLAR_KEYS = (
-    "benchmark_leadership",
-    "multi_horizon_rs",
-    "trend_integrity",
-    "structure_tightness",
-    "liquidity_freshness",
+from .model import (
+    SCORE_PILLAR_KEYS,
+    ActionState,
+    EventDateAvailability,
+    InvalidationEvidence,
+    OpportunityEvidence,
+    OpportunityInputs,
+    OpportunityStateResult,
 )
 
-
-@dataclass(frozen=True)
-class InvalidationEvidence:
-    code: str
-    is_hard: bool
-
-
-@dataclass(frozen=True)
-class EventDateAvailability:
-    value: date | None
-    available: bool
-    reason: str | None = None
-
-
-@dataclass(frozen=True)
-class OpportunityInputs:
-    market: str | None
-    mic: str | None
-    as_of_date: date | None
-    benchmark_symbol: str | None
-    benchmark_as_of_date: date | None
-    benchmark_relative_return_65d: float | None
-    rs_rating_1m: float | None
-    rs_rating_3m: float | None
-    rs_line_new_high: bool | None
-    rs_line_blue_dot: bool | None
-    stage: int | None
-    ma_alignment: bool | None
-    invalidation_evidence_available: bool | None
-    invalidation_flags: tuple[InvalidationEvidence, ...] | None
-    setup_payload_available: bool | None
-    pattern_primary: str | None
-    pattern_primary_available: bool | None
-    squeeze: bool | None
-    tight_closes_count: int | None
-    quiet_days_count: int | None
-    volume_vs_50d: float | None
-    volume_dry_up_max: float | None
-    liquidity_available: bool | None
-    liquidity_passes: bool | None
-    feature_status: str | None
-    is_scannable: bool | None
-    event_calendar_available: bool | None
-    earnings_soon: bool | None
-    setup_ready: bool | None
-    in_early_zone: bool | None
-    extended: bool | None
-    prior_run_required: bool
-    prior_run_available: bool | None
-    deterioration_confirmed: bool | None
-    stewardship_status: str | None
-
-
-@dataclass(frozen=True)
-class OpportunityStateResult:
-    correction_survivor: bool
-    resilience_score: float | None
-    score_pillars: dict[str, float | None]
-    action_state: ActionState
-    passed_checks: tuple[str, ...]
-    failed_checks: tuple[str, ...]
-    warnings: tuple[str, ...]
-    action_reasons: tuple[str, ...]
-    metrics: dict[str, object]
-    data_availability: dict[str, str]
-    market: str | None
-    mic: str | None
-    as_of_date: date | None
-    benchmark_symbol: str | None
-    benchmark_as_of_date: date | None
-
-    def projection(self) -> dict[str, object]:
-        evidence = {
-            "schema_version": SCHEMA_VERSION,
-            "policy_version": POLICY_VERSION,
-            "as_of_date": self.as_of_date.isoformat() if self.as_of_date else None,
-            "market": self.market,
-            "mic": self.mic,
-            "benchmark_symbol": self.benchmark_symbol,
-            "benchmark_as_of_date": (
-                self.benchmark_as_of_date.isoformat() if self.benchmark_as_of_date else None
-            ),
-            "passed_checks": list(self.passed_checks),
-            "failed_checks": list(self.failed_checks),
-            "warnings": list(self.warnings),
-            "score_pillars": dict(self.score_pillars),
-            "metrics": dict(self.metrics),
-            "data_availability": dict(self.data_availability),
-            "action_reasons": list(self.action_reasons),
-        }
-        return {
-            "correction_survivor": self.correction_survivor,
-            "resilience_score": self.resilience_score,
-            "action_state": self.action_state.value,
-            "opportunity_state": evidence,
-        }
+_SCORE_PILLAR_KEYS = SCORE_PILLAR_KEYS
 
 
 def normalize_event_date(raw: object, *, key_present: bool) -> EventDateAvailability:
@@ -168,8 +35,12 @@ def normalize_event_date(raw: object, *, key_present: bool) -> EventDateAvailabi
     return EventDateAvailability(None, False, "invalid_next_earnings_date")
 
 
-def evaluate_opportunity_state(inputs: OpportunityInputs) -> OpportunityStateResult:
+def evaluate_opportunity_state(
+    inputs: OpportunityEvidence | OpportunityInputs,
+) -> OpportunityStateResult:
     """Evaluate one snapshot without consulting external state or market posture."""
+    if isinstance(inputs, OpportunityEvidence):
+        inputs = _legacy_inputs_from_evidence(inputs)
     hard_invalidation = _hard_invalidation(
         inputs.invalidation_flags, inputs.invalidation_evidence_available
     )
@@ -242,91 +113,45 @@ def evaluate_opportunity_state(inputs: OpportunityInputs) -> OpportunityStateRes
     )
 
 
-def opportunity_result_from_projection(
-    projection: Mapping[str, object] | None,
-) -> OpportunityStateResult | None:
-    """Restore a typed result, preserving compatibility with rows lacking the legacy payload."""
-    if projection is None:
-        return None
-    if not isinstance(projection, Mapping):
-        raise TypeError("projection must be a mapping")
-    present_keys = tuple(key for key in _PROJECTION_KEYS if key in projection)
-    if not present_keys:
-        return None
-    if len(present_keys) != len(_PROJECTION_KEYS):
-        raise ValueError("opportunity projection must be all null or all present")
-    _require_exact_keys(projection, _PROJECTION_KEYS, "projection")
-    if all(projection[key] is None for key in _PROJECTION_KEYS):
-        return None
-    if projection["opportunity_state"] is None:
-        raise ValueError("opportunity projection must be all null or all present")
-
-    evidence = _mapping(projection["opportunity_state"], "opportunity_state")
-    _require_exact_keys(evidence, _EVIDENCE_KEYS, "opportunity_state")
-    if evidence.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError("opportunity_state.schema_version is unsupported or malformed")
-    if evidence.get("policy_version") != POLICY_VERSION:
-        raise ValueError("opportunity_state.policy_version is unsupported or malformed")
-
-    action_state = _action_state(projection.get("action_state"))
-    correction_survivor = projection.get("correction_survivor")
-    if type(correction_survivor) is not bool:
-        raise ValueError("correction_survivor must be a bool")
-    resilience_score = _optional_number(projection.get("resilience_score"), "resilience_score")
-    score_pillars = _score_pillar_mapping(evidence.get("score_pillars"))
-    _validate_projection_coherence(
-        correction_survivor=correction_survivor,
-        resilience_score=resilience_score,
-        score_pillars=score_pillars,
-        action_state=action_state,
+def _legacy_inputs_from_evidence(evidence: OpportunityEvidence) -> OpportunityInputs:
+    """Bridge grouped evidence while the pure policy helpers are migrated."""
+    return OpportunityInputs(
+        market=evidence.provenance.market,
+        mic=evidence.provenance.mic,
+        as_of_date=evidence.provenance.as_of_date,
+        benchmark_symbol=evidence.provenance.benchmark_symbol,
+        benchmark_as_of_date=evidence.provenance.benchmark_as_of_date,
+        benchmark_relative_return_65d=evidence.leadership.benchmark_relative_return_65d,
+        rs_rating_1m=evidence.leadership.rs_rating_1m,
+        rs_rating_3m=evidence.leadership.rs_rating_3m,
+        rs_line_new_high=evidence.leadership.rs_line_new_high,
+        rs_line_blue_dot=evidence.leadership.rs_line_blue_dot,
+        stage=evidence.trend.stage,
+        ma_alignment=evidence.trend.ma_alignment,
+        invalidation_evidence_available=evidence.trend.invalidation_evidence_available,
+        invalidation_flags=evidence.trend.invalidation_flags,
+        setup_payload_available=evidence.structure.setup_payload_available,
+        pattern_primary=evidence.structure.pattern_primary,
+        pattern_primary_available=evidence.structure.pattern_primary_available,
+        squeeze=evidence.structure.squeeze,
+        tight_closes_count=evidence.structure.tight_closes_count,
+        quiet_days_count=evidence.structure.quiet_days_count,
+        volume_vs_50d=evidence.structure.volume_vs_50d,
+        volume_dry_up_max=evidence.structure.volume_dry_up_max,
+        liquidity_available=evidence.tradability.liquidity_available,
+        liquidity_passes=evidence.tradability.liquidity_passes,
+        feature_status=evidence.tradability.feature_status,
+        is_scannable=evidence.tradability.is_scannable,
+        event_calendar_available=evidence.risk.event_calendar_available,
+        earnings_soon=evidence.risk.earnings_soon,
+        setup_ready=evidence.risk.setup_ready,
+        in_early_zone=evidence.risk.in_early_zone,
+        extended=evidence.risk.extended,
+        prior_run_required=False,
+        prior_run_available=None,
+        deterioration_confirmed=False,
+        stewardship_status=None,
     )
-
-    return OpportunityStateResult(
-        correction_survivor=correction_survivor,
-        resilience_score=resilience_score,
-        score_pillars=score_pillars,
-        action_state=action_state,
-        passed_checks=_string_tuple(evidence.get("passed_checks"), "passed_checks"),
-        failed_checks=_string_tuple(evidence.get("failed_checks"), "failed_checks"),
-        warnings=_string_tuple(evidence.get("warnings"), "warnings"),
-        action_reasons=_string_tuple(evidence.get("action_reasons"), "action_reasons"),
-        metrics=dict(_mapping(evidence.get("metrics"), "metrics")),
-        data_availability=_string_mapping(evidence.get("data_availability"), "data_availability"),
-        market=_optional_string(evidence.get("market"), "market"),
-        mic=_optional_string(evidence.get("mic"), "mic"),
-        as_of_date=_optional_date(evidence.get("as_of_date"), "as_of_date"),
-        benchmark_symbol=_optional_string(evidence.get("benchmark_symbol"), "benchmark_symbol"),
-        benchmark_as_of_date=_optional_date(
-            evidence.get("benchmark_as_of_date"), "benchmark_as_of_date"
-        ),
-    )
-
-
-def overlay_stewardship_state(
-    result: OpportunityStateResult,
-    stewardship_status: str | None,
-    prior_run_available: bool,
-) -> OpportunityStateResult:
-    """Apply a supported stewardship state only when it outranks persisted state."""
-    if stewardship_status is None:
-        return result
-    try:
-        stewardship_state = ActionState(stewardship_status)
-    except ValueError:
-        return result
-    if (
-        stewardship_state is not ActionState.EXIT_RISK
-        and prior_run_available is not True
-    ):
-        return result
-    if _STATE_PRIORITY[stewardship_state] >= _STATE_PRIORITY[result.action_state]:
-        return result
-
-    reason = f"stewardship_{stewardship_state.value}"
-    action_reasons = result.action_reasons
-    if reason not in action_reasons:
-        action_reasons += (reason,)
-    return replace(result, action_state=stewardship_state, action_reasons=action_reasons)
 
 
 def _required_evidence_complete(
@@ -651,103 +476,3 @@ def _tri_or(*values: bool | None) -> bool | None:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(100.0, value))
-
-
-def _mapping(value: object, name: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{name} must be a mapping")
-    if not all(isinstance(key, str) for key in value):
-        raise ValueError(f"{name} keys must be strings")
-    return value
-
-
-def _require_keys(mapping: Mapping[str, object], required: tuple[str, ...], name: str) -> None:
-    missing = tuple(key for key in required if key not in mapping)
-    if missing:
-        raise ValueError(f"{name} is missing required keys: {', '.join(missing)}")
-
-
-def _require_exact_keys(
-    mapping: Mapping[str, object], required: tuple[str, ...], name: str
-) -> None:
-    _require_keys(mapping, required, name)
-    unexpected = tuple(key for key in mapping if key not in required)
-    if unexpected:
-        raise ValueError(f"{name} has unexpected keys: {', '.join(unexpected)}")
-
-
-def _string_tuple(value: object, name: str) -> tuple[str, ...]:
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{name} must be a list of strings")
-    return tuple(value)
-
-
-def _string_mapping(value: object, name: str) -> dict[str, str]:
-    mapping = _mapping(value, name)
-    if not all(isinstance(item, str) for item in mapping.values()):
-        raise ValueError(f"{name} values must be strings")
-    return dict(mapping)
-
-
-def _score_pillar_mapping(value: object) -> dict[str, float | None]:
-    mapping = _mapping(value, "score_pillars")
-    _require_exact_keys(mapping, _SCORE_PILLAR_KEYS, "score_pillars")
-    return {
-        key: _optional_number(mapping[key], f"score_pillars.{key}")
-        for key in _SCORE_PILLAR_KEYS
-    }
-
-
-def _validate_projection_coherence(
-    *,
-    correction_survivor: bool,
-    resilience_score: float | None,
-    score_pillars: Mapping[str, float | None],
-    action_state: ActionState,
-) -> None:
-    pillars = tuple(score_pillars.values())
-    if resilience_score is None:
-        if any(pillar is not None for pillar in pillars):
-            raise ValueError("score pillars must be all null when resilience_score is null")
-    else:
-        if any(pillar is None for pillar in pillars):
-            raise ValueError("score pillars must all be present when resilience_score is present")
-        pillar_sum = round(sum(pillar for pillar in pillars if pillar is not None), 1)
-        if pillar_sum != round(resilience_score, 1):
-            raise ValueError("resilience_score must equal the score pillar sum")
-    if action_state is ActionState.SETUP_READY and not correction_survivor:
-        raise ValueError("setup_ready requires correction_survivor=true")
-
-
-def _optional_string(value: object, name: str) -> str | None:
-    if value is None or isinstance(value, str):
-        return value
-    raise ValueError(f"{name} must be a string or null")
-
-
-def _optional_date(value: object, name: str) -> date | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError(f"{name} must be an ISO date string or null")
-    try:
-        return date.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an ISO date string or null") from exc
-
-
-def _optional_number(value: object, name: str) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"{name} must be a number or null")
-    return float(value)
-
-
-def _action_state(value: object) -> ActionState:
-    if not isinstance(value, str):
-        raise TypeError("action_state must be a valid action-state string")
-    try:
-        return ActionState(value)
-    except ValueError as exc:
-        raise ValueError("action_state must be a valid action-state string") from exc

@@ -43,6 +43,7 @@ from app.domain.scanning.materialization import (
     with_opportunity_state_materialization,
 )
 from app.domain.scanning.models import ProgressEvent
+from app.domain.scanning.opportunity_state.model import OPPORTUNITY_PROJECTION_KEYS
 from app.domain.scanning.ports import (
     CancellationToken,
     MarketRsReader,
@@ -64,14 +65,6 @@ from app.use_cases.feature_store.publish_run import (
 logger = logging.getLogger(__name__)
 
 MAX_FAILURE_DIAGNOSTIC_SAMPLES = 50
-OPPORTUNITY_PROJECTION_KEYS = frozenset(
-    {
-        "correction_survivor",
-        "resilience_score",
-        "action_state",
-        "opportunity_state",
-    }
-)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +159,7 @@ def _assert_chunk_opportunity_projections(rows: Sequence[FeatureRowWrite]) -> No
     for row in rows:
         details = row.details
         present = set(details) if isinstance(details, Mapping) else set()
-        missing = sorted(OPPORTUNITY_PROJECTION_KEYS - present)
+        missing = sorted(set(OPPORTUNITY_PROJECTION_KEYS) - present)
         if missing:
             omissions.append(f"{row.symbol}: {', '.join(missing)}")
     if omissions:
