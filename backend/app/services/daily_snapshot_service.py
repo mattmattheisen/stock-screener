@@ -26,6 +26,7 @@ from app.domain.scanning.materialization import (
     resolve_opportunity_state_capability,
 )
 from app.domain.scanning.opportunity_state import ActionState
+from app.domain.scanning.opportunity_summary import OpportunityStateSummaryReader
 from app.infra.serialization import json_safe
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
@@ -298,6 +299,7 @@ def _build_correction_survivor_summary(
     scan: Scan | None,
     uow: Any,
     scan_results_use_case: Any,
+    opportunity_summary_reader: OpportunityStateSummaryReader | None = None,
 ) -> dict[str, Any]:
     if scan is None or not resolve_opportunity_state_capability(
         feature_run_id=scan.feature_run_id,
@@ -309,7 +311,7 @@ def _build_correction_survivor_summary(
         return _empty_correction_survivor_summary(available=False)
 
     survivor_filters = FilterSpec().add_boolean("correction_survivor", True)
-    rows, count = _query_scan_rows(
+    rows, _ = _query_scan_rows(
         uow=uow,
         use_case=scan_results_use_case,
         scan_id=scan.scan_id,
@@ -319,25 +321,20 @@ def _build_correction_survivor_summary(
         include_sparklines=True,
     )
 
-    counts_by_action_state: dict[str, int] = {}
-    for state in ACTION_STATE_VALUES:
-        state_filters = FilterSpec()
-        state_filters.add_boolean("correction_survivor", True)
-        state_filters.add_categorical("action_state", (state,))
-        _, state_count = _query_scan_rows(
-            uow=uow,
-            use_case=scan_results_use_case,
-            scan_id=scan.scan_id,
-            filters=state_filters,
-            per_page=1,
-            include_sparklines=False,
-        )
-        counts_by_action_state[state] = state_count
+    if opportunity_summary_reader is None:
+        with uow:
+            aggregate = uow.opportunity_summaries.for_scan(scan.scan_id)
+    else:
+        aggregate = opportunity_summary_reader.for_scan(scan.scan_id)
+    counts_by_action_state = {
+        state.value: aggregate.survivor_action_state_counts[state]
+        for state in ActionState
+    }
 
     return {
         "available": True,
         "complete": True,
-        "count": count,
+        "count": aggregate.survivor_count,
         "counts_by_action_state": counts_by_action_state,
         "rows": rows,
     }
@@ -410,6 +407,7 @@ def build_daily_snapshot_payload(
     scan: Scan | None,
     uow: Any,
     scan_results_use_case: Any,
+    opportunity_summary_reader: OpportunityStateSummaryReader | None = None,
 ) -> dict[str, Any]:
     """Assemble the full Daily Snapshot payload for one market.
 
@@ -446,6 +444,7 @@ def build_daily_snapshot_payload(
         scan=scan,
         uow=uow,
         scan_results_use_case=scan_results_use_case,
+        opportunity_summary_reader=opportunity_summary_reader,
     )
 
     anchor_date = _snapshot_anchor_date(scan)

@@ -32,7 +32,15 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS, market_suffix, normalize_market
+from app.domain.scanning.opportunity_state import ActionState
+from app.domain.scanning.opportunity_summary import OpportunityStateSummaryReader
+
+from ...tasks.market_queues import (
+    SHARED_SENTINEL,
+    SUPPORTED_MARKETS,
+    market_suffix,
+    normalize_market,
+)
 from .schema import MetricKey
 
 logger = logging.getLogger(__name__)
@@ -93,9 +101,13 @@ class PerMarketTelemetry:
         self,
         redis_client_factory: Optional[Callable[[], Any]] = None,
         session_factory: Optional[Callable[[], Any]] = None,
+        opportunity_summary_reader: Optional[
+            OpportunityStateSummaryReader
+        ] = None,
     ):
         self._redis_factory = redis_client_factory
         self._session_factory = session_factory
+        self._opportunity_summary_reader = opportunity_summary_reader
 
     # ------------------------------------------------------------------
     # Lazy dependency lookup (kept lazy so import doesn't pull DB/Redis)
@@ -117,6 +129,23 @@ class PerMarketTelemetry:
             return self._session_factory()
         from ...database import SessionLocal
         return SessionLocal()
+
+    def _opportunity_summaries(self) -> OpportunityStateSummaryReader:
+        if self._opportunity_summary_reader is None:
+            from ...infra.db.repositories.opportunity_summary_repo import (
+                SessionOpportunityStateSummaryReader,
+            )
+
+            if self._session_factory is None:
+                from ...database import SessionLocal
+
+                session_factory = SessionLocal
+            else:
+                session_factory = self._session_factory
+            self._opportunity_summary_reader = (
+                SessionOpportunityStateSummaryReader(session_factory)
+            )
+        return self._opportunity_summary_reader
 
     # ------------------------------------------------------------------
     # Generic emission primitives
@@ -259,65 +288,25 @@ class PerMarketTelemetry:
         JSON projection keys participate; symbols, nested evidence, and user
         watchlist data are never selected or added to the payload.
         """
-        from sqlalchemy import case, func
-
-        from .schema import OPPORTUNITY_ACTION_STATES, opportunity_state_payload
+        from .schema import opportunity_state_payload
 
         m = normalize_market(market)
         try:
-            db = self._session()
+            summary = self._opportunity_summaries().for_feature_run(int(run_id))
         except Exception as exc:
             logger.debug(
-                "telemetry: session unavailable (%s); skipping opportunity snapshot",
+                "telemetry: opportunity snapshot DB query failed (%s)",
                 exc,
             )
             return
-
-        try:
-            from ...infra.db.models.feature_store import StockFeatureDaily
-
-            details = StockFeatureDaily.details_json
-            action_state = details["action_state"].as_string()
-            correction_survivor = details["correction_survivor"].as_boolean()
-            aggregates = [
-                func.count().label("rows_total"),
-                func.coalesce(
-                    func.sum(
-                        case((correction_survivor.is_(True), 1), else_=0)
-                    ),
-                    0,
-                ).label("survivor_count"),
-            ]
-            aggregates.extend(
-                func.coalesce(
-                    func.sum(case((action_state == state, 1), else_=0)),
-                    0,
-                ).label(f"state_{state}")
-                for state in OPPORTUNITY_ACTION_STATES
-            )
-            row = (
-                db.query(*aggregates)
-                .select_from(StockFeatureDaily)
-                .filter(StockFeatureDaily.run_id == int(run_id))
-                .one()
-            )
-        except Exception as exc:
-            logger.debug("telemetry: opportunity snapshot DB query failed (%s)", exc)
-            return
-        finally:
-            try:
-                db.close()
-            except Exception:
-                pass
-
         counts = {
-            state: int(row[index + 2] or 0)
-            for index, state in enumerate(OPPORTUNITY_ACTION_STATES)
+            state.value: summary.action_state_counts[state]
+            for state in ActionState
         }
         payload = opportunity_state_payload(
             run_id=run_id,
-            rows_total=int(row[0] or 0),
-            survivor_count=int(row[1] or 0),
+            rows_total=summary.rows_total,
+            survivor_count=summary.survivor_count,
             action_state_counts=counts,
         )
         self._set_gauge(MetricKey.OPPORTUNITY_STATE, m, payload)
@@ -336,6 +325,7 @@ class PerMarketTelemetry:
         refresh task is never broken by telemetry.
         """
         from sqlalchemy import case, func
+
         from .schema import COMPLETENESS_BUCKETS
 
         m = normalize_market(market)

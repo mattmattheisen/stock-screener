@@ -19,19 +19,18 @@ import pytest
 from app.services.telemetry.per_market_telemetry import (
     PerMarketTelemetry,
     _gauge_key,
-    _counter_key,
 )
 from app.services.telemetry.schema import (
+    COMPLETENESS_BUCKETS,
     SCHEMA_VERSION,
     MetricKey,
-    COMPLETENESS_BUCKETS,
+    benchmark_age_payload,
     completeness_bucket_for,
     completeness_distribution_payload,
     extraction_success_payload,
     freshness_lag_payload,
     opportunity_state_payload,
     universe_drift_payload,
-    benchmark_age_payload,
 )
 
 
@@ -343,15 +342,17 @@ class TestOpportunityStateAggregation:
 
     # Catches observability failures escaping into the publication path.
     def test_opportunity_database_aggregation_is_best_effort(self):
-        db = MagicMock()
-        db.query.side_effect = RuntimeError("database unavailable")
+        summary_reader = MagicMock()
+        summary_reader.for_feature_run.side_effect = RuntimeError(
+            "database unavailable"
+        )
         telemetry = PerMarketTelemetry(
             redis_client_factory=lambda: None,
-            session_factory=lambda: db,
+            opportunity_summary_reader=summary_reader,
         )
 
         assert telemetry.record_opportunity_state_from_db("US", 42) is None
-        db.close.assert_called_once()
+        summary_reader.for_feature_run.assert_called_once_with(42)
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +450,8 @@ class TestMarketSummary:
 # ---------------------------------------------------------------------------
 class TestCleanup:
     def test_cleanup_deletes_via_orm_with_cutoff(self):
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         from sqlalchemy.sql.elements import BinaryExpression
 
         delete_query = MagicMock()
