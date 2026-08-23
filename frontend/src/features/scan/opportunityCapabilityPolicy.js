@@ -7,6 +7,17 @@ export const SAFE_SCAN_SORT = Object.freeze({
   sortOrder: 'desc',
 });
 
+export function resolveLiveOpportunityCapability(resultsData) {
+  return {
+    available: resultsData?.capabilities?.opportunity_state === true,
+    resolved: resultsData != null,
+  };
+}
+
+export function resolveStaticOpportunityCapability(marketEntry) {
+  return marketEntry.features?.opportunity_state === true;
+}
+
 function expressionRequiresOpportunityState(expression) {
   const canonical = canonicalizeExpression(expression);
   return [canonical.required, ...canonical.groups].some((group) => (
@@ -36,6 +47,17 @@ export function presetRequiresOpportunityState(preset) {
   });
 }
 
+export function filterPresetsForOpportunityCapability(
+  presets,
+  capabilityResolved,
+  available,
+) {
+  if (!capabilityResolved || available) {
+    return presets;
+  }
+  return presets.filter((preset) => !presetRequiresOpportunityState(preset));
+}
+
 function sanitizeExpression(expression) {
   const canonical = canonicalizeExpression(expression);
   const sanitizeGroup = (group) => ({
@@ -57,18 +79,22 @@ function sanitizeExpression(expression) {
 }
 
 export function sanitizeQueryForOpportunityCapability(query, available) {
-  const sortRequiresCapability = isOpportunityStateField(
-    query?.sortBy ?? query?.sort_by,
-  );
+  const normalized = {
+    expression: canonicalizeExpression(query?.expression),
+    sortBy: query?.sortBy ?? query?.sort_by ?? SAFE_SCAN_SORT.sortBy,
+    sortOrder: query?.sortOrder ?? query?.sort_order ?? SAFE_SCAN_SORT.sortOrder,
+  };
+  if (available) {
+    return normalized;
+  }
+  if (!isOpportunityStateField(normalized.sortBy)) {
+    return {
+      ...normalized,
+      expression: sanitizeExpression(normalized.expression),
+    };
+  }
   return {
-    expression: available
-      ? canonicalizeExpression(query?.expression)
-      : sanitizeExpression(query?.expression),
-    sortBy: sortRequiresCapability && !available
-      ? SAFE_SCAN_SORT.sortBy
-      : (query?.sortBy ?? query?.sort_by ?? SAFE_SCAN_SORT.sortBy),
-    sortOrder: sortRequiresCapability && !available
-      ? SAFE_SCAN_SORT.sortOrder
-      : (query?.sortOrder ?? query?.sort_order ?? SAFE_SCAN_SORT.sortOrder),
+    expression: sanitizeExpression(normalized.expression),
+    ...SAFE_SCAN_SORT,
   };
 }

@@ -400,12 +400,11 @@ const VirtualTableRow = memo(function VirtualTableRow({
         {row.se_pivot_price != null ? `$${row.se_pivot_price.toFixed(2)}` : '-'}
       </TableCell>
 
-      {showOpportunityState && (
-        <OpportunityResultCells
-          row={row}
-          onOpenEvidence={onOpenOpportunity}
-        />
-      )}
+      <OpportunityResultCells
+        row={row}
+        visible={showOpportunityState}
+        onOpenEvidence={onOpenOpportunity}
+      />
 
       <TableCell align="center" sx={{ fontFamily: 'monospace', width: 40, minWidth: 40 }}>
         {row.rs_rating?.toFixed(0) || '-'}

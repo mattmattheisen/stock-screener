@@ -29,10 +29,10 @@ import {
   stableExpressionKey,
 } from '../../features/scan/filterExpressionModel';
 import {
-  presetRequiresOpportunityState,
-  queryRequiresOpportunityState,
-  sanitizeQueryForOpportunityCapability,
+  filterPresetsForOpportunityCapability,
+  resolveStaticOpportunityCapability,
 } from '../../features/scan/opportunityCapabilityPolicy';
+import { useOpportunityCapabilityTransition } from '../../features/scan/hooks/useOpportunityCapabilityTransition';
 import {
   legacyFiltersToExpression,
 } from '../../features/scan/legacyFilterExpression';
@@ -98,14 +98,18 @@ function StaticScanPage() {
   );
   const manifestDefaultSortBy = scanManifestQuery.data?.sort?.field ?? 'composite_score';
   const manifestDefaultSortOrder = scanManifestQuery.data?.sort?.order ?? 'desc';
-  const showOpportunityState = marketEntry.features?.opportunity_state === true;
+  const showOpportunityState = resolveStaticOpportunityCapability(marketEntry);
   const presetScreens = useMemo(() => {
     const screens = scanManifestQuery.data?.preset_screens;
-    if (!Array.isArray(screens) || showOpportunityState) {
+    if (!Array.isArray(screens)) {
       return screens;
     }
-    return screens.filter((screen) => !presetRequiresOpportunityState(screen));
-  }, [scanManifestQuery.data?.preset_screens, showOpportunityState]);
+    return filterPresetsForOpportunityCapability(
+      screens,
+      Boolean(scanManifestQuery.data),
+      showOpportunityState,
+    );
+  }, [scanManifestQuery.data, showOpportunityState]);
 
   useEffect(() => {
     if (scanManifestQuery.data?.default_page_size) {
@@ -216,22 +220,12 @@ function StaticScanPage() {
     hydrationComplete,
   });
 
-  useEffect(() => {
-    if (
-      !scanManifestQuery.data
-      || showOpportunityState
-      || !queryRequiresOpportunityState({
-        expression: appliedExpression,
-        sortBy,
-      })
-    ) {
-      return;
-    }
-    const sanitized = sanitizeQueryForOpportunityCapability({
+  const appliedQuery = useMemo(() => ({
       expression: appliedExpression,
       sortBy,
       sortOrder,
-    }, false);
+  }), [appliedExpression, sortBy, sortOrder]);
+  const handleUnsupportedOpportunityQuery = useCallback((sanitized) => {
     dispatchFilterState({
       type: 'apply-expression',
       expression: sanitized.expression,
@@ -239,14 +233,13 @@ function StaticScanPage() {
     setSortBy(sanitized.sortBy);
     setSortOrder(sanitized.sortOrder);
     setActiveScreenId(null);
-  }, [
-    appliedExpression,
-    scanManifestQuery.data,
-    setActiveScreenId,
-    showOpportunityState,
-    sortBy,
-    sortOrder,
-  ]);
+  }, [setActiveScreenId]);
+  useOpportunityCapabilityTransition({
+    capabilityResolved: Boolean(scanManifestQuery.data),
+    available: showOpportunityState,
+    query: appliedQuery,
+    onSanitizedQuery: handleUnsupportedOpportunityQuery,
+  });
 
   const handleSelectScreen = useCallback((screenId) => {
     setActiveScreenId(screenId);

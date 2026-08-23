@@ -3,11 +3,15 @@ import { TableCell } from '@mui/material';
 
 import ActionStateBadge from '../shared/ActionStateBadge';
 
-function OpportunityResultCells({ row, onOpenEvidence }) {
+function OpportunityResultCells({ row, visible, onOpenEvidence }) {
   const handleOpen = useCallback((event) => {
     event.stopPropagation();
     onOpenEvidence(row);
   }, [onOpenEvidence, row]);
+
+  if (!visible) {
+    return null;
+  }
 
   return (
     <>

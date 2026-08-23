@@ -39,11 +39,11 @@ import {
   legacyFiltersToExpression,
 } from '../legacyFilterExpression';
 import {
-  presetRequiresOpportunityState,
-  queryRequiresOpportunityState,
-  sanitizeQueryForOpportunityCapability,
+  filterPresetsForOpportunityCapability,
+  resolveLiveOpportunityCapability,
 } from '../opportunityCapabilityPolicy';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
+import { useOpportunityCapabilityTransition } from '../hooks/useOpportunityCapabilityTransition';
 import {
   createScanFilterQuery,
   stableScanFilterQueryKey,
@@ -137,15 +137,11 @@ function ScanPage() {
     initialFilters: DEFAULT_SCAN_FILTERS,
     initialExpression: DEFAULT_SCAN_EXPRESSION,
   });
-  const opportunityStateAvailable = (
-    displayedResultsData?.capabilities?.opportunity_state === true
+  const opportunityCapability = resolveLiveOpportunityCapability(
+    displayedResultsData,
   );
-  const opportunityStateCapabilityResolved = displayedResultsData != null;
-  const opportunityStateCleanupPending = (
-    opportunityStateCapabilityResolved
-    && !opportunityStateAvailable
-    && queryRequiresOpportunityState(displayedQuery)
-  );
+  const opportunityStateAvailable = opportunityCapability.available;
+  const opportunityStateCapabilityResolved = opportunityCapability.resolved;
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
@@ -240,9 +236,11 @@ function ScanPage() {
   } = useFilterPresets();
 
   const availablePresets = useMemo(() => (
-    !opportunityStateCapabilityResolved || opportunityStateAvailable
-      ? presets
-      : presets.filter((preset) => !presetRequiresOpportunityState(preset))
+    filterPresetsForOpportunityCapability(
+      presets,
+      opportunityStateCapabilityResolved,
+      opportunityStateAvailable,
+    )
   ), [
     opportunityStateAvailable,
     opportunityStateCapabilityResolved,
@@ -261,32 +259,18 @@ function ScanPage() {
   });
   const activePresetId = presetState.activePresetId;
   const clearActivePreset = presetState.clearActivePreset;
-
-  useEffect(() => {
-    if (
-      !opportunityStateCapabilityResolved
-      || opportunityStateAvailable
-    ) {
-      return;
-    }
-    if (queryRequiresOpportunityState(displayedQuery)) {
-      requestQuery(sanitizeQueryForOpportunityCapability(displayedQuery, false));
-    }
-    const activePreset = presets.find(
-      (preset) => preset.id === activePresetId,
-    );
-    if (activePreset && presetRequiresOpportunityState(activePreset)) {
-      clearActivePreset();
-    }
-  }, [
-    displayedQuery,
-    opportunityStateAvailable,
-    opportunityStateCapabilityResolved,
-    activePresetId,
-    clearActivePreset,
-    presets,
-    requestQuery,
-  ]);
+  const activePreset = useMemo(
+    () => presets.find((preset) => preset.id === activePresetId),
+    [activePresetId, presets],
+  );
+  const opportunityStateCleanupPending = useOpportunityCapabilityTransition({
+    capabilityResolved: opportunityStateCapabilityResolved,
+    available: opportunityStateAvailable,
+    query: displayedQuery,
+    activePreset,
+    onSanitizedQuery: requestQuery,
+    onUnsupportedPreset: clearActivePreset,
+  });
 
   const scanBootstrapQuery = useQuery({
     queryKey: ['scanBootstrap', 'latest'],
