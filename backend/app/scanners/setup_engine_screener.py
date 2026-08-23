@@ -23,32 +23,32 @@ from app.analysis.patterns.config import (
     build_setup_engine_parameters,
 )
 from app.analysis.patterns.detectors import PatternDetectorInput
-from app.analysis.patterns.policy import (
-    SetupEngineDataPolicyResult,
-    evaluate_setup_engine_data_policy,
-)
 from app.analysis.patterns.operational_flags import (
     OperationalFlagInputs,
     compute_operational_flags,
 )
+from app.analysis.patterns.policy import (
+    SetupEngineDataPolicyResult,
+    evaluate_setup_engine_data_policy,
+)
 from app.analysis.patterns.readiness import compute_breakout_readiness_features
 from app.analysis.patterns.technicals import resample_ohlcv
+from app.domain.scanning.opportunity_state import normalize_event_date
+from app.domain.scanning.ports import CanonicalStockRsSource
 from app.scanners.base_screener import (
     BaseStockScreener,
     DataRequirements,
     ScreenerResult,
     StockData,
 )
-from app.scanners.screener_registry import register_screener
 from app.scanners.criteria.moving_averages import MovingAverageAnalyzer
 from app.scanners.criteria.relative_strength import RelativeStrengthCalculator
 from app.scanners.criteria.rs_resolution import (
     CanonicalStockRsUnavailable,
     resolve_stock_rs,
 )
-from app.domain.scanning.ports import CanonicalStockRsSource
-from app.domain.scanning.opportunity_state import normalize_event_date
 from app.scanners.criteria.stage_analysis import quick_stage_check
+from app.scanners.screener_registry import register_screener
 from app.scanners.setup_engine_scanner import build_setup_engine_payload
 
 logger = logging.getLogger(__name__)

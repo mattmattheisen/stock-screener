@@ -4,6 +4,7 @@ from datetime import date
 
 import pandas as pd
 import pytest
+
 from app.analysis.patterns.config import SetupEngineParameters
 from app.scanners.base_screener import StockData
 from app.services.opportunity_state_service import (

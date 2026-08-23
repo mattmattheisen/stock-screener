@@ -7,10 +7,10 @@ between scan_result_query and feature_store_query.
 
 import pytest
 
+from app.infra.query import scan_result_query as srq
 from app.infra.query.feature_store_query import (
     _FIELD_BINDINGS,
 )
-from app.infra.query import scan_result_query as srq
 
 
 def _column_map(bindings):

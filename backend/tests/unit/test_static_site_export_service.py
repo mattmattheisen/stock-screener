@@ -7,9 +7,13 @@ from datetime import date, datetime
 from inspect import Parameter, getsource, signature
 from types import SimpleNamespace
 
-import app.services.static_site_export_service as export_module
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
+
+import app.services.static_site_export_service as export_module
 from app.database import Base
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
@@ -42,9 +46,6 @@ from app.services.static_site_export_service import (
     StaticSiteExportService,
     StaticSiteSectionUnavailableError,
 )
-from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture

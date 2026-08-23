@@ -13,6 +13,10 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
 from app.database import Base
 from app.domain.common.query import (
     BooleanFilter,
@@ -38,9 +42,6 @@ from app.infra.db.models.feature_store import (
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.models.stock_universe import StockUniverse
 from app.schemas.scanning import ScanResultItem
-from pydantic import ValidationError
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
 AS_OF = date(2026, 2, 17)
 

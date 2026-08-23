@@ -6,11 +6,10 @@ field names, types, units, nullability, and naming policy.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
-import re
 from typing import Any, Literal, Mapping, Sequence, TypedDict, cast
-
 
 SETUP_ENGINE_DEFAULT_SCHEMA_VERSION = "v1"
 SETUP_ENGINE_ALLOWED_TIMEFRAMES = frozenset({"daily", "weekly"})

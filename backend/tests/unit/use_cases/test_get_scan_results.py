@@ -4,6 +4,7 @@ from datetime import date
 from types import SimpleNamespace
 
 import pytest
+
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.feature_store.models import FeatureRow
 from app.domain.scanning.filter_spec import (
@@ -18,7 +19,6 @@ from app.use_cases.scanning.get_scan_results import (
     GetScanResultsResult,
     GetScanResultsUseCase,
 )
-
 from tests.unit.use_cases.conftest import (
     FakeFeatureStoreRepository,
     FakeScanResultRepository,

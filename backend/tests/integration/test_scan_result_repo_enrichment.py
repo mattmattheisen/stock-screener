@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
 from app.database import Base
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
@@ -27,8 +30,6 @@ from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
 from app.schemas.scanning import ScanResultItem
 from app.services.market_taxonomy_service import MarketTaxonomyEntry
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
 pytestmark = pytest.mark.integration
 

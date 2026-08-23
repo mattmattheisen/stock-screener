@@ -20,6 +20,10 @@ from pathlib import Path
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from sqlalchemy import create_mock_engine
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Session
+
 from app.domain.common.query import BooleanFilter
 from app.domain.scanning.filter_expression_model import FilterExpression
 from app.infra.db.models.feature_store import StockFeatureDaily
@@ -28,9 +32,6 @@ from app.infra.query.feature_store_query import (
     _FIELD_BINDINGS,
     compile_filter_expression,
 )
-from sqlalchemy import create_mock_engine
-from sqlalchemy.dialects import postgresql
-from sqlalchemy.orm import Session
 
 _MIGRATION = (
     Path(__file__).parents[2]

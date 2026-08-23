@@ -19,7 +19,6 @@ from app.use_cases.scanning.create_scan import (
     CreateScanCommand,
     CreateScanUseCase,
 )
-
 from tests.unit.use_cases.conftest import (
     FakeFeatureRunRepository,
     FakeFeatureStoreRepository,

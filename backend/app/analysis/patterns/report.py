@@ -12,10 +12,10 @@ from datetime import date, datetime
 from typing import Any, Literal, Mapping, Sequence, cast
 
 from app.analysis.patterns.models import (
-    InvalidationFlagPayload,
     SETUP_ENGINE_DEFAULT_SCHEMA_VERSION,
     SETUP_ENGINE_FIELD_SPECS,
     SETUP_ENGINE_NUMERIC_UNITS,
+    InvalidationFlagPayload,
     PatternCandidate,
     PatternCandidateModel,
     ScoreTrace,

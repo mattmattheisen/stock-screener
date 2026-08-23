@@ -18,6 +18,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
+
 from app.domain.common.errors import EntityNotFoundError, InvalidTransitionError
 from app.domain.common.query import PageSpec
 from app.domain.common.uow import UnitOfWork

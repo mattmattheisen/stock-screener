@@ -5,6 +5,10 @@ from datetime import UTC, date, datetime
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
 from app.api.v1 import user_watchlists as watchlists_module
 from app.database import Base, get_db
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
@@ -15,9 +19,6 @@ from app.models.theme import ThemeAlert
 from app.models.user_watchlist import UserWatchlist, WatchlistItem
 from app.services import server_auth
 from app.services.watchlist_stewardship_service import WatchlistStewardshipService
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 pytestmark = pytest.mark.integration
 

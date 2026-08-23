@@ -1,6 +1,7 @@
 """Unit tests for CreateScanUseCase — pure in-memory, no infrastructure."""
 
 import pytest
+
 from app.domain.common.errors import ValidationError
 from app.domain.scanning.errors import SingleActiveScanViolation
 from app.domain.scanning.models import (
@@ -13,7 +14,6 @@ from app.use_cases.scanning.create_scan import (
     CreateScanUseCase,
     StaleMarketDataError,
 )
-
 from tests.unit.use_cases.conftest import (
     FakeFeatureRunRepository,
     FakeScanRepository,

@@ -13,8 +13,8 @@ from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     filter_spec_to_expression,
 )
-from app.infra.db.portability import lean_count
 from app.infra.db.models.feature_store import StockFeatureDaily
+from app.infra.db.portability import lean_count
 from app.infra.query.sql_filter_compiler import (
     SqlFilterFieldResolver,
     apply_sql_sort,

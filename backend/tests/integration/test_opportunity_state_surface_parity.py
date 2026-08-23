@@ -7,6 +7,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import FastAPI
+
 from app.api.v1.filter_presets import router as filter_presets_router
 from app.api.v1.scans import router as scans_router
 from app.database import get_db
@@ -19,7 +21,6 @@ from app.domain.scanning.legacy_filter_expression import (
 from app.infra.db.uow import SqlUnitOfWork
 from app.schemas.scanning import ScanResultsResponse
 from app.wiring.bootstrap import get_uow
-from fastapi import FastAPI
 
 FIXTURE_PATH = (
     Path(__file__).parents[1] / "fixtures" / "opportunity_state_snapshot.py"

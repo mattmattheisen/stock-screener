@@ -19,7 +19,6 @@ from app.analysis.patterns.operational_flags import (
     compute_operational_flags,
 )
 
-
 DEFAULT_PARAMS = SetupEngineParameters()
 
 

@@ -12,7 +12,6 @@ from alembic.operations import Operations
 
 from app.services.preset_screens import PRESET_SCREENS
 
-
 MIGRATION_PATH = (
     Path(__file__).resolve().parents[2]
     / "alembic"

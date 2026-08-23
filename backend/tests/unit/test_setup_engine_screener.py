@@ -19,14 +19,15 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from app.analysis.patterns.aggregator import DetectorExecutionTrace
 from app.analysis.patterns.models import validate_setup_engine_payload
 from app.scanners.base_screener import DataRequirements, ScreenerResult, StockData
 from app.scanners.screener_registry import screener_registry
-from app.scanners.setup_engine_screener import SetupEngineScanner, _count_current_week_sessions
-
+from app.scanners.setup_engine_screener import (
+    SetupEngineScanner,
+    _count_current_week_sessions,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -9,11 +9,12 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.analysis.patterns.report import validate_setup_engine_report_payload
 from app.domain.common.query import PageSpec, SortSpec
 from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository, ScanResultRsAudit
-from app.analysis.patterns.report import validate_setup_engine_report_payload
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.infra.query import scan_result_query
 from app.infra.query.scan_result_query import (
     apply_filter_expression,
@@ -29,7 +30,6 @@ from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
-from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.services.growth_cadence_service import build_row_field_availability
 from app.services.market_taxonomy_service import (
     MarketTaxonomyService,
