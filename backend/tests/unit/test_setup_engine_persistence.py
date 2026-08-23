@@ -555,13 +555,19 @@ class TestValidationGuard:
 
     def test_legacy_invalidation_flag_without_is_hard_is_backfilled_soft(self):
         result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
-        result_dict["setup_engine"]["explain"]["invalidation_flags"] = [
-            {
-                "code": "legacy_warning",
-                "message": "Serialized before hard flags were introduced",
-                "severity": "medium",
-            }
-        ]
+        result_dict["setup_engine"] = {
+            **result_dict["setup_engine"],
+            "explain": {
+                **result_dict["setup_engine"]["explain"],
+                "invalidation_flags": [
+                    {
+                        "code": "legacy_warning",
+                        "message": "Serialized before hard flags were introduced",
+                        "severity": "medium",
+                    }
+                ],
+            },
+        }
 
         mapped = _map_orchestrator_result("scan-1", "AAPL", result_dict)
 
