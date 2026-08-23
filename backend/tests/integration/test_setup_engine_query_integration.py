@@ -238,7 +238,7 @@ _SE_PAYLOADS: dict[str, dict[str, Any]] = {
 
 
 def _make_stub_stock_data(symbol: str) -> StockData:
-    """Minimal StockData for _combine_results()."""
+    """Minimal StockData for result assembly."""
     dates = pd.date_range(end="2026-02-20", periods=10, freq="B")
     df = pd.DataFrame(
         {"Open": 100.0, "High": 105.0, "Low": 99.0, "Close": 102.0, "Volume": 1_000_000},
