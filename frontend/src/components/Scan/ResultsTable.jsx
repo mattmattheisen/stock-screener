@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useCallback, useEffect, memo } from 'react';
+import { useMemo, useRef, useState, useCallback, memo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Table,
@@ -25,8 +25,9 @@ import FieldAvailabilityChip from './FieldAvailabilityChip';
 import MarketBadge from './MarketBadge';
 import MarketThemesList from '../Stock/MarketThemesList';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
-import ActionStateBadge from '../shared/ActionStateBadge';
 import OpportunityEvidenceDrawer from '../shared/OpportunityEvidenceDrawer';
+import OpportunityResultCells from './OpportunityResultCells';
+import { useOpportunityEvidenceSelection } from './useOpportunityEvidenceSelection';
 import {
   getStageColor,
   getRatingColor,
@@ -192,11 +193,6 @@ const VirtualTableRow = memo(function VirtualTableRow({
     }
     onOpenChart?.(row.symbol);
   }, [chartEnabled, onOpenChart, row.symbol]);
-
-  const handleOpportunityClick = useCallback((event) => {
-    event.stopPropagation();
-    onOpenOpportunity(row);
-  }, [onOpenOpportunity, row]);
 
   return (
     <TableRow
@@ -405,17 +401,10 @@ const VirtualTableRow = memo(function VirtualTableRow({
       </TableCell>
 
       {showOpportunityState && (
-        <>
-          <TableCell align="center" sx={{ fontFamily: 'monospace', width: 48, minWidth: 48 }}>
-            {row.resilience_score != null ? Number(row.resilience_score).toFixed(1) : '-'}
-          </TableCell>
-          <TableCell align="center" sx={{ width: 105, minWidth: 105 }}>
-            <ActionStateBadge
-              state={row.action_state}
-              onClick={row.opportunity_state ? handleOpportunityClick : undefined}
-            />
-          </TableCell>
-        </>
+        <OpportunityResultCells
+          row={row}
+          onOpenEvidence={onOpenOpportunity}
+        />
       )}
 
       <TableCell align="center" sx={{ fontFamily: 'monospace', width: 40, minWidth: 40 }}>
@@ -549,42 +538,6 @@ const VirtualTableRow = memo(function VirtualTableRow({
       </TableCell>
     </TableRow>
   );
-}, (prevProps, nextProps) => {
-  // Custom comparison - only re-render if the row data actually changed
-  return prevProps.row.symbol === nextProps.row.symbol &&
-         prevProps.row.company_name === nextProps.row.company_name &&
-         prevProps.row.market === nextProps.row.market &&
-         prevProps.row.exchange === nextProps.row.exchange &&
-         prevProps.row.field_availability === nextProps.row.field_availability &&
-         prevProps.row.growth_metric_basis === nextProps.row.growth_metric_basis &&
-         prevProps.row.composite_score === nextProps.row.composite_score &&
-         prevProps.row.rs_rating === nextProps.row.rs_rating &&
-         prevProps.row.current_price === nextProps.row.current_price &&
-         prevProps.row.price_change_1d === nextProps.row.price_change_1d &&
-         prevProps.row.gics_sector === nextProps.row.gics_sector &&
-         prevProps.row.ibd_industry_group === nextProps.row.ibd_industry_group &&
-         prevProps.row.ibd_group_rank === nextProps.row.ibd_group_rank &&
-         prevProps.row.ibd_group_rank_date === nextProps.row.ibd_group_rank_date &&
-         prevProps.row.scan_mode === nextProps.row.scan_mode &&
-         prevProps.row.data_status === nextProps.row.data_status &&
-         prevProps.row.is_scannable === nextProps.row.is_scannable &&
-         prevProps.row.composite_reason === nextProps.row.composite_reason &&
-         prevProps.row.se_rs_line_blue_dot === nextProps.row.se_rs_line_blue_dot &&
-         prevProps.row.rs_line_blue_dot_recent === nextProps.row.rs_line_blue_dot_recent &&
-         prevProps.row.rs_line_new_high_date === nextProps.row.rs_line_new_high_date &&
-         prevProps.row.resilience_score === nextProps.row.resilience_score &&
-         prevProps.row.action_state === nextProps.row.action_state &&
-         JSON.stringify(prevProps.row.opportunity_state || null) ===
-           JSON.stringify(nextProps.row.opportunity_state || null) &&
-         (prevProps.row.market_themes || []).join('|') === (nextProps.row.market_themes || []).join('|') &&
-         JSON.stringify(prevProps.row.matched_groups || []) ===
-           JSON.stringify(nextProps.row.matched_groups || []) &&
-         prevProps.row.rating === nextProps.row.rating &&
-         prevProps.mcapDisplay === nextProps.mcapDisplay &&
-         prevProps.showActions === nextProps.showActions &&
-         prevProps.showWatchlistMenu === nextProps.showWatchlistMenu &&
-         prevProps.chartEnabled === nextProps.chartEnabled &&
-         prevProps.showOpportunityState === nextProps.showOpportunityState;
 });
 
 /**
@@ -615,19 +568,14 @@ function ResultsTable({
   // MCap column display mode — kept as local state; scan-level persistence
   // can lift this up later if users want it to survive navigation.
   const [mcapDisplay, setMcapDisplay] = useState(MCAP_DISPLAY.USD);
-  const [opportunitySymbol, setOpportunitySymbol] = useState(null);
-  const opportunityRow = useMemo(
-    () => results?.find((row) => row?.symbol === opportunitySymbol) ?? null,
-    [opportunitySymbol, results],
-  );
-  useEffect(() => {
-    if (
-      opportunitySymbol != null
-      && (!showOpportunityState || !opportunityRow?.opportunity_state)
-    ) {
-      setOpportunitySymbol(null);
-    }
-  }, [opportunityRow, opportunitySymbol, showOpportunityState]);
+  const {
+    selectedRow: opportunityRow,
+    openEvidence: handleOpenOpportunity,
+    closeEvidence: handleCloseOpportunity,
+  } = useOpportunityEvidenceSelection({
+    rows: results,
+    enabled: showOpportunityState,
+  });
   const visibleColumns = useMemo(() => {
     const base = columns.filter((column) => (
       (showActions || column.id !== 'chart') &&
@@ -658,14 +606,6 @@ function ResultsTable({
   const handleRowClick = useCallback((symbol) => {
     onOpenChart?.(symbol);
   }, [onOpenChart]);
-
-  const handleOpenOpportunity = useCallback((row) => {
-    setOpportunitySymbol(row?.symbol ?? null);
-  }, []);
-
-  const handleCloseOpportunity = useCallback(() => {
-    setOpportunitySymbol(null);
-  }, []);
 
   // Virtualize rows - only render visible rows plus overscan
   const rowVirtualizer = useVirtualizer({

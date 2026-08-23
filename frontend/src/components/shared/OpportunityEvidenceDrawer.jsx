@@ -104,9 +104,7 @@ function OpportunityEvidenceDrawer({
   const evidence = isRecord(row.opportunity_state) ? row.opportunity_state : {};
   const scorePillars = isRecord(evidence.score_pillars)
     ? evidence.score_pillars
-    : isRecord(evidence.resilience_pillars)
-      ? evidence.resilience_pillars
-      : {};
+    : {};
 
   return (
     <Drawer

@@ -73,6 +73,25 @@ describe('OpportunityEvidenceDrawer', () => {
     expect(screen.getAllByText('Not available').length).toBeGreaterThanOrEqual(10);
   });
 
+  it('does not read the removed resilience_pillars alias', () => {
+    renderWithProviders(
+      <OpportunityEvidenceDrawer
+        open
+        row={{
+          action_state: null,
+          resilience_score: null,
+          opportunity_state: {
+            resilience_pillars: { trend_integrity: 20 },
+          },
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('20')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Not available').length).toBeGreaterThanOrEqual(10);
+  });
+
   // Catches duplicate telemetry events across rerenders and an implicit dependency on a row symbol.
   it('notifies once for each closed-to-open transition without requiring a symbol', () => {
     const onEvidenceOpen = vi.fn();
