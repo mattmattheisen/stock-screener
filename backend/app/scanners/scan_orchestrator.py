@@ -6,14 +6,33 @@ fetched once and shared across all screeners. Combines results and
 calculates composite scores.
 """
 import logging
-import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
 from app.analysis.patterns.config import (
-    DEFAULT_SETUP_ENGINE_PARAMETERS,
-    SetupEngineParameters,
     build_setup_engine_parameters,
+)
+from app.analysis.patterns.rs_line import (
+    DEFAULT_BLUE_DOT_RECENT_DAYS,
+    DEFAULT_LOOKBACK,
+    RsLineLeadershipSnapshot,
+    rs_line_leadership_snapshot,
+)
+from app.config import settings
+from app.domain.scanning.models import CompositeMethod, ScreenerOutputDomain
+from app.domain.scanning.ports import (
+    CanonicalStockRsSource,
+    MarketRsReader,
+    MarketRsResolution,
+    StockDataProvider,
+)
+from app.domain.scanning.scoring import (
+    apply_quality_policy,
+    calculate_composite_score,
+    calculate_overall_rating,
+)
+from app.services.opportunity_state_service import (
+    build_data_limited_projection,
 )
 
 from .base_screener import (
@@ -26,31 +45,12 @@ from .base_screener import (
 from .criteria.relative_strength import RelativeStrengthCalculator
 from .criteria.rs_resolution import CanonicalStockRsUnavailable, resolve_stock_rs
 from .partial_history_metrics import partial_history_metrics
+from .scan_result_assembler import (
+    ScanResultAssembler,
+    ScanResultAssemblyRequest,
+    market_rs_audit_fields,
+)
 from .screener_registry import ScreenerRegistry
-
-from app.analysis.patterns.rs_line import (
-    DEFAULT_BLUE_DOT_RECENT_DAYS,
-    DEFAULT_LOOKBACK,
-    RsLineLeadershipSnapshot,
-    rs_line_leadership_snapshot,
-)
-from app.config import settings
-from app.domain.scanning.models import CompositeMethod, ScreenerOutputDomain
-from app.domain.scanning.scoring import (
-    apply_quality_policy,
-    calculate_composite_score,
-    calculate_overall_rating,
-)
-from app.domain.scanning.ports import (
-    CanonicalStockRsSource,
-    MarketRsReader,
-    MarketRsResolution,
-    StockDataProvider,
-)
-from app.services.opportunity_state_service import (
-    build_data_limited_projection,
-    build_opportunity_projection,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -69,16 +69,6 @@ _SCREENER_MIN_BARS: dict[str, int] = {
 }
 
 
-def _market_rs_audit_fields(stock_data: StockData) -> dict[str, object]:
-    if stock_data.rs_source is None:
-        return {
-            "rs_formula_version": None,
-            "market_rs_run_id": None,
-            "rs_universe_size": None,
-        }
-    return stock_data.rs_source.audit_fields()
-
-
 def _series_last_float(series) -> float | None:
     if series is None or len(series) == 0:
         return None
@@ -91,18 +81,6 @@ def _series_last_float(series) -> float | None:
     except Exception:
         pass
     return float(value)
-
-
-def _finite_float(value: object) -> float | None:
-    if value is None:
-        return None
-
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-
-    return numeric if math.isfinite(numeric) else None
 
 
 def _build_precomputed_scan_context(
@@ -281,6 +259,7 @@ class ScanOrchestrator:
         data_provider: StockDataProvider,
         registry: ScreenerRegistry,
         market_rs_reader: MarketRsReader | None = None,
+        result_assembler: ScanResultAssembler | None = None,
     ):
         """Initialize orchestrator with injected dependencies.
 
@@ -291,6 +270,7 @@ class ScanOrchestrator:
         self._data_provider = data_provider
         self._registry = registry
         self._market_rs_reader = market_rs_reader
+        self._result_assembler = result_assembler or ScanResultAssembler()
 
     def get_merged_requirements(
         self,
@@ -545,29 +525,34 @@ class ScanOrchestrator:
             opportunity_parameters = build_setup_engine_parameters(
                 (criteria or {}).get("setup_engine_parameters")
             )
-            combined_result = self._combine_results(
-                symbol,
-                stock_data,
-                screener_results,
-                composite_score,
-                overall_rating,
-                composite_method,
-                applicable_screeners=[
-                    name for name in screener_names if name in screener_results
-                ],
-                unavailable_screeners=[
-                    name for name in screener_names
-                    if name in unavailable_screeners
-                ],
-                history_bars=history_bars,
-                scan_mode=scan_mode,
-                data_status=data_status,
-                is_scannable=True,
-                ipo_bonus=ipo_bonus,
-                composite_reason=composite_reason,
-                quality_downgrade_reason=adjustment.reason,
-                field_completeness_score=completeness,
-                opportunity_parameters=opportunity_parameters,
+            combined_result = self._result_assembler.assemble(
+                ScanResultAssemblyRequest(
+                    symbol=symbol,
+                    stock_data=stock_data,
+                    screener_results=screener_results,
+                    composite_score=composite_score,
+                    overall_rating=overall_rating,
+                    composite_method=composite_method,
+                    applicable_screeners=tuple(
+                        name
+                        for name in screener_names
+                        if name in screener_results
+                    ),
+                    unavailable_screeners=tuple(
+                        name
+                        for name in screener_names
+                        if name in unavailable_screeners
+                    ),
+                    history_bars=history_bars,
+                    scan_mode=scan_mode,
+                    data_status=data_status,
+                    is_scannable=True,
+                    ipo_bonus=ipo_bonus,
+                    composite_reason=composite_reason,
+                    quality_downgrade_reason=adjustment.reason,
+                    field_completeness_score=completeness,
+                    opportunity_parameters=opportunity_parameters,
+                )
             )
             if data_status == "insufficient_history":
                 for key, value in partial_history_metrics(stock_data).items():
@@ -578,350 +563,6 @@ class ScanOrchestrator:
         except Exception as e:
             logger.error(f"Error orchestrating scan for {symbol}: {e}")
             return self._error_result(symbol, str(e))
-
-    def _combine_results(
-        self,
-        symbol: str,
-        stock_data: StockData,
-        screener_results: Dict[str, ScreenerResult],
-        composite_score: float,
-        overall_rating: str,
-        composite_method: str,
-        applicable_screeners: list[str] | None = None,
-        unavailable_screeners: list[str] | None = None,
-        history_bars: int | None = None,
-        scan_mode: str = "full",
-        data_status: str = "complete",
-        is_scannable: bool = True,
-        ipo_bonus: float = 0.0,
-        composite_reason: str | None = None,
-        quality_downgrade_reason: Optional[str] = None,
-        field_completeness_score: Optional[int] = None,
-        opportunity_parameters: SetupEngineParameters = DEFAULT_SETUP_ENGINE_PARAMETERS,
-    ) -> Dict:
-        """
-        Combine all screener results into a single result dict.
-
-        Args:
-            symbol: Stock symbol
-            stock_data: Stock data
-            screener_results: Results from each screener
-            composite_score: Combined score
-            overall_rating: Overall rating (may be post-quality adjustment)
-            composite_method: Method used for combining
-            quality_downgrade_reason: Human-readable reason when T4 quality
-                policy adjusted the rating, else None.
-            field_completeness_score: 0-100 completeness from T2, used by
-                callers for tie-break ordering.
-
-        Returns:
-            Combined result dict
-        """
-        if applicable_screeners is None:
-            applicable_screeners = list(screener_results.keys())
-        if unavailable_screeners is None:
-            unavailable_screeners = []
-        if history_bars is None:
-            history_bars = _history_bar_count(stock_data)
-
-        # Extract individual scores
-        individual_scores = {
-            f"{name}_score": result.score
-            for name, result in screener_results.items()
-        }
-
-        # Extract individual ratings
-        individual_ratings = {
-            f"{name}_rating": result.rating
-            for name, result in screener_results.items()
-        }
-
-        # Extract individual passes
-        individual_passes = {
-            f"{name}_passes": result.passes
-            for name, result in screener_results.items()
-        }
-
-        # Build breakdown of all screener details
-        screener_details = {
-            name: {
-                "score": result.score,
-                "passes": result.passes,
-                "rating": result.rating,
-                "breakdown": result.breakdown,
-                "details": result.details
-            }
-            for name, result in screener_results.items()
-        }
-
-        # Get current price
-        current_price = stock_data.get_current_price()
-
-        # Build combined result
-        rs_line_leadership = (
-            stock_data.precomputed_scan_context.rs_line_leadership
-            if stock_data.precomputed_scan_context is not None
-            else RsLineLeadershipSnapshot.empty()
-        )
-        result = {
-            "symbol": symbol,
-            "composite_score": round(composite_score, 2),
-            "rating": overall_rating,
-            "current_price": current_price,
-
-            # Individual screener scores
-            **individual_scores,
-
-            # Individual ratings
-            **individual_ratings,
-
-            # Individual passes
-            **individual_passes,
-
-            # Metadata
-            "screeners_run": list(screener_results.keys()),
-            "composite_method": composite_method,
-            "screeners_passed": sum(1 for r in screener_results.values() if r.passes),
-            "screeners_total": len(screener_results),
-            "result_status": "ok",
-            "data_status": data_status,
-            "is_scannable": is_scannable,
-            "scan_mode": scan_mode,
-            "history_bars": history_bars,
-            "applicable_screeners": list(applicable_screeners),
-            "unavailable_screeners": list(unavailable_screeners),
-            "composite_reason": composite_reason,
-            "ipo_bonus": ipo_bonus,
-            **_market_rs_audit_fields(stock_data),
-
-            # T4 quality-aware fallback surface (top-level so API consumers
-            # don't have to drill into details — mirrors how ``rating`` is
-            # exposed). ``field_completeness_score`` doubles as the secondary
-            # sort key for tie-break (see scoring.py policy docstring).
-            "field_completeness_score": field_completeness_score,
-            "quality_downgrade_reason": quality_downgrade_reason,
-
-            # RS-line leadership signal (DeepVue/O'Neil blue-dot family).
-            **rs_line_leadership.as_scan_fields(),
-
-            # Full details
-            "details": {
-                "screeners": screener_details,
-                "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None,
-                **_market_rs_audit_fields(stock_data),
-            }
-        }
-
-        # Add backward compatibility fields for minervini
-        if "minervini" in screener_results:
-            minervini_result = screener_results["minervini"]
-            result["passes_template"] = minervini_result.passes
-            result["minervini_score"] = minervini_result.score
-
-            # Extract common Minervini fields from details if available
-            minervini_details = minervini_result.details
-            # Core fields
-            if "rs_rating" in minervini_details:
-                result["rs_rating"] = minervini_details["rs_rating"]
-            if "rs_rating_1m" in minervini_details:
-                result["rs_rating_1m"] = minervini_details["rs_rating_1m"]
-            if "rs_rating_3m" in minervini_details:
-                result["rs_rating_3m"] = minervini_details["rs_rating_3m"]
-            if "rs_rating_12m" in minervini_details:
-                result["rs_rating_12m"] = minervini_details["rs_rating_12m"]
-            if "stage" in minervini_details:
-                result["stage"] = minervini_details["stage"]
-            if "stage_name" in minervini_details:
-                result["stage_name"] = minervini_details["stage_name"]
-            # Growth metrics
-            if "adr_percent" in minervini_details:
-                result["adr_percent"] = minervini_details["adr_percent"]
-            if "eps_growth_qq" in minervini_details:
-                result["eps_growth_qq"] = minervini_details["eps_growth_qq"]
-            if "sales_growth_qq" in minervini_details:
-                result["sales_growth_qq"] = minervini_details["sales_growth_qq"]
-            # Technical indicators
-            if "ma_alignment" in minervini_details:
-                result["ma_alignment"] = minervini_details["ma_alignment"]
-            if "vcp_detected" in minervini_details:
-                result["vcp_detected"] = minervini_details["vcp_detected"]
-            if "vcp_score" in minervini_details:
-                result["vcp_score"] = minervini_details["vcp_score"]
-            if "vcp_pivot" in minervini_details:
-                result["vcp_pivot"] = minervini_details["vcp_pivot"]
-            if "vcp_ready_for_breakout" in minervini_details:
-                result["vcp_ready_for_breakout"] = minervini_details["vcp_ready_for_breakout"]
-            if "vcp_contraction_ratio" in minervini_details:
-                result["vcp_contraction_ratio"] = minervini_details["vcp_contraction_ratio"]
-            if "vcp_atr_score" in minervini_details:
-                result["vcp_atr_score"] = minervini_details["vcp_atr_score"]
-            if "position_52week" in minervini_details:
-                result["position_52week"] = minervini_details["position_52week"]
-            if "volume_trend" in minervini_details:
-                result["volume_trend"] = minervini_details["volume_trend"]
-            # RS Sparkline data
-            if "rs_sparkline_data" in minervini_details:
-                result["rs_sparkline_data"] = minervini_details["rs_sparkline_data"]
-            if "rs_trend" in minervini_details:
-                result["rs_trend"] = minervini_details["rs_trend"]
-            # Price Sparkline data
-            if "price_sparkline_data" in minervini_details:
-                result["price_sparkline_data"] = minervini_details["price_sparkline_data"]
-            if "price_change_1d" in minervini_details:
-                result["price_change_1d"] = minervini_details["price_change_1d"]
-            if "price_trend" in minervini_details:
-                result["price_trend"] = minervini_details["price_trend"]
-            # Performance metrics (new technical filters)
-            if "perf_week" in minervini_details:
-                result["perf_week"] = minervini_details["perf_week"]
-            if "perf_month" in minervini_details:
-                result["perf_month"] = minervini_details["perf_month"]
-            # Qullamaggie extended performance metrics
-            if "perf_3m" in minervini_details:
-                result["perf_3m"] = minervini_details["perf_3m"]
-            if "perf_6m" in minervini_details:
-                result["perf_6m"] = minervini_details["perf_6m"]
-            # Episodic Pivot metrics
-            if "gap_percent" in minervini_details:
-                result["gap_percent"] = minervini_details["gap_percent"]
-            if "volume_surge" in minervini_details:
-                result["volume_surge"] = minervini_details["volume_surge"]
-            # Pocket Pivot / Power Trend signals
-            if "pocket_pivot" in minervini_details:
-                result["pocket_pivot"] = minervini_details["pocket_pivot"]
-            if "power_trend" in minervini_details:
-                result["power_trend"] = minervini_details["power_trend"]
-            # EMA distances (new technical filters)
-            if "ema_10_distance" in minervini_details:
-                result["ema_10_distance"] = minervini_details["ema_10_distance"]
-            if "ema_20_distance" in minervini_details:
-                result["ema_20_distance"] = minervini_details["ema_20_distance"]
-            if "ema_50_distance" in minervini_details:
-                result["ema_50_distance"] = minervini_details["ema_50_distance"]
-            # 52-week distances (promoted to top-level for indexed columns)
-            if "above_52w_low_pct" in minervini_details:
-                result["above_52w_low_pct"] = minervini_details["above_52w_low_pct"]
-            if "from_52w_high_pct" in minervini_details:
-                result["from_52w_high_pct"] = minervini_details["from_52w_high_pct"]
-            # Beta and Beta-Adjusted RS metrics
-            if "beta" in minervini_details:
-                result["beta"] = minervini_details["beta"]
-            if "beta_adj_rs" in minervini_details:
-                result["beta_adj_rs"] = minervini_details["beta_adj_rs"]
-            if "beta_adj_rs_1m" in minervini_details:
-                result["beta_adj_rs_1m"] = minervini_details["beta_adj_rs_1m"]
-            if "beta_adj_rs_3m" in minervini_details:
-                result["beta_adj_rs_3m"] = minervini_details["beta_adj_rs_3m"]
-            if "beta_adj_rs_12m" in minervini_details:
-                result["beta_adj_rs_12m"] = minervini_details["beta_adj_rs_12m"]
-
-        # Promote setup_engine payload to top level for json_extract queries
-        if "setup_engine" in screener_results:
-            se_details = screener_results["setup_engine"].details
-            if isinstance(se_details, dict) and "setup_engine" in se_details:
-                result["setup_engine"] = dict(se_details["setup_engine"])
-
-        # Fallback: Extract growth metrics from CANSLIM if not already set
-        if "canslim" in screener_results:
-            canslim_details = screener_results["canslim"].details
-            # EPS growth from CANSLIM's C criteria
-            if result.get("eps_growth_qq") is None and "c_current_earnings" in canslim_details:
-                c_details = canslim_details["c_current_earnings"]
-                if isinstance(c_details, dict) and "eps_growth_qq" in c_details:
-                    result["eps_growth_qq"] = c_details["eps_growth_qq"]
-            # EPS growth Y/Y from CANSLIM's A criteria
-            if result.get("eps_growth_yy") is None and "a_annual_earnings" in canslim_details:
-                a_details = canslim_details["a_annual_earnings"]
-                if isinstance(a_details, dict) and "eps_growth_yy" in a_details:
-                    result["eps_growth_yy"] = a_details["eps_growth_yy"]
-
-        # Final fallback: Extract growth metrics directly from stock_data.quarterly_growth
-        if stock_data.quarterly_growth:
-            qg = stock_data.quarterly_growth
-            if result.get("eps_growth_qq") is None and qg.get("eps_growth_qq") is not None:
-                result["eps_growth_qq"] = qg["eps_growth_qq"]
-            if result.get("sales_growth_qq") is None and qg.get("sales_growth_qq") is not None:
-                result["sales_growth_qq"] = qg["sales_growth_qq"]
-            if result.get("eps_growth_yy") is None and qg.get("eps_growth_yy") is not None:
-                result["eps_growth_yy"] = qg["eps_growth_yy"]
-            if result.get("sales_growth_yy") is None and qg.get("sales_growth_yy") is not None:
-                result["sales_growth_yy"] = qg["sales_growth_yy"]
-
-        if stock_data.fundamentals:
-            if stock_data.fundamentals.get("market_cap") is not None:
-                result["market_cap"] = stock_data.fundamentals["market_cap"]
-            if stock_data.fundamentals.get("market_cap_usd") is not None:
-                result["market_cap_usd"] = stock_data.fundamentals["market_cap_usd"]
-
-        # Extract EPS Rating from fundamentals if available
-        if stock_data.fundamentals and stock_data.fundamentals.get("eps_rating") is not None:
-            result["eps_rating"] = stock_data.fundamentals["eps_rating"]
-
-        # Extract IPO date from fundamentals if available
-        if stock_data.fundamentals and stock_data.fundamentals.get("ipo_date"):
-            result["ipo_date"] = stock_data.fundamentals["ipo_date"]
-        elif "ipo" in screener_results:
-            # Fall back to IPO screener output when cache fundamentals are missing.
-            ipo_details = screener_results["ipo"].details if screener_results["ipo"] else {}
-            if isinstance(ipo_details, dict) and ipo_details.get("ipo_date"):
-                result["ipo_date"] = ipo_details.get("ipo_date")
-
-        # Extract sector/industry classification from fundamentals for UI + filtering.
-        if stock_data.fundamentals:
-            if stock_data.fundamentals.get("sector"):
-                result["gics_sector"] = stock_data.fundamentals["sector"]
-            if stock_data.fundamentals.get("industry"):
-                result["gics_industry"] = stock_data.fundamentals["industry"]
-
-        # Calculate average dollar volume (avg_volume × current_price)
-        # Primary: Use avg_volume from fundamentals (Finviz data)
-        # Fallback: Calculate from price_data
-        avg_volume = None
-        current_price = result.get("current_price")
-
-        # Try fundamentals first (more reliable avg_volume from Finviz)
-        if stock_data.fundamentals and stock_data.fundamentals.get("avg_volume"):
-            avg_volume = stock_data.fundamentals["avg_volume"]
-
-        # Fallback: calculate from price_data if fundamentals not available
-        if avg_volume is None and stock_data.price_data is not None and len(stock_data.price_data) > 0:
-            price_data = stock_data.price_data
-            recent_data = price_data.tail(50)
-            if len(recent_data) > 0 and "Volume" in recent_data.columns:
-                vol_series = recent_data["Volume"].dropna()
-                if len(vol_series) > 0:
-                    avg_volume = int(vol_series.mean())
-
-        # Calculate dollar volume if we have both avg_volume and price
-        avg_volume_value = _finite_float(avg_volume)
-        current_price_value = _finite_float(current_price)
-
-        if avg_volume_value is not None and current_price_value is not None:
-            result["avg_dollar_volume"] = int(avg_volume_value * current_price_value)
-        else:
-            logger.debug(
-                "Skipping avg_dollar_volume for %s avg_volume=%s current_price=%s",
-                symbol,
-                avg_volume,
-                current_price,
-            )
-
-        try:
-            opportunity_projection = build_opportunity_projection(
-                result,
-                stock_data,
-                opportunity_parameters,
-            )
-        except Exception:
-            logger.exception("Opportunity policy assembly failed for %s", symbol)
-            opportunity_projection = build_data_limited_projection(
-                result,
-                stock_data,
-                "opportunity_policy_error",
-            )
-        result.update(opportunity_projection)
-
-        return result
 
     def _error_result(self, symbol: str, error: str) -> Dict:
         """Return result for errors."""
@@ -974,11 +615,11 @@ class ScanOrchestrator:
             "unavailable_screeners": list(unavailable_screeners),
             "composite_reason": None,
             "ipo_bonus": 0.0,
-            **_market_rs_audit_fields(stock_data),
+            **market_rs_audit_fields(stock_data),
             "details": {
                 "screeners": {},
                 "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None,
-                **_market_rs_audit_fields(stock_data),
+                **market_rs_audit_fields(stock_data),
             },
         }
         if stock_data.fundamentals:

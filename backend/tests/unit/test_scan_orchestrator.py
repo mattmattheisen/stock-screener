@@ -24,8 +24,8 @@ from app.scanners.base_screener import (
     StockData,
 )
 from app.scanners.scan_orchestrator import ScanOrchestrator
+from app.scanners.scan_result_assembler import ScanResultAssembler
 from app.scanners.screener_registry import ScreenerRegistry
-
 
 # ── Fakes ───────────────────────────────────────────────────────────
 
@@ -209,6 +209,32 @@ def _build_orchestrator(
 
 
 class TestScanOrchestratorScoring:
+    def test_delegates_successful_result_assembly(self):
+        stock_data = _make_stock_data("TEST", n_days=260)
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+        registry.register(make_fake_screener_class("alpha", 75.0, True))
+
+        class RecordingAssembler:
+            def __init__(self):
+                self.request = None
+
+            def assemble(self, request):
+                self.request = request
+                return {"symbol": request.symbol, "assembled": True}
+
+        assembler = RecordingAssembler()
+        orchestrator = ScanOrchestrator(
+            data_provider=provider,
+            registry=registry,
+            result_assembler=assembler,
+        )
+
+        result = orchestrator.scan_stock_multi("TEST", ["alpha"])
+
+        assert result == {"symbol": "TEST", "assembled": True}
+        assert assembler.request.screener_results["alpha"].score == 75.0
+
     def test_pinned_market_rs_resolution_prevents_latest_reresolution(self):
         stock_data = _make_stock_data("TEST")
         stock_data.market = "US"
@@ -777,9 +803,7 @@ class TestScanOrchestratorDataFlow:
         assert result["action_state"] == "setup_ready"
         assert result["opportunity_state"]["metrics"]["volume_dry_up_max"] == 0.75
 
-    def test_policy_error_degrades_one_row_without_turning_scan_into_error(
-        self, monkeypatch
-    ):
+    def test_policy_error_degrades_one_row_without_turning_scan_into_error(self):
         """Break caught: one policy exception aborting the symbol instead of persisting safe evidence."""
         stock_data = _make_stock_data("TEST", n_days=260)
         stock_data.market = "US"
@@ -789,14 +813,15 @@ class TestScanOrchestratorDataFlow:
         provider = FakeDataProvider({"TEST": stock_data})
         registry = ScreenerRegistry()
         registry.register(make_fake_screener_class("alpha", 75.0, True))
-        orchestrator = ScanOrchestrator(data_provider=provider, registry=registry)
-
         def fail_policy(*_args, **_kwargs):
             raise RuntimeError("sensitive policy detail")
 
-        monkeypatch.setattr(
-            "app.scanners.scan_orchestrator.build_opportunity_projection",
-            fail_policy,
+        orchestrator = ScanOrchestrator(
+            data_provider=provider,
+            registry=registry,
+            result_assembler=ScanResultAssembler(
+                opportunity_projector=fail_policy
+            ),
         )
 
         result = orchestrator.scan_stock_multi("TEST", ["alpha"])
