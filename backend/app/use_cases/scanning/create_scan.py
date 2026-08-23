@@ -469,19 +469,16 @@ class CreateScanUseCase:
                 compile_outcome = self._attempt_compile_path(uow, cmd, symbols)
 
             stored_criteria = dict(cmd.criteria or {})
+            scan_metadata = None
             if instant_match is None:
                 if compile_outcome is None:
-                    stored_criteria = with_opportunity_state_materialization(
-                        stored_criteria
-                    )
+                    scan_metadata = with_opportunity_state_materialization({})
                 else:
                     source_run, _results = compile_outcome
                     if config_has_opportunity_state_materialization(
                         getattr(source_run, "config", None)
                     ):
-                        stored_criteria = with_opportunity_state_materialization(
-                            stored_criteria
-                        )
+                        scan_metadata = with_opportunity_state_materialization({})
 
             # ── Create scan record ───────────────────────────────────
             scan_id = str(uuid.uuid4())
@@ -489,6 +486,7 @@ class CreateScanUseCase:
                 scan = uow.scans.create(
                     scan_id=scan_id,
                     criteria=stored_criteria,
+                    metadata_json=scan_metadata,
                     universe=cmd.universe_label,
                     universe_key=cmd.universe_key,
                     universe_type=cmd.universe_type,

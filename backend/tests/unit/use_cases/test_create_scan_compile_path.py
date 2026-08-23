@@ -189,7 +189,8 @@ class TestCompilePathHappyPath:
             uow, _custom_command()
         )
 
-        assert uow.scans.rows[0].criteria["materialization_versions"] == {
+        assert "materialization_versions" not in uow.scans.rows[0].criteria
+        assert uow.scans.rows[0].metadata_json["materialization_versions"] == {
             "opportunity_state": 1
         }
 

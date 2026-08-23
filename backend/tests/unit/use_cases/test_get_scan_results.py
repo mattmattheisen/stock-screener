@@ -235,7 +235,7 @@ class TestUnboundScanFallback:
         uow.scans.create(
             scan_id="scan-current",
             status="completed",
-            criteria={"materialization_versions": {"opportunity_state": 1}},
+            metadata_json={"materialization_versions": {"opportunity_state": 1}},
         )
 
         result = GetScanResultsUseCase().execute(

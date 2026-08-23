@@ -33,28 +33,21 @@ def config_has_opportunity_state_materialization(config: object) -> bool:
     )
 
 
-def scan_has_opportunity_state_materialization(scan: object) -> bool:
-    """Resolve capability from the owning run, or direct-scan metadata.
-
-    A feature-run binding is authoritative when present. Direct/compiled scan
-    rows use reserved metadata in ``Scan.criteria``. Page contents are never
-    inspected, so an empty current result and a legacy result remain distinct.
-    """
-    if getattr(scan, "feature_run_id", None) is not None:
-        run = getattr(scan, "feature_run", None)
-        run_config = getattr(run, "config_json", None)
-        if run_config is None:
-            run_config = getattr(run, "config", None)
-        return config_has_opportunity_state_materialization(run_config)
-    return config_has_opportunity_state_materialization(
-        getattr(scan, "criteria", None)
-    )
+def resolve_opportunity_state_capability(
+    *,
+    feature_run_id: int | None,
+    feature_run_config: Mapping[str, Any] | None,
+    scan_metadata: Mapping[str, Any] | None,
+) -> bool:
+    """Resolve capability from its explicit authoritative owner."""
+    source = feature_run_config if feature_run_id is not None else scan_metadata
+    return config_has_opportunity_state_materialization(source)
 
 
 __all__ = [
     "MATERIALIZATION_VERSIONS_KEY",
     "OPPORTUNITY_STATE_MATERIALIZATION_VERSION",
     "config_has_opportunity_state_materialization",
-    "scan_has_opportunity_state_materialization",
+    "resolve_opportunity_state_capability",
     "with_opportunity_state_materialization",
 ]

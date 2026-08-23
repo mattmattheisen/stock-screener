@@ -7,10 +7,10 @@ from datetime import datetime
 import httpx
 import pytest
 import pytest_asyncio
-from app.api.v1.scans import router as scans_router
-from app.wiring.bootstrap import get_uow
 from fastapi import FastAPI
 
+from app.api.v1.scans import router as scans_router
+from app.wiring.bootstrap import get_uow
 from tests.unit.use_cases.conftest import (
     FakeFeatureStoreRepository,
     FakeScan,
@@ -154,7 +154,7 @@ class TestScanResultEndpoints:
     ):
         scan_repo = FakeScanRepository()
         scan = _make_scan("scan-current")
-        scan.criteria = {"materialization_versions": {"opportunity_state": 1}}
+        scan.metadata_json = {"materialization_versions": {"opportunity_state": 1}}
         scan_repo.scans["scan-current"] = scan
         uow = _FakeUoW(scans=scan_repo)
 

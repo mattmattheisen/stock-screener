@@ -23,7 +23,7 @@ from app.domain.relative_strength import GROUP_AVG_RS_FIELDS
 from app.domain.scanning.default_filters import resolve_default_scan_filters
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.materialization import (
-    scan_has_opportunity_state_materialization,
+    resolve_opportunity_state_capability,
 )
 from app.domain.scanning.opportunity_state import ActionState
 from app.infra.serialization import json_safe
@@ -299,7 +299,13 @@ def _build_correction_survivor_summary(
     uow: Any,
     scan_results_use_case: Any,
 ) -> dict[str, Any]:
-    if scan is None or not scan_has_opportunity_state_materialization(scan):
+    if scan is None or not resolve_opportunity_state_capability(
+        feature_run_id=scan.feature_run_id,
+        feature_run_config=(
+            scan.feature_run.config_json if scan.feature_run is not None else None
+        ),
+        scan_metadata=scan.metadata_json,
+    ):
         return _empty_correction_survivor_summary(available=False)
 
     survivor_filters = FilterSpec().add_boolean("correction_survivor", True)

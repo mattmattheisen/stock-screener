@@ -105,7 +105,8 @@ class TestCreateScanUseCase:
         assert scan.trigger_source == "manual"
         assert scan.total_stocks == 1
         assert scan.task_id == "fake-task-123"
-        assert scan.criteria == {
+        assert scan.criteria == {}
+        assert scan.metadata_json == {
             "materialization_versions": {"opportunity_state": 1}
         }
 

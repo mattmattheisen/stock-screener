@@ -23,7 +23,7 @@ from app.domain.scanning.filter_expression_evaluator import (
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.filter_expression_serialization import expression_fingerprint
 from app.domain.scanning.materialization import (
-    scan_has_opportunity_state_materialization,
+    resolve_opportunity_state_capability,
 )
 from app.domain.scanning.models import ResultPage
 
@@ -70,8 +70,14 @@ class GetScanResultsUseCase:
     ) -> GetScanResultsResult:
         with uow:
             scan, run_id = resolve_scan(uow, query.scan_id)
-            opportunity_state_available = (
-                scan_has_opportunity_state_materialization(scan)
+            opportunity_state_available = resolve_opportunity_state_capability(
+                feature_run_id=scan.feature_run_id,
+                feature_run_config=(
+                    scan.feature_run.config_json
+                    if scan.feature_run is not None
+                    else None
+                ),
+                scan_metadata=scan.metadata_json,
             )
 
             expression = require_passing_ratings(

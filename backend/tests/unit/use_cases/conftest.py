@@ -82,6 +82,7 @@ class FakeScan:
     universe_index: str | None = None
     universe_symbols: list[str] | None = None
     criteria: dict | None = None
+    metadata_json: dict | None = None
     warnings: list[dict[str, object]] | None = None
     started_at: Any = None
 

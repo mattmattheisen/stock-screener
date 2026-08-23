@@ -468,10 +468,13 @@ class TestDailySnapshotDateCoherence:
 
         scan = SimpleNamespace(
             scan_id="scan-abc",
+            feature_run_id=1,
             feature_run=SimpleNamespace(
                 as_of_date=date(2026, 6, 11),
                 published_at=datetime(2026, 6, 11, 23, 0, tzinfo=timezone.utc),
+                config_json={},
             ),
+            metadata_json=None,
             completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
         )
 
@@ -553,10 +556,13 @@ class TestDailySnapshotDateCoherence:
 
         scan = SimpleNamespace(
             scan_id="scan-abc",
+            feature_run_id=1,
             feature_run=SimpleNamespace(
                 as_of_date=date(2026, 6, 11),
                 published_at=datetime(2026, 6, 11, 23, 0, tzinfo=timezone.utc),
+                config_json={},
             ),
+            metadata_json=None,
             completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
         )
 
@@ -643,7 +649,9 @@ class TestDailySnapshotDateCoherence:
 
         scan = SimpleNamespace(
             scan_id="scan-no-run",
+            feature_run_id=None,
             feature_run=None,
+            metadata_json=None,
             completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
         )
 
@@ -846,6 +854,7 @@ def survivor_snapshot_fixture(monkeypatch):
     scan = SimpleNamespace(
         scan_id="scan-survivors",
         feature_run_id=1,
+        metadata_json=None,
         feature_run=SimpleNamespace(
             as_of_date=date(2026, 8, 21),
             published_at=datetime(2026, 8, 21, 23, 0, tzinfo=timezone.utc),
