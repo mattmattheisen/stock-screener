@@ -242,13 +242,15 @@ def test_runner_propagates_soft_time_limit_from_storage():
         def store_batch_in_cache(self, *_args, **_kwargs):
             raise SoftTimeLimitExceeded()
 
-    with pytest.raises(SoftTimeLimitExceeded):
+    with pytest.raises(SoftTimeLimitExceeded) as raised:
         _run(
             symbols=["AAPL"],
             fetch=lambda _fetcher, symbols, **_kwargs: _success(symbols),
             price_cache=PriceCache(),
             retry_calls=[],
         )
+
+    assert raised.value.__suppress_context__ is True
 
 
 def test_runner_propagates_transient_database_storage_failure():

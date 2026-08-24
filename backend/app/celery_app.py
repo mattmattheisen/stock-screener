@@ -277,6 +277,7 @@ from .tasks.market_queues import (
 )
 
 _MARKET_SCOPED_DATA_FETCH_TASKS = (
+    'app.tasks.cache_tasks.prewarm_scan_cache',
     'app.tasks.cache_tasks.prewarm_all_active_symbols',
     'app.tasks.cache_tasks.weekly_full_refresh',
     'app.tasks.cache_tasks.warm_spy_cache',

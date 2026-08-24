@@ -132,6 +132,9 @@ def test_celery_schedule_moves_orphan_cleanup_and_keeps_legacy_manual_routes():
 
     assert "app.tasks.cache_tasks.daily_cache_warmup" in celery_app.conf.task_routes
     assert "app.tasks.cache_tasks.auto_refresh_after_close" in celery_app.conf.task_routes
+    assert celery_app.conf.task_routes[
+        "app.tasks.cache_tasks.prewarm_scan_cache"
+    ] == {"queue": "data_fetch_shared"}
 
 
 def test_smart_refresh_cache_uses_runtime_activity_tracked_task_base():

@@ -96,7 +96,7 @@ class FailedPriceRetryRunner:
             )
         except PriceRefreshBatchExecutionError as exc:
             if isinstance(exc.cause, SoftTimeLimitExceeded):
-                raise exc.cause
+                raise exc.cause from None
             symbols_to_retry = tuple(
                 dict.fromkeys(
                     [*retryable_failed_symbols, *exc.unresolved_symbols]
