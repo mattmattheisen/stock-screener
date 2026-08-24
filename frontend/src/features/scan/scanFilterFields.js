@@ -1,5 +1,15 @@
 import scanFilterContract from './scanFilterFields.json';
 
+export const OPPORTUNITY_STATE_FIELDS = Object.freeze([
+  'correction_survivor',
+  'resilience_score',
+  'action_state',
+]);
+
+export function isOpportunityStateField(field) {
+  return OPPORTUNITY_STATE_FIELDS.includes(field);
+}
+
 export const EXPRESSION_LIMITS = Object.freeze({
   maxGroups: scanFilterContract.expression_limits.max_groups,
   maxGroupConditions: scanFilterContract.expression_limits.max_group_conditions,

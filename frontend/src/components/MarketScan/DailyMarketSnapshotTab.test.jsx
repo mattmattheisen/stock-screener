@@ -1,13 +1,15 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
+import { recordOpportunityEvidenceOpen } from '../../features/opportunityState/opportunityTelemetry';
 import DailyMarketSnapshotTab from './DailyMarketSnapshotTab';
 
 const getDailySnapshot = vi.fn();
 const getScanResults = vi.fn();
 const chartModalSpy = vi.fn();
+const correctionPanelSpy = vi.fn();
 
 vi.mock('../../api/marketScan', () => ({
   getDailySnapshot: (...args) => getDailySnapshot(...args),
@@ -15,6 +17,10 @@ vi.mock('../../api/marketScan', () => ({
 
 vi.mock('../../api/scans', () => ({
   getScanResults: (...args) => getScanResults(...args),
+}));
+
+vi.mock('../../features/opportunityState/opportunityTelemetry', () => ({
+  recordOpportunityEvidenceOpen: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../Scan/PriceSparkline', () => ({
@@ -25,12 +31,28 @@ vi.mock('../Scan/RSSparkline', () => ({
   default: () => <span data-testid="rs-sparkline" />,
 }));
 
+vi.mock('./MarketHealthExposure', () => ({
+  default: () => <div data-testid="market-health-exposure" />,
+}));
+
 vi.mock('../Scan/ChartViewerModalLazy', () => ({
   default: (props) => {
     chartModalSpy(props);
     return null;
   },
 }));
+
+vi.mock('../shared/CorrectionSurvivorsPanel', async () => {
+  const actual = await vi.importActual('../shared/CorrectionSurvivorsPanel');
+  return {
+    ...actual,
+    default: (props) => {
+      correctionPanelSpy(props);
+      const ActualPanel = actual.default;
+      return <ActualPanel {...props} />;
+    },
+  };
+});
 
 const liveRow = {
   symbol: 'LIVE',
@@ -87,6 +109,22 @@ function snapshotPayload(overrides = {}) {
         history: [],
       },
     ],
+    market_health_exposure: null,
+    correction_survivors: {
+      available: true,
+      complete: true,
+      count: 0,
+      counts_by_action_state: {
+        exit_risk: 0,
+        deteriorating: 0,
+        event_risk: 0,
+        extended: 0,
+        data_limited: 0,
+        setup_ready: 0,
+        watch: 0,
+      },
+      rows: [],
+    },
     top_candidates: {
       min_dollar_volume: 100_000_000,
       rows: [liveRow],
@@ -118,6 +156,8 @@ describe('DailyMarketSnapshotTab', () => {
     getDailySnapshot.mockReset();
     getScanResults.mockReset();
     chartModalSpy.mockReset();
+    correctionPanelSpy.mockReset();
+    recordOpportunityEvidenceOpen.mockClear();
     getDailySnapshot.mockResolvedValue(snapshotPayload());
     getScanResults.mockResolvedValue({ total: 1, results: [liveRow] });
   });
@@ -229,5 +269,109 @@ describe('DailyMarketSnapshotTab', () => {
         })
       );
     });
+  });
+
+  it('renders the live survivor aggregate in backend order with counts, posture, evidence, and daily telemetry seam', async () => {
+    getDailySnapshot.mockResolvedValue(snapshotPayload({
+      market_health_exposure: {
+        date: '2026-08-21',
+        stance: 'Confirmed Uptrend',
+        benchmark_symbol: 'SPY',
+        exposure_score: 72,
+        components: {},
+        history: [],
+      },
+      correction_survivors: {
+        available: true,
+        complete: true,
+        count: 2,
+        counts_by_action_state: {
+          exit_risk: 0,
+          deteriorating: 0,
+          event_risk: 0,
+          extended: 0,
+          data_limited: 0,
+          setup_ready: 1,
+          watch: 1,
+        },
+        rows: [
+          {
+            ...liveRow,
+            symbol: 'RESILIENT-A',
+            resilience_score: 95,
+            action_state: 'setup_ready',
+            opportunity_state: {
+              market: 'US',
+              passed_checks: ['leadership_gate'],
+              failed_checks: [],
+              warnings: [],
+              action_reasons: ['daily persisted evidence'],
+            },
+          },
+          {
+            ...liveRow,
+            symbol: 'RESILIENT-B',
+            resilience_score: 82,
+            action_state: 'watch',
+            opportunity_state: {},
+          },
+        ],
+      },
+    }));
+
+    renderWithProviders(<DailyMarketSnapshotTab />);
+
+    const panel = await screen.findByTestId('correction-survivors-panel');
+    expect(within(panel).getByText('Total survivors: 2')).toBeInTheDocument();
+    expect(within(panel).getByText('Setup Ready: 1')).toBeInTheDocument();
+    expect(within(panel).getByText('Watch: 1')).toBeInTheDocument();
+    expect(within(panel).getByText('Confirmed Uptrend')).toBeInTheDocument();
+    expect(within(panel).getByText('2026-08-21 · SPY')).toBeInTheDocument();
+    const survivorRows = within(panel).getAllByRole('row').slice(1);
+    expect(survivorRows[0]).toHaveTextContent('RESILIENT-A');
+    expect(survivorRows[1]).toHaveTextContent('RESILIENT-B');
+    expect(correctionPanelSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      opportunityTelemetrySurface: 'daily',
+    }));
+
+    const user = userEvent.setup();
+    await user.click(within(panel).getByText('Setup Ready'));
+    expect(await screen.findByText('daily persisted evidence')).toBeInTheDocument();
+    expect(recordOpportunityEvidenceOpen).toHaveBeenCalledOnce();
+    expect(recordOpportunityEvidenceOpen).toHaveBeenCalledWith('US', 'daily');
+  });
+
+  it('renders a valid live zero-survivor result', async () => {
+    renderWithProviders(<DailyMarketSnapshotTab />);
+
+    expect(await screen.findByText('No correction survivors in this snapshot.')).toBeInTheDocument();
+    expect(screen.queryByText('Survivor data incomplete')).not.toBeInTheDocument();
+  });
+
+  it('hides the survivor workflow when the live snapshot capability is unavailable', async () => {
+    getDailySnapshot.mockResolvedValue(snapshotPayload({
+      correction_survivors: {
+        available: false,
+        complete: false,
+        count: 0,
+        counts_by_action_state: {
+          exit_risk: 0,
+          deteriorating: 0,
+          event_risk: 0,
+          extended: 0,
+          data_limited: 0,
+          setup_ready: 0,
+          watch: 0,
+        },
+        rows: [],
+      },
+    }));
+
+    renderWithProviders(<DailyMarketSnapshotTab />);
+
+    expect(await screen.findByText('LIVE')).toBeInTheDocument();
+    expect(screen.queryByTestId('correction-survivors-panel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Survivor data incomplete')).not.toBeInTheDocument();
+    expect(screen.queryByText('No correction survivors in this snapshot.')).not.toBeInTheDocument();
   });
 });

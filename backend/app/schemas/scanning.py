@@ -7,7 +7,7 @@ paginated results, filter options, and score explanations.
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Self
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ..domain.scanning.models import (
     ScanResultItemDomain,
@@ -19,8 +19,14 @@ from ..infra.serialization import (
     normalize_string_list,
     sanitize_sparkline,
 )
+from .opportunity_state import (
+    OPPORTUNITY_PROJECTION_KEYS,
+    ActionStateValue,
+    OpportunityStateResponse,
+    validate_opportunity_projection,
+    validate_opportunity_projection_input,
+)
 from .universe import UniverseDefinition
-
 
 # ---------------------------------------------------------------------------
 # Request models
@@ -163,6 +169,28 @@ class ScanResultItem(BaseModel):
     composite_score: Optional[float] = None
     rating: str
     matched_groups: List[MatchedGroup] = Field(default_factory=list)
+
+    # Persisted correction-survivor policy projection. Missing values mean the
+    # row predates this versioned computation and must not be inferred.
+    correction_survivor: bool | None = None
+    resilience_score: float | None = None
+    action_state: ActionStateValue | None = None
+    opportunity_state: OpportunityStateResponse | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_raw_opportunity_projection(cls, data: Any) -> Any:
+        return validate_opportunity_projection_input(data)
+
+    @model_validator(mode="after")
+    def _validate_opportunity_projection(self) -> Self:
+        validate_opportunity_projection(
+            correction_survivor=self.correction_survivor,
+            resilience_score=self.resilience_score,
+            action_state=self.action_state,
+            opportunity_state=self.opportunity_state,
+        )
+        return self
 
     # Individual screener scores
     minervini_score: Optional[float] = None
@@ -325,6 +353,11 @@ class ScanResultItem(BaseModel):
                 MatchedGroup(id=group.id, name=group.name)
                 for group in getattr(item, "matched_groups", ())
             ],
+            **{
+                key: ef[key]
+                for key in OPPORTUNITY_PROJECTION_KEYS
+                if key in ef
+            },
             # Individual screener scores
             minervini_score=ef.get("minervini_score"),
             canslim_score=ef.get("canslim_score"),
@@ -439,6 +472,12 @@ class ScanResultItem(BaseModel):
         )
 
 
+class ScanResultsCapabilities(BaseModel):
+    """Materialized workflows supported by the resolved scan snapshot."""
+
+    opportunity_state: bool = False
+
+
 class ScanResultsResponse(BaseModel):
     """Response model for paginated scan results."""
 
@@ -448,6 +487,9 @@ class ScanResultsResponse(BaseModel):
     per_page: int
     pages: int
     results: List[ScanResultItem]
+    capabilities: ScanResultsCapabilities = Field(
+        default_factory=ScanResultsCapabilities
+    )
     unfiltered_total: Optional[int] = None
     query_fingerprint: Optional[str] = None
 

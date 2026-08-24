@@ -1,6 +1,7 @@
 """Unit tests for GetScanResultsUseCase — pure in-memory, no infrastructure."""
 
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,14 +19,12 @@ from app.use_cases.scanning.get_scan_results import (
     GetScanResultsResult,
     GetScanResultsUseCase,
 )
-
 from tests.unit.use_cases.conftest import (
     FakeFeatureStoreRepository,
     FakeScanResultRepository,
     FakeUnitOfWork,
     make_domain_item,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -62,10 +61,11 @@ def _make_feature_row(symbol: str, score: float = 85.0) -> FeatureRow:
 
 def _setup_bound_scan(uow, feature_store, scan_id="scan-123", run_id=1, rows=None):
     """Create a scan bound to a feature run, with rows in the feature store."""
-    uow.scans.create(scan_id=scan_id, status="completed", feature_run_id=run_id)
+    scan = uow.scans.create(scan_id=scan_id, status="completed", feature_run_id=run_id)
     if rows is None:
         rows = [_make_feature_row("AAPL"), _make_feature_row("MSFT", score=70.0)]
     feature_store.upsert_snapshot_rows(run_id, rows)
+    return scan
 
 
 # ── Tests ────────────────────────────────────────────────────────────────
@@ -121,6 +121,32 @@ class TestHappyPath:
 
         assert result.page.total == 0
         assert len(result.page.items) == 0
+
+    def test_empty_current_materialization_reports_opportunity_capability(self):
+        """Break caught: inferring capability from an empty response page."""
+        feature_store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=feature_store)
+        scan = _setup_bound_scan(uow, feature_store, rows=[])
+        scan.feature_run = SimpleNamespace(
+            config_json={"materialization_versions": {"opportunity_state": 1}}
+        )
+
+        result = GetScanResultsUseCase().execute(uow, _make_query())
+
+        assert result.page.total == 0
+        assert result.opportunity_state_available is True
+
+    def test_legacy_run_remains_unavailable_independent_of_returned_rows(self):
+        """Break caught: current-looking page contents upgrading legacy run capability."""
+        feature_store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=feature_store)
+        scan = _setup_bound_scan(uow, feature_store)
+        scan.feature_run = SimpleNamespace(config_json={})
+
+        result = GetScanResultsUseCase().execute(uow, _make_query())
+
+        assert result.page.total == 2
+        assert result.opportunity_state_available is False
 
     def test_pagination_metadata(self):
         feature_store = FakeFeatureStoreRepository()
@@ -201,6 +227,23 @@ class TestUnboundScanFallback:
         assert isinstance(result.page, ResultPage)
         assert result.page.total == 2
         assert {i.symbol for i in result.page.items} == {"AAPL", "MSFT"}
+        assert result.opportunity_state_available is False
+
+    def test_current_direct_scan_uses_persisted_scan_materialization_metadata(self):
+        scan_results = FakeScanResultRepository(items=[])
+        uow = FakeUnitOfWork(scan_results=scan_results)
+        uow.scans.create(
+            scan_id="scan-current",
+            status="completed",
+            metadata_json={"materialization_versions": {"opportunity_state": 1}},
+        )
+
+        result = GetScanResultsUseCase().execute(
+            uow, _make_query(scan_id="scan-current")
+        )
+
+        assert result.page.total == 0
+        assert result.opportunity_state_available is True
 
     def test_unbound_scan_passes_query_args_to_scan_results(self):
         """Verify scan_id and spec are forwarded to scan_results.query()."""

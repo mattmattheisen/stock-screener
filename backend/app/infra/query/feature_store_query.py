@@ -13,8 +13,8 @@ from app.domain.scanning.filter_expression_model import (
     FilterExpression,
     filter_spec_to_expression,
 )
-from app.infra.db.portability import lean_count
 from app.infra.db.models.feature_store import StockFeatureDaily
+from app.infra.db.portability import lean_count
 from app.infra.query.sql_filter_compiler import (
     SqlFilterFieldResolver,
     apply_sql_sort,
@@ -114,6 +114,10 @@ _FIELD_BINDINGS = column_bindings({
     "ma_alignment": ("ma_alignment",),
     "stage_name": ("stage_name",),
     "passes_template": ("passes_template",),
+    # Correction-survivor opportunity projection
+    "correction_survivor": ("correction_survivor",),
+    "resilience_score": ("resilience_score",),
+    "action_state": ("action_state",),
     # Pocket Pivot / Power Trend
     "pocket_pivot": ("pocket_pivot",),
     "power_trend": ("power_trend",),

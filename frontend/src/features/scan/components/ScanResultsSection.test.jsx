@@ -4,8 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEmptyExpression } from '../filterExpressionModel';
 import ScanResultsSection from './ScanResultsSection';
 
+const resultsTableSpy = vi.fn();
+
 vi.mock('../../../components/Scan/ResultsTable', () => ({
-  default: () => <div>previous-results-table</div>,
+  default: (props) => {
+    resultsTableSpy(props);
+    return <div>previous-results-table</div>;
+  },
 }));
 
 const baseProps = {
@@ -28,6 +33,33 @@ const baseProps = {
 };
 
 describe('ScanResultsSection', () => {
+  it('keeps opportunity workflow hidden until the API declares capability', () => {
+    render(<ScanResultsSection {...baseProps} />);
+
+    expect(resultsTableSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        opportunityTelemetrySurface: 'scan',
+        showOpportunityState: false,
+      }),
+    );
+  });
+
+  it('shows opportunity columns only for a capable live scan response', () => {
+    render(
+      <ScanResultsSection
+        {...baseProps}
+        resultsData={{
+          ...baseProps.resultsData,
+          capabilities: { opportunity_state: true },
+        }}
+      />,
+    );
+
+    expect(resultsTableSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ showOpportunityState: true }),
+    );
+  });
+
   it('keeps prior rows visible and shows a retryable request error', () => {
     render(
       <ScanResultsSection

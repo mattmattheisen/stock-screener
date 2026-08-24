@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from pathlib import Path
+from time import sleep
 
 from alembic import command
 from alembic.config import Config
@@ -22,6 +23,7 @@ _BASELINE_REVISION = "20260408_0001"
 
 # Serializes startup migrations across uvicorn workers booting concurrently.
 _MIGRATION_ADVISORY_LOCK_KEY = 0x5343414E  # "SCAN"
+_MIGRATION_LOCK_POLL_SECONDS = 0.1
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -56,10 +58,11 @@ def _migration_lock(conn: Connection):
     if conn.dialect.name != "postgresql":
         yield
         return
-    conn.execute(
-        text("SELECT pg_advisory_lock(:key)"),
+    while not conn.execute(
+        text("SELECT pg_try_advisory_lock(:key)"),
         {"key": _MIGRATION_ADVISORY_LOCK_KEY},
-    )
+    ).scalar_one():
+        sleep(_MIGRATION_LOCK_POLL_SECONDS)
     try:
         yield
     finally:

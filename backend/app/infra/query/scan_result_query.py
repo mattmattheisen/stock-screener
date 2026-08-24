@@ -103,6 +103,10 @@ _FIELD_BINDINGS = column_bindings({
     "pocket_pivot": ("pocket_pivot",),
     "power_trend": ("power_trend",),
     "passes_template": ("passes_template",),
+    # Correction-survivor opportunity projection
+    "correction_survivor": ("correction_survivor",),
+    "resilience_score": ("resilience_score",),
+    "action_state": ("action_state",),
     # Setup Engine (numeric)
     "se_setup_score": ("setup_engine", "setup_score"),
     "se_quality_score": ("setup_engine", "quality_score"),

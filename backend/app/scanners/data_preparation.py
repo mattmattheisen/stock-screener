@@ -8,24 +8,35 @@ performance when running multiple screeners on the same stock.
 import logging
 import random
 import time
-from typing import List, Dict, Optional
+from datetime import date
+from typing import Dict, List, Optional
+
 import pandas as pd
 
-from .base_screener import DataRequirements, StockData
-from .criteria.relative_strength import RelativeStrengthCalculator
 from ..domain.common.errors import DataFetchError
 from ..domain.scanning.ports import LegacyMarketRsSource, MarketRsResolution
-from ..services.benchmark_cache_service import BenchmarkCacheService, BenchmarkDataBundle
+from ..services.benchmark_cache_service import (
+    BenchmarkCacheService,
+    BenchmarkDataBundle,
+)
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
 from ..services.rate_limiter import RateLimitTimeoutError
-from ..services.security_master_service import SecurityMasterResolver, security_master_resolver
+from ..services.security_master_service import (
+    SecurityMasterResolver,
+    security_master_resolver,
+)
+from ..services.stock_event_context_service import StockEventContextService
 from ..wiring.bootstrap import get_rate_limiter, get_yfinance_service
+from .base_screener import DataRequirements, StockData
+from .criteria.relative_strength import RelativeStrengthCalculator
 
 logger = logging.getLogger(__name__)
 
 _TRANSIENT_TYPES = (ConnectionError, TimeoutError, RateLimitTimeoutError)
 _RS_PERCENTILE_PERIODS = (21, 63, 252)
+_EVENT_CALENDAR_MAX_AGE_DAYS = 7
+_EVENT_CALENDAR_FUTURE_TOLERANCE_DAYS = 3
 
 
 class DataPreparationLayer:
@@ -42,6 +53,7 @@ class DataPreparationLayer:
         price_cache: PriceCacheService,
         benchmark_cache: BenchmarkCacheService,
         fundamentals_cache: FundamentalsCacheService,
+        event_context_service: StockEventContextService | None = None,
         max_retries: int = 0,
         retry_base_delay: float = 1.0,
         defer_market_rs_resolution: bool = False,
@@ -50,6 +62,9 @@ class DataPreparationLayer:
         self.price_cache = price_cache
         self.benchmark_cache = benchmark_cache
         self.fundamentals_cache = fundamentals_cache
+        self.event_context_service = event_context_service or StockEventContextService(
+            price_cache=price_cache
+        )
         self._max_retries = max_retries
         self._retry_base_delay = retry_base_delay
         self._defer_market_rs_resolution = defer_market_rs_resolution
@@ -57,6 +72,93 @@ class DataPreparationLayer:
         self._rate_limiter = get_rate_limiter()
         self._security_master = security_master_resolver
         self._rs_calc = RelativeStrengthCalculator()
+
+    @staticmethod
+    def _as_of_date(price_data: pd.DataFrame | None) -> date | None:
+        if price_data is None or price_data.empty:
+            return None
+        try:
+            return pd.Timestamp(price_data.index[-1]).date()
+        except (TypeError, ValueError):
+            return None
+
+    def _prepare_event_calendar(
+        self,
+        *,
+        symbol: str,
+        price_data: pd.DataFrame | None,
+        requirements: DataRequirements,
+        fetch_errors: dict[str, str],
+        fundamentals: dict | None = None,
+        allow_remote: bool = True,
+    ) -> tuple[date | None, bool]:
+        if not requirements.needs_event_calendar:
+            return None, False
+
+        as_of_date = self._as_of_date(price_data)
+        persisted_date, persisted_available = self._persisted_event_calendar(
+            fundamentals,
+            as_of_date=as_of_date,
+        )
+        if persisted_available:
+            return persisted_date, True
+        if not allow_remote:
+            fetch_errors["event_calendar"] = (
+                "No current persisted event calendar evidence"
+            )
+            return None, False
+        try:
+            next_earnings_date, _, available = (
+                self.event_context_service.get_next_earnings_summary_with_status(
+                    symbol,
+                    as_of_date=as_of_date,
+                )
+            )
+            if not available:
+                fetch_errors["event_calendar"] = "Event calendar provider unavailable"
+                return None, False
+            return next_earnings_date, True
+        except Exception as exc:
+            logger.warning("Error fetching event calendar for %s: %s", symbol, exc)
+            fetch_errors["event_calendar"] = str(exc)
+            return None, False
+
+    @staticmethod
+    def _persisted_event_calendar(
+        fundamentals: dict | None,
+        *,
+        as_of_date: date | None,
+    ) -> tuple[date | None, bool]:
+        if not isinstance(fundamentals, dict) or as_of_date is None:
+            return None, False
+        raw_observed_at = fundamentals.get("event_calendar_as_of_date")
+        try:
+            observed_timestamp = pd.Timestamp(raw_observed_at)
+        except (TypeError, ValueError):
+            return None, False
+        if pd.isna(observed_timestamp):
+            return None, False
+        observed_at = observed_timestamp.date()
+        age_days = (as_of_date - observed_at).days
+        if (
+            age_days < -_EVENT_CALENDAR_FUTURE_TOLERANCE_DAYS
+            or age_days > _EVENT_CALENDAR_MAX_AGE_DAYS
+        ):
+            return None, False
+
+        raw_next_date = fundamentals.get("next_earnings_date")
+        if raw_next_date is None:
+            return None, True
+        try:
+            next_timestamp = pd.Timestamp(raw_next_date)
+        except (TypeError, ValueError):
+            return None, False
+        if pd.isna(next_timestamp):
+            return None, False
+        next_earnings_date = next_timestamp.date()
+        if next_earnings_date < as_of_date:
+            return None, False
+        return next_earnings_date, True
 
     def _resolve_identity(self, symbol: str):
         resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
@@ -378,7 +480,7 @@ class DataPreparationLayer:
 
         # 3. Fetch fundamentals (if needed, using cache)
         fundamentals = None
-        if requirements.needs_fundamentals:
+        if requirements.needs_fundamentals or requirements.needs_event_calendar:
             try:
                 # Use cache service instead of direct API call (no rate limiting needed - cache handles it)
                 fundamentals = self._fetch_with_retry(
@@ -387,7 +489,7 @@ class DataPreparationLayer:
                     force_refresh=False,  # Use cache by default
                     market=normalized_market,
                 )
-                if fundamentals is None:
+                if fundamentals is None and requirements.needs_fundamentals:
                     fetch_errors["fundamentals"] = "No fundamental data returned"
             except Exception as e:
                 logger.warning(f"Error fetching fundamentals for {normalized_symbol}: {e}")
@@ -409,6 +511,14 @@ class DataPreparationLayer:
         # CANSLIM now uses eps_growth_yy from fundamentals instead
         earnings_history = None
 
+        next_earnings_date, event_calendar_available = self._prepare_event_calendar(
+            symbol=canonical_symbol,
+            price_data=price_data,
+            requirements=requirements,
+            fetch_errors=fetch_errors,
+            fundamentals=fundamentals,
+        )
+
         # Create StockData container
         stock_data = StockData(
             symbol=canonical_symbol,
@@ -417,6 +527,8 @@ class DataPreparationLayer:
             fundamentals=fundamentals,
             quarterly_growth=quarterly_growth,
             earnings_history=earnings_history,
+            next_earnings_date=next_earnings_date,
+            event_calendar_available=event_calendar_available,
             benchmark_symbol=(
                 benchmark_bundle.benchmark_symbol
                 if benchmark_bundle is not None
@@ -507,7 +619,7 @@ class DataPreparationLayer:
                 unique_canonical_symbols,
                 market_by_symbol=market_by_symbol,
             )
-            if requirements.needs_fundamentals
+            if requirements.needs_fundamentals or requirements.needs_event_calendar
             else {}
         )
 
@@ -604,6 +716,17 @@ class DataPreparationLayer:
             # CANSLIM now uses eps_growth_yy from fundamentals instead
             earnings_history = None
 
+            next_earnings_date, event_calendar_available = (
+                self._prepare_event_calendar(
+                    symbol=symbol,
+                    price_data=price_data,
+                    requirements=requirements,
+                    fetch_errors=fetch_errors,
+                    fundamentals=fundamentals,
+                    allow_remote=False,
+                )
+            )
+
             # Create StockData
             market_benchmark_bundle = (
                 benchmark_bundle_by_market.get(normalized_market)
@@ -632,6 +755,8 @@ class DataPreparationLayer:
                 fundamentals=fundamentals,
                 quarterly_growth=quarterly_growth,
                 earnings_history=earnings_history,
+                next_earnings_date=next_earnings_date,
+                event_calendar_available=event_calendar_available,
                 benchmark_symbol=(
                     market_benchmark_bundle.benchmark_symbol
                     if market_benchmark_bundle is not None
@@ -691,6 +816,7 @@ class DataPreparationLayer:
         """
         try:
             import yfinance as yf
+
             from ..config import settings
             self._rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
 

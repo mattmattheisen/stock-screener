@@ -1,7 +1,7 @@
 /**
  * Watchlist Table Component
  */
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link as RouterLink } from 'react-router-dom';
 import {
@@ -22,6 +22,8 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import RSSparkline from '../Scan/RSSparkline';
 import PriceSparkline from '../Scan/PriceSparkline';
+import ActionStateBadge from '../shared/ActionStateBadge';
+import OpportunityEvidenceDrawer from '../shared/OpportunityEvidenceDrawer';
 import PriceChangeBar from './PriceChangeBar';
 import { removeItem } from '../../api/userWatchlists';
 
@@ -37,7 +39,21 @@ const PRICE_PERIODS = [
 
 function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, onOpenChart }) {
   const [hoveredRow, setHoveredRow] = useState(null);
+  const [opportunityItemId, setOpportunityItemId] = useState(null);
   const queryClient = useQueryClient();
+  const { items, price_change_bounds } = watchlistData;
+  const opportunityRow = useMemo(() => {
+    const stock = items?.find((item) => item.id === opportunityItemId);
+    if (!stock) return null;
+    const stewardship = stewardshipBySymbol[stock.symbol];
+    if (!stewardship?.opportunity_state) return null;
+    return { ...stock, ...stewardship };
+  }, [items, opportunityItemId, stewardshipBySymbol]);
+  useEffect(() => {
+    if (opportunityItemId != null && opportunityRow == null) {
+      setOpportunityItemId(null);
+    }
+  }, [opportunityItemId, opportunityRow]);
 
   const removeMutation = useMutation({
     mutationFn: removeItem,
@@ -52,8 +68,6 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
     removeMutation.mutate(itemId);
   };
 
-  const { items, price_change_bounds } = watchlistData;
-
   if (!items || items.length === 0) {
     return (
       <Box textAlign="center" py={4}>
@@ -65,14 +79,16 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
   }
 
   return (
-    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 'calc(100vh - 180px)' }}>
-      <Table size="small" stickyHeader>
-        <TableHead>
-          <TableRow sx={{ '& th': { py: 0.5, fontSize: '0.75rem' } }}>
+    <>
+      <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 'calc(100vh - 180px)' }}>
+        <Table size="small" stickyHeader>
+          <TableHead>
+            <TableRow sx={{ '& th': { py: 0.5, fontSize: '0.75rem' } }}>
             <TableCell width={28} sx={{ bgcolor: 'background.paper', px: 0.5 }}></TableCell>
             <TableCell sx={{ bgcolor: 'background.paper', width: 55, maxWidth: 55, px: 0.5 }}>Symbol</TableCell>
             <TableCell sx={{ bgcolor: 'background.paper', width: 150, maxWidth: 150, px: 0.5 }}>Company</TableCell>
-            <TableCell sx={{ bgcolor: 'background.paper', width: 110, px: 0.5 }}>Status</TableCell>
+            <TableCell sx={{ bgcolor: 'background.paper', width: 110, px: 0.5 }}>Stewardship</TableCell>
+            <TableCell align="center" sx={{ bgcolor: 'background.paper', width: 110 }}>Action</TableCell>
             <TableCell align="center" sx={{ bgcolor: 'background.paper', width: 60 }}>Score Δ</TableCell>
             <TableCell align="center" sx={{ bgcolor: 'background.paper', width: 60 }}>RS Δ</TableCell>
             <TableCell align="center" sx={{ bgcolor: 'background.paper', width: 80 }}>Earnings</TableCell>
@@ -92,10 +108,10 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
                 {period.label}
               </TableCell>
             ))}
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {items.map((stock) => {
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {items.map((stock) => {
             const stewardship = stewardshipBySymbol[stock.symbol] || {};
             return (
               <TableRow
@@ -162,6 +178,17 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
                   />
                 </TableCell>
                 <TableCell align="center">
+                  <ActionStateBadge
+                    state={stewardship.action_state}
+                    onClick={stewardship.opportunity_state
+                      ? (event) => {
+                        event.stopPropagation();
+                        setOpportunityItemId(stock.id);
+                      }
+                      : undefined}
+                  />
+                </TableCell>
+                <TableCell align="center">
                   <Typography variant="caption">{stewardship.score_delta?.toFixed?.(1) ?? '-'}</Typography>
                 </TableCell>
                 <TableCell align="center">
@@ -211,10 +238,17 @@ function WatchlistTable({ watchlistData, stewardshipBySymbol = {}, onRefresh, on
                 })}
               </TableRow>
             );
-          })}
-        </TableBody>
-      </Table>
-    </TableContainer>
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      <OpportunityEvidenceDrawer
+        open={Boolean(opportunityRow)}
+        row={opportunityRow}
+        onClose={() => setOpportunityItemId(null)}
+        opportunityTelemetrySurface="watchlist"
+      />
+    </>
   );
 }
 

@@ -6,9 +6,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from app.infra.db.migrations import (
+    _alembic_config,
+    _engine_database_url,
+    _migration_lock,
+    migrate_database_to_head,
+)
 from sqlalchemy import create_engine
-
-from app.infra.db.migrations import _alembic_config, _engine_database_url, migrate_database_to_head
 
 
 def test_engine_database_url_preserves_password_for_alembic_config():
@@ -17,6 +21,35 @@ def test_engine_database_url_preserves_password_for_alembic_config():
     assert database_url == "postgresql://stockscanner:secret@localhost/stockscanner"
     assert _alembic_config(database_url).get_main_option("sqlalchemy.url") == database_url
     engine.dispose()
+
+
+def test_postgres_migration_lock_polling_does_not_hold_a_waiting_snapshot():
+    """Break caught: blocking lock waiters stalling CREATE INDEX CONCURRENTLY."""
+    lock_attempts = iter([False, True])
+    statements: list[str] = []
+
+    def execute(statement, _params=None):
+        sql = str(statement)
+        statements.append(sql)
+        if "pg_try_advisory_lock" in sql:
+            return SimpleNamespace(scalar_one=lambda: next(lock_attempts))
+        return MagicMock()
+
+    conn = MagicMock()
+    conn.dialect = SimpleNamespace(name="postgresql")
+    conn.execute.side_effect = execute
+
+    with patch("app.infra.db.migrations.sleep", create=True) as sleep:
+        with _migration_lock(conn):
+            statements.append("migration")
+
+    assert statements == [
+        "SELECT pg_try_advisory_lock(:key)",
+        "SELECT pg_try_advisory_lock(:key)",
+        "migration",
+        "SELECT pg_advisory_unlock(:key)",
+    ]
+    sleep.assert_called_once()
 
 
 def _stub_engine(dialect_name: str, calls: list[str]):
@@ -29,8 +62,9 @@ def _stub_engine(dialect_name: str, calls: list[str]):
 
     def _record_execute(statement, params=None):
         sql = str(statement)
-        if "pg_advisory_lock" in sql:
+        if "pg_try_advisory_lock" in sql:
             calls.append("lock")
+            return SimpleNamespace(scalar_one=lambda: True)
         elif "pg_advisory_unlock" in sql:
             calls.append("unlock")
         return MagicMock()

@@ -15,18 +15,19 @@ Covers:
 from __future__ import annotations
 
 import logging
+from datetime import date
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-import pytest
-
 from app.analysis.patterns.aggregator import DetectorExecutionTrace
 from app.analysis.patterns.models import validate_setup_engine_payload
 from app.scanners.base_screener import DataRequirements, ScreenerResult, StockData
 from app.scanners.screener_registry import screener_registry
-from app.scanners.setup_engine_screener import SetupEngineScanner, _count_current_week_sessions
-
+from app.scanners.setup_engine_screener import (
+    SetupEngineScanner,
+    _count_current_week_sessions,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -364,6 +365,21 @@ class TestTimingObservability:
 
 class TestOperationalFlagsIntegration:
     """SE-E7: Operational invalidation flags wired through full pipeline."""
+
+    def test_iso_earnings_date_triggers_event_flag(self):
+        """A persisted ISO earnings date is evaluated against the latest price bar."""
+        data = _make_stock_data(num_days=350)
+        data.next_earnings_date = date(2026, 8, 25)
+        data.event_calendar_available = True
+        data.price_data.index = data.price_data.index[:-1].append(
+            pd.DatetimeIndex(["2026-08-21"])
+        )
+        scanner = SetupEngineScanner()
+
+        result = scanner.scan_stock("TEST", data, {})
+
+        flags = result.details["setup_engine"]["explain"]["invalidation_flags"]
+        assert next(flag for flag in flags if flag["code"] == "earnings_soon")["is_hard"] is False
 
     def test_low_liquidity_flag_in_full_pipeline(self):
         """Synthetic stock with tiny volume should trigger low_liquidity flag."""

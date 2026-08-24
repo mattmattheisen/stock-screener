@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
 import json
 import logging
-from pathlib import Path
 import shutil
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -19,50 +19,55 @@ from app.domain.relative_strength import GroupSnapshotIdentity
 from app.domain.scanning.default_filters import (
     DEFAULT_SCAN_FILTERS_BY_MARKET,
     DEFAULT_SCAN_FILTERS_FALLBACK,
-    resolve_default_scan_filters,
 )
 from app.domain.scanning.filter_expression_model import FilterExpression
-from app.infra.serialization import json_safe
+from app.domain.scanning.materialization import (
+    config_has_opportunity_state_materialization,
+)
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
-from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
-from app.services.key_market_history import build_key_market_entries
+from app.infra.serialization import json_safe
 from app.services.feature_run_rs_identity import resolve_feature_run_rs_identity
+from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
+from app.services.key_market_history import build_key_market_entries
 from app.services.market_exposure_service import build_exposure_payload
-from app.services.preset_screens import (
-    PRESET_SCREENS,
-    resolve_preset_screens_for_defaults,
-)
-from app.services.static_groups_rrg_export import (
-    StaticGroupsRRGDatabasePayloadSource,
-    StaticGroupsRRGUnavailableError,
-    StaticGroupsRRGPayloadSource,
-)
 from app.services.snapshot_date_coherence import (
     SnapshotSectionDates,
     build_snapshot_freshness,
-)
-from app.services.ui_snapshot_service import UISnapshotService
-from app.services.group_rank_snapshot_reader import GroupRankSnapshotReader
-from app.services.static_group_section_builder import StaticGroupSectionBuilder
-from app.services.static_site_errors import (
-    NoPublishedStaticMarketArtifact,
-    StaticSiteSectionUnavailableError,
 )
 from app.services.static_artifact_combiner import (
     StaticArtifactCombiner,
     StaticArtifactFormulaError,
 )
+from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
 from app.services.static_chart_bundle_exporter import (
     StaticChartBundleConfig,
     StaticChartBundleExporter,
 )
-from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
+from app.services.static_group_section_builder import StaticGroupSectionBuilder
+from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGDatabasePayloadSource,
+    StaticGroupsRRGPayloadSource,
+    StaticGroupsRRGUnavailableError,
+)
 from app.services.static_market_artifact_contract import (
     STATIC_MARKET_METADATA_FILENAME,
     STATIC_SITE_SCHEMA_VERSION,
 )
+from app.services.static_scan_bundle_exporter import (
+    SCAN_BUNDLE_SCHEMA_VERSION as _SCAN_BUNDLE_SCHEMA_VERSION,
+)
+from app.services.static_scan_bundle_exporter import (
+    SCAN_CHUNK_SIZE,
+    StaticScanBundleExporter,
+    StaticScanBundleRequest,
+)
+from app.services.static_site_errors import (
+    NoPublishedStaticMarketArtifact,
+    StaticSiteSectionUnavailableError,
+)
+from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
     get_benchmark_cache,
     get_fundamentals_cache,
@@ -70,12 +75,10 @@ from app.wiring.bootstrap import (
     get_price_cache,
 )
 
-
 logger = logging.getLogger(__name__)
 
-SCAN_BUNDLE_SCHEMA_VERSION = "static-scan-v1"
+SCAN_BUNDLE_SCHEMA_VERSION = _SCAN_BUNDLE_SCHEMA_VERSION
 CHART_BUNDLE_SCHEMA_VERSION = "static-charts-v1"
-SCAN_CHUNK_SIZE = 1000
 STATIC_CHART_LIMIT = 200
 STATIC_CHART_PERIOD = "6mo"
 STATIC_CHART_PERIOD_DAYS = 180
@@ -153,6 +156,9 @@ class StaticSiteExportService:
             json_writer=self._write_json,
             scan_row_serializer=self._serialize_scan_row,
             config=chart_config,
+        )
+        self._scan_bundle_exporter = StaticScanBundleExporter(
+            json_writer=self._write_json,
         )
         self._breadth_builder = StaticBreadthSectionBuilder(
             ui_snapshot_service=self._ui_snapshot_service,
@@ -312,6 +318,9 @@ class StaticSiteExportService:
                 f"No published feature run is available for static-site export market {market}",
                 markets=(market,),
             )
+        opportunity_state_available = config_has_opportunity_state_materialization(
+            latest_run.config_json
+        )
 
         formula_version = (
             str(formula_version_override).strip()
@@ -462,6 +471,7 @@ class StaticSiteExportService:
             ),
             "features": {
                 "scan": True,
+                "opportunity_state": opportunity_state_available,
                 "breadth": bool(breadth_payload.get("available", True)),
                 "groups": bool(groups_payload.get("available", False)),
                 "rrg": rrg_available,
@@ -734,81 +744,20 @@ class StaticSiteExportService:
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if rows is None or filter_options is None:
             rows, filter_options = self._load_scan_export_source(db, run)
-
-        normalized_prefix = Path() if path_prefix is None else Path(path_prefix)
-        scan_dir = output_dir / normalized_prefix / "scan"
-        chunk_dir = scan_dir / "chunks"
-        chunk_dir.mkdir(parents=True, exist_ok=True)
-
-        serialized_rows = [self._serialize_scan_row(row) for row in rows]
-        publication = resolve_feature_run_rs_identity(
-            run,
-            ranking_date=run.as_of_date,
-        ).publication
-        rs_metadata = {
-            "rs_formula_version": publication.snapshot.formula_version,
-            "market_rs_run_id": publication.market_rs_run_id,
-            "rs_as_of_date": publication.snapshot.as_of_date.isoformat(),
-            "rs_universe_size": publication.universe_size,
-        }
-        for serialized_row in serialized_rows:
-            serialized_row.update(rs_metadata)
-        self._annotate_percentile_ranks(serialized_rows)
-        serialized_rows = self._sort_static_scan_rows(serialized_rows)
-        resolved_default_filters = self.resolve_static_default_filters(market)
-        resolved_preset_screens = resolve_preset_screens_for_defaults(
-            PRESET_SCREENS,
-            resolved_default_filters,
-        )
-        default_filtered_rows = self._apply_static_default_filters(
-            serialized_rows, default_filters=resolved_default_filters
-        )
-        chunk_refs: list[dict[str, Any]] = []
-        for index in range(0, len(serialized_rows), SCAN_CHUNK_SIZE):
-            chunk_rows = serialized_rows[index:index + SCAN_CHUNK_SIZE]
-            chunk_num = (index // SCAN_CHUNK_SIZE) + 1
-            rel_path = normalized_prefix / "scan" / "chunks" / f"chunk-{chunk_num:04d}.json"
-            payload = {
-                "schema_version": SCAN_BUNDLE_SCHEMA_VERSION,
-                "generated_at": generated_at,
-                "as_of_date": run.as_of_date.isoformat(),
-                "run_id": run.id,
-                "chunk_index": chunk_num,
-                **rs_metadata,
-                "rows": chunk_rows,
-            }
-            self._write_json(output_dir / rel_path, payload)
-            chunk_refs.append(
-                {
-                    "path": rel_path.as_posix(),
-                    "count": len(chunk_rows),
-                }
+        exported = self._scan_bundle_exporter.export_scan_bundle(
+            StaticScanBundleRequest(
+                output_dir=output_dir,
+                generated_at=generated_at,
+                run=run,
+                rows=rows,
+                filter_options=filter_options,
+                path_prefix=path_prefix,
+                market=market,
+                row_serializer=self._serialize_scan_row,
+                chunk_size=SCAN_CHUNK_SIZE,
             )
-
-        manifest = {
-            "schema_version": SCAN_BUNDLE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "as_of_date": run.as_of_date.isoformat(),
-            "run_id": run.id,
-            **rs_metadata,
-            "sort": {"field": "composite_score", "order": "desc"},
-            "default_page_size": 50,
-            "chunk_size": SCAN_CHUNK_SIZE,
-            "rows_total": len(serialized_rows),
-            "default_filters": dict(resolved_default_filters),
-            "default_filtered_rows_total": len(default_filtered_rows),
-            "filter_options": FilterOptionsResponse(
-                ibd_industries=list(filter_options.ibd_industries),
-                gics_sectors=list(filter_options.gics_sectors),
-                ratings=list(filter_options.ratings),
-            ).model_dump(mode="json"),
-            "preset_screens": resolved_preset_screens,
-            "chunks": chunk_refs,
-            "initial_rows": default_filtered_rows[:50],
-            "preview_rows": default_filtered_rows[:10],
-        }
-        self._write_json(scan_dir / "manifest.json", manifest)
-        return manifest, serialized_rows
+        )
+        return exported.manifest, list(exported.serialized_rows)
 
     def _build_home_payload(
         self,
@@ -877,65 +826,17 @@ class StaticSiteExportService:
         }
 
     def _serialize_scan_row(self, row) -> dict[str, Any]:
-        item = ScanResultItem.from_domain(row, include_setup_payload=False).model_dump(mode="json")
-        extended = row.extended_fields or {}
-        item.update(
-            {
-                "perf_week": extended.get("perf_week"),
-                "perf_month": extended.get("perf_month"),
-                "perf_3m": extended.get("perf_3m"),
-                "perf_6m": extended.get("perf_6m"),
-                "gap_percent": extended.get("gap_percent"),
-                "volume_surge": extended.get("volume_surge"),
-                "ema_10_distance": extended.get("ema_10_distance"),
-                "ema_20_distance": extended.get("ema_20_distance"),
-                "ema_50_distance": extended.get("ema_50_distance"),
-                "week_52_high_distance": extended.get("week_52_high_distance"),
-                "week_52_low_distance": extended.get("week_52_low_distance"),
-            }
-        )
-        return item
+        return self._scan_bundle_exporter.serialize_scan_row(row)
 
     @staticmethod
     def _annotate_percentile_ranks(rows: list[dict[str, Any]]) -> None:
-        """Add pct_day/pct_week/pct_month (0-100) to each row in-place."""
-        if not rows:
-            return
-        for src_field, dst_field in (
-            ("price_change_1d", "pct_day"),
-            ("perf_week", "pct_week"),
-            ("perf_month", "pct_month"),
-        ):
-            ranked = sorted(
-                (
-                    (i, row[src_field])
-                    for i, row in enumerate(rows)
-                    if row.get(src_field) is not None
-                ),
-                key=lambda pair: pair[1],
-            )
-            total = len(ranked)
-            for row in rows:
-                row[dst_field] = None
-            pos = 0
-            while pos < total:
-                end = pos
-                value = ranked[pos][1]
-                while end + 1 < total and ranked[end + 1][1] == value:
-                    end += 1
-                percentile = round(((end + 1) / total) * 100, 2)
-                for idx in range(pos, end + 1):
-                    row_idx, _ = ranked[idx]
-                    rows[row_idx][dst_field] = percentile
-                pos = end + 1
+        StaticScanBundleExporter.annotate_percentile_ranks(rows)
 
     @staticmethod
     def resolve_static_default_filters(
         market: str | None,
     ) -> dict[str, int | None]:
-        """Return the per-market default scan filters, or the no-op fallback."""
-
-        return resolve_default_scan_filters(market)
+        return StaticScanBundleExporter.resolve_static_default_filters(market)
 
     @staticmethod
     def _apply_static_default_filters(
@@ -943,31 +844,16 @@ class StaticSiteExportService:
         *,
         default_filters: dict[str, int | None] | None = None,
     ) -> list[dict[str, Any]]:
-        filters = default_filters or STATIC_DEFAULT_SCAN_FILTERS_FALLBACK
-        min_volume = filters.get("minVolume")
-        if min_volume is None:
-            return list(rows)
-        return [
-            row
-            for row in rows
-            if row.get("volume") is not None and row["volume"] >= min_volume
-        ]
-
-    @classmethod
-    def _sort_static_scan_rows(cls, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        def _score_key(row: dict[str, Any]) -> float:
-            score = row.get("composite_score")
-            if score is None:
-                return float("-inf")
-            return float(score)
-
-        return sorted(
+        return StaticScanBundleExporter.apply_static_default_filters(
             rows,
-            key=lambda row: (
-                -_score_key(row),
-                row.get("symbol") or "",
-            ),
+            default_filters=default_filters,
         )
+
+    @staticmethod
+    def _sort_static_scan_rows(
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return StaticScanBundleExporter.sort_static_scan_rows(rows)
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:

@@ -8,8 +8,8 @@ Uses real repository .query() methods with QuerySpec/FilterSpec/SortSpec,
 exercising the actual SQLAlchemy query builder code (not raw SQL).
 
 Seed data flows through the real orchestrator path:
-  _call_combine_results() → _map_orchestrator_result() → bulk_insert()
-  _call_combine_results() → _map_orchestrator_to_feature_row() → ORM insert
+  ScanResultAssembler → _map_orchestrator_result() → bulk_insert()
+  ScanResultAssembler → _map_orchestrator_to_feature_row() → ORM insert
 """
 
 from __future__ import annotations
@@ -42,7 +42,10 @@ from app.infra.db.repositories.scan_result_repo import (
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock_universe import StockUniverse
 from app.scanners.base_screener import ScreenerResult, StockData
-from app.scanners.scan_orchestrator import ScanOrchestrator
+from app.scanners.scan_result_assembler import (
+    ScanResultAssembler,
+    ScanResultAssemblyRequest,
+)
 from app.use_cases.feature_store.build_daily_snapshot import (
     _map_orchestrator_to_feature_row,
 )
@@ -235,7 +238,7 @@ _SE_PAYLOADS: dict[str, dict[str, Any]] = {
 
 
 def _make_stub_stock_data(symbol: str) -> StockData:
-    """Minimal StockData for _combine_results()."""
+    """Minimal StockData for result assembly."""
     dates = pd.date_range(end="2026-02-20", periods=10, freq="B")
     df = pd.DataFrame(
         {"Open": 100.0, "High": 105.0, "Low": 99.0, "Close": 102.0, "Volume": 1_000_000},
@@ -272,19 +275,20 @@ def _make_minervini_screener_result() -> ScreenerResult:
     )
 
 
-def _call_combine_results(
+def _assemble_result(
     screener_results: dict[str, ScreenerResult],
     stock_data: StockData,
 ) -> dict[str, Any]:
-    """Call ScanOrchestrator._combine_results() without running a full scan."""
-    orch = ScanOrchestrator.__new__(ScanOrchestrator)
-    return orch._combine_results(
-        symbol=stock_data.symbol,
-        screener_results=screener_results,
-        stock_data=stock_data,
-        composite_score=80.0,
-        overall_rating="Buy",
-        composite_method="weighted_average",
+    """Assemble a persistable result without fetching external stock data."""
+    return ScanResultAssembler().assemble(
+        ScanResultAssemblyRequest(
+            symbol=stock_data.symbol,
+            screener_results=screener_results,
+            stock_data=stock_data,
+            composite_score=80.0,
+            overall_rating="Buy",
+            composite_method="weighted_average",
+        )
     )
 
 
@@ -305,7 +309,7 @@ def _build_test_orchestrator_results() -> list[tuple[str, dict[str, Any]]]:
         else:
             # TSLA: Minervini only
             screeners = {"minervini": _make_minervini_screener_result()}
-        result_dict = _call_combine_results(screeners, sd)
+        result_dict = _assemble_result(screeners, sd)
         results.append((symbol, result_dict))
     return results
 

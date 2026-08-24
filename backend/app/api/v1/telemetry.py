@@ -6,14 +6,17 @@ Endpoints:
 - ``GET /v1/telemetry/markets/{market}/{metric_key}`` — recent raw events
 - ``GET /v1/telemetry/alerts`` — evaluate thresholds and return active alerts (10.2)
 - ``POST /v1/telemetry/alerts/{id}/acknowledge`` — acknowledge an open alert (10.2)
+- ``POST /v1/telemetry/opportunity/evidence-open`` — symbol-free live usage counter
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from ...database import get_db
@@ -27,6 +30,7 @@ from ...services.telemetry.schema import MetricKey
 from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS, normalize_market
 
 router = APIRouter(prefix="/telemetry")
+logger = logging.getLogger(__name__)
 
 
 _ALLOWED_METRIC_KEYS = {
@@ -35,10 +39,40 @@ _ALLOWED_METRIC_KEYS = {
     MetricKey.BENCHMARK_AGE,
     MetricKey.COMPLETENESS_DISTRIBUTION,
     MetricKey.FIELD_COVERAGE,
-    # EXTRACTION_SUCCESS deliberately omitted: it's Redis-only (counter
-    # increments per LLM call), so no PG rows exist for the history endpoint
-    # to return. Live counters surface via /v1/telemetry/markets[/{m}].
+    MetricKey.OPPORTUNITY_STATE,
+    # Counter-only metrics are deliberately omitted because no PG history
+    # rows exist for the endpoint to return. Extraction live counters surface
+    # via /v1/telemetry/markets[/{m}]; evidence opens remain Redis-only.
 }
+
+
+class OpportunityEvidenceOpenRequest(BaseModel):
+    """Allow only the privacy-safe dimensions persisted by this endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    market: str
+    surface: Literal["scan", "daily", "watchlist"]
+
+
+@router.post("/opportunity/evidence-open", status_code=204)
+def post_opportunity_evidence_open(body: OpportunityEvidenceOpenRequest) -> Response:
+    """Record a symbol-free, day-bucketed live evidence-open counter."""
+    try:
+        normalized = normalize_market(body.market)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Unknown market: {body.market}")
+    if normalized not in SUPPORTED_MARKETS:
+        raise HTTPException(status_code=404, detail=f"Unknown market: {body.market}")
+
+    try:
+        get_telemetry().record_opportunity_evidence_open(
+            normalized,
+            surface=body.surface,
+        )
+    except Exception as exc:
+        logger.debug("telemetry: opportunity evidence counter failed (%s)", exc)
+    return Response(status_code=204)
 
 
 @router.get("/markets")

@@ -1,8 +1,8 @@
 """Market Scan schemas"""
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Annotated, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .scanning import ScanResultItem
 
@@ -123,6 +123,38 @@ class DailySnapshotLeaders(BaseModel):
     rows: List[ScanResultItem]
 
 
+NonNegativeInt = Annotated[int, Field(ge=0, strict=True)]
+
+
+class DailySnapshotActionStateCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    exit_risk: NonNegativeInt
+    deteriorating: NonNegativeInt
+    event_risk: NonNegativeInt
+    extended: NonNegativeInt
+    data_limited: NonNegativeInt
+    setup_ready: NonNegativeInt
+    watch: NonNegativeInt
+
+
+class DailySnapshotCorrectionSurvivors(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool
+    complete: bool
+    count: NonNegativeInt
+    counts_by_action_state: DailySnapshotActionStateCounts
+    rows: list[ScanResultItem]
+
+    @model_validator(mode="after")
+    def _validate_count_partition(self):
+        state_total = sum(self.counts_by_action_state.model_dump().values())
+        if self.count != state_total:
+            raise ValueError("count must equal the sum of counts_by_action_state")
+        return self
+
+
 class DailySnapshotTopGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -189,6 +221,7 @@ class DailySnapshotResponse(BaseModel):
     freshness: DailySnapshotFreshness
     key_markets: List[KeyMarketEntry]
     market_health_exposure: Optional[MarketHealthExposure] = None
+    correction_survivors: DailySnapshotCorrectionSurvivors
     top_candidates: DailySnapshotTopCandidates
     leaders: DailySnapshotLeaders
     top_groups: List[DailySnapshotTopGroup]

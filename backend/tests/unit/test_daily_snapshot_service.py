@@ -4,12 +4,10 @@ import json
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
-import pytest
-from pydantic import ValidationError
-
 import app.services.daily_snapshot_service as daily_snapshot_service
 import app.services.key_market_history as key_market_history
 import app.services.snapshot_date_coherence as snapshot_date_coherence
+import pytest
 from app.api.v1.market_scan import _if_none_match_matches
 from app.schemas.market_scan import DailySnapshotResponse
 from app.services.daily_snapshot_service import (
@@ -26,6 +24,7 @@ from app.services.daily_snapshot_service import (
 )
 from app.services.price_refresh_plan_builder import _key_market_refresh_symbols
 from app.services.snapshot_date_coherence import coherence_status
+from pydantic import ValidationError
 
 
 def _norm(market):
@@ -171,13 +170,14 @@ class TestSnapshotCacheHelpers:
 
     def test_cache_key_is_scoped_to_market_and_scan_run(self):
         key = daily_snapshot_cache_key("us", "scan-abc")
-        assert key == f"daily_snapshot:v{DAILY_SNAPSHOT_SCHEMA_VERSION}:US:scan-abc"
+        assert DAILY_SNAPSHOT_SCHEMA_VERSION == 4
+        assert key == "daily_snapshot:v4:US:scan-abc"
         # A newly published run switches the key, invalidating the old entry.
         assert daily_snapshot_cache_key("us", "scan-def") != key
 
     def test_cache_key_without_scan(self):
         key = daily_snapshot_cache_key("hk", None)
-        assert key == f"daily_snapshot:v{DAILY_SNAPSHOT_SCHEMA_VERSION}:HK:no-scan"
+        assert key == "daily_snapshot:v4:HK:no-scan"
 
     def test_etag_is_stable_and_weak(self):
         first = daily_snapshot_etag('{"a":1}')
@@ -460,10 +460,13 @@ class TestDailySnapshotDateCoherence:
 
         scan = SimpleNamespace(
             scan_id="scan-abc",
+            feature_run_id=1,
             feature_run=SimpleNamespace(
                 as_of_date=date(2026, 6, 11),
                 published_at=datetime(2026, 6, 11, 23, 0, tzinfo=timezone.utc),
+                config_json={},
             ),
+            metadata_json=None,
             completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
         )
 
@@ -488,7 +491,7 @@ class TestDailySnapshotDateCoherence:
 
         class FakeUseCase:
             def execute(self, *_args, **_kwargs):
-                return SimpleNamespace(page=SimpleNamespace(items=[]))
+                return SimpleNamespace(page=SimpleNamespace(items=[], total=0))
 
         payload = daily_snapshot_service.build_daily_snapshot_payload(
             FakeDb(),
@@ -545,10 +548,13 @@ class TestDailySnapshotDateCoherence:
 
         scan = SimpleNamespace(
             scan_id="scan-abc",
+            feature_run_id=1,
             feature_run=SimpleNamespace(
                 as_of_date=date(2026, 6, 11),
                 published_at=datetime(2026, 6, 11, 23, 0, tzinfo=timezone.utc),
+                config_json={},
             ),
+            metadata_json=None,
             completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
         )
 
@@ -573,7 +579,7 @@ class TestDailySnapshotDateCoherence:
 
         class FakeUseCase:
             def execute(self, *_args, **_kwargs):
-                return SimpleNamespace(page=SimpleNamespace(items=[]))
+                return SimpleNamespace(page=SimpleNamespace(items=[], total=0))
 
         payload = daily_snapshot_service.build_daily_snapshot_payload(
             FakeDb(),
@@ -635,7 +641,9 @@ class TestDailySnapshotDateCoherence:
 
         scan = SimpleNamespace(
             scan_id="scan-no-run",
+            feature_run_id=None,
             feature_run=None,
+            metadata_json=None,
             completed_at=datetime(2026, 6, 12, 1, 0, tzinfo=timezone.utc),
         )
 
@@ -660,7 +668,7 @@ class TestDailySnapshotDateCoherence:
 
         class FakeUseCase:
             def execute(self, *_args, **_kwargs):
-                return SimpleNamespace(page=SimpleNamespace(items=[]))
+                return SimpleNamespace(page=SimpleNamespace(items=[], total=0))
 
         payload = daily_snapshot_service.build_daily_snapshot_payload(
             FakeDb(),
@@ -737,6 +745,21 @@ class TestDailySnapshotResponseSchema:
                     ],
                 },
             ],
+            "correction_survivors": {
+                "available": True,
+                "complete": True,
+                "count": 0,
+                "counts_by_action_state": {
+                    "exit_risk": 0,
+                    "deteriorating": 0,
+                    "event_risk": 0,
+                    "extended": 0,
+                    "data_limited": 0,
+                    "setup_ready": 0,
+                    "watch": 0,
+                },
+                "rows": [],
+            },
             "top_candidates": {"min_dollar_volume": 100_000_000, "rows": []},
             "leaders": {
                 "criteria": {
@@ -789,6 +812,32 @@ class TestDailySnapshotResponseSchema:
     def test_rejects_nested_drift(self):
         payload = self._payload()
         payload["freshness"]["surprise_field"] = True
+        with pytest.raises(ValidationError):
+            DailySnapshotResponse.model_validate(payload)
+
+    def test_rejects_unknown_action_state_count(self):
+        payload = self._payload()
+        payload["correction_survivors"]["counts_by_action_state"]["other"] = 1
+        with pytest.raises(ValidationError):
+            DailySnapshotResponse.model_validate(payload)
+
+    def test_requires_all_seven_action_state_counts(self):
+        payload = self._payload()
+        del payload["correction_survivors"]["counts_by_action_state"]["watch"]
+        with pytest.raises(ValidationError):
+            DailySnapshotResponse.model_validate(payload)
+
+    def test_rejects_negative_survivor_counts(self):
+        """Break caught: impossible negative aggregates crossing the API boundary."""
+        payload = self._payload()
+        payload["correction_survivors"]["counts_by_action_state"]["watch"] = -1
+        with pytest.raises(ValidationError):
+            DailySnapshotResponse.model_validate(payload)
+
+    def test_rejects_survivor_total_that_disagrees_with_state_counts(self):
+        """Break caught: one headline total contradicting its complete partition."""
+        payload = self._payload()
+        payload["correction_survivors"]["count"] = 2
         with pytest.raises(ValidationError):
             DailySnapshotResponse.model_validate(payload)
 

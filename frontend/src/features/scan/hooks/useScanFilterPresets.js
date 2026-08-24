@@ -32,6 +32,7 @@ export function useScanFilterPresets({
     }),
     [expression],
   );
+  const availablePresets = presets;
 
   const clearActivePreset = useCallback(() => {
     setActivePresetId(null);
@@ -61,7 +62,7 @@ export function useScanFilterPresets({
         return;
       }
 
-      const preset = presets.find((item) => item.id === presetId);
+      const preset = availablePresets.find((item) => item.id === presetId);
       if (!preset) {
         return;
       }
@@ -84,7 +85,7 @@ export function useScanFilterPresets({
       );
       setPresetSortSnapshot({ sortBy: preset.sort_by, sortOrder: preset.sort_order });
     },
-    [applyQuery, clearActivePreset, presets]
+    [applyQuery, availablePresets, clearActivePreset]
   );
 
   const handleOpenSaveDialog = useCallback(() => {
@@ -119,7 +120,7 @@ export function useScanFilterPresets({
 
   const handleRenamePreset = useCallback(
     (presetId) => {
-      const preset = presets.find((item) => item.id === presetId);
+      const preset = availablePresets.find((item) => item.id === presetId);
       if (!preset) {
         return;
       }
@@ -130,7 +131,7 @@ export function useScanFilterPresets({
       setSaveDialogError(null);
       setSaveDialogOpen(true);
     },
-    [presets]
+    [availablePresets]
   );
 
   const handleDeletePreset = useCallback(
@@ -197,6 +198,7 @@ export function useScanFilterPresets({
   );
 
   return {
+    availablePresets,
     activePresetId,
     hasUnsavedChanges,
     clearActivePreset,

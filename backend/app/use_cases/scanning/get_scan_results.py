@@ -22,6 +22,9 @@ from app.domain.scanning.filter_expression_evaluator import (
 )
 from app.domain.scanning.filter_expression_model import QuerySpec
 from app.domain.scanning.filter_expression_serialization import expression_fingerprint
+from app.domain.scanning.materialization import (
+    resolve_opportunity_state_capability,
+)
 from app.domain.scanning.models import ResultPage
 
 from ._resolve import resolve_scan
@@ -53,6 +56,7 @@ class GetScanResultsResult:
     page: ResultPage
     unfiltered_total: int
     query_fingerprint: str
+    opportunity_state_available: bool = False
 
 
 # ── Use Case ────────────────────────────────────────────────────────────
@@ -66,6 +70,15 @@ class GetScanResultsUseCase:
     ) -> GetScanResultsResult:
         with uow:
             scan, run_id = resolve_scan(uow, query.scan_id)
+            opportunity_state_available = resolve_opportunity_state_capability(
+                feature_run_id=scan.feature_run_id,
+                feature_run_config=(
+                    scan.feature_run.config_json
+                    if scan.feature_run is not None
+                    else None
+                ),
+                scan_metadata=scan.metadata_json,
+            )
 
             expression = require_passing_ratings(
                 query.query_spec.expression,
@@ -107,4 +120,5 @@ class GetScanResultsUseCase:
             page=result_page,
             unfiltered_total=unfiltered_total,
             query_fingerprint=expression_fingerprint(expression),
+            opportunity_state_available=opportunity_state_available,
         )

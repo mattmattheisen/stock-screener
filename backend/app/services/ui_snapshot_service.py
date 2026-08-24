@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
 import json
 import logging
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from threading import Lock
 from typing import Any
 
@@ -17,9 +17,9 @@ from app.database import is_corruption_error
 from app.domain.analytics.scope import market_scope_tag
 from app.domain.common.query import PageSpec, SortOrder, SortSpec
 from app.domain.scanning.filter_expression_model import QuerySpec
-from app.infra.serialization import json_safe
-from app.infra.db.uow import SqlUnitOfWork
 from app.infra.db.models.relative_strength import MarketRsFormulaPointer
+from app.infra.db.uow import SqlUnitOfWork
+from app.infra.serialization import json_safe
 from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan
@@ -34,12 +34,13 @@ from app.models.theme import (
     ThemePipelineRun,
 )
 from app.models.ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
-from app.schemas.groups import GroupRankResponse, GroupRankingsResponse, MoversResponse
+from app.schemas.groups import GroupRankingsResponse, GroupRankResponse, MoversResponse
 from app.schemas.scanning import (
     FilterOptionsResponse,
     ScanListItem,
     ScanListResponse,
     ScanResultItem,
+    ScanResultsCapabilities,
     ScanResultsResponse,
     ScanStatusResponse,
     normalize_scan_warnings_for_response,
@@ -60,14 +61,20 @@ from app.schemas.theme import (
     ThemeRankingItem,
     ThemeRankingsResponse,
 )
-from app.services.theme_discovery_service import ThemeDiscoveryService
 from app.services.group_ranking_payloads import group_snapshot_metadata
+from app.services.theme_discovery_service import ThemeDiscoveryService
 from app.services.theme_pipeline_state_service import compute_pipeline_observability
 from app.services.theme_taxonomy_service import ThemeTaxonomyService
-from app.use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
-from app.use_cases.scanning.get_scan_results import GetScanResultsQuery, GetScanResultsUseCase
-from app.wiring.bootstrap import get_stock_universe_service
 from app.tasks.market_queues import SUPPORTED_MARKETS
+from app.use_cases.scanning.get_filter_options import (
+    GetFilterOptionsQuery,
+    GetFilterOptionsUseCase,
+)
+from app.use_cases.scanning.get_scan_results import (
+    GetScanResultsQuery,
+    GetScanResultsUseCase,
+)
+from app.wiring.bootstrap import get_stock_universe_service
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +274,10 @@ class UISnapshotService:
         with _SNAPSHOT_SCHEMA_LOCK:
             if _SNAPSHOT_SCHEMA_READY:
                 return
-            from app.models.ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
+            from app.models.ui_view_snapshot import (
+                UIViewSnapshot,
+                UIViewSnapshotPointer,
+            )
 
             UIViewSnapshot.__table__.create(bind=self._engine, checkfirst=True)
             UIViewSnapshotPointer.__table__.create(bind=self._engine, checkfirst=True)
@@ -298,7 +308,10 @@ class UISnapshotService:
             with self._engine.begin() as conn:
                 _drop_snapshot_tables(conn)
             _SNAPSHOT_SCHEMA_READY = False
-            from app.models.ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
+            from app.models.ui_view_snapshot import (
+                UIViewSnapshot,
+                UIViewSnapshotPointer,
+            )
 
             UIViewSnapshot.__table__.create(bind=self._engine, checkfirst=True)
             UIViewSnapshotPointer.__table__.create(bind=self._engine, checkfirst=True)
@@ -619,6 +632,9 @@ class UISnapshotService:
                     ScanResultItem.model_validate(self._scan_item_to_payload(item))
                     for item in result.page.items
                 ],
+                capabilities=ScanResultsCapabilities(
+                    opportunity_state=result.opportunity_state_available
+                ),
             ).model_dump(mode="json")
             return payload
 

@@ -9,11 +9,12 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.analysis.patterns.report import validate_setup_engine_report_payload
 from app.domain.common.query import PageSpec, SortSpec
 from app.domain.scanning.filter_expression_model import FilterExpression, QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository, ScanResultRsAudit
-from app.analysis.patterns.report import validate_setup_engine_report_payload
+from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.infra.query import scan_result_query
 from app.infra.query.scan_result_query import (
     apply_filter_expression,
@@ -29,7 +30,6 @@ from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
-from app.infra.db.repositories.market_rs_repo import MarketRsRunRepository
 from app.services.growth_cadence_service import build_row_field_availability
 from app.services.market_taxonomy_service import (
     MarketTaxonomyService,
@@ -37,6 +37,32 @@ from app.services.market_taxonomy_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_legacy_setup_engine_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Backfill fields absent from setup-engine payloads written by older runs."""
+    explain = payload.get("explain")
+    if not isinstance(explain, dict):
+        return payload
+    invalidation_flags = explain.get("invalidation_flags")
+    if not isinstance(invalidation_flags, list):
+        return payload
+
+    normalized_flags: list[Any] = []
+    changed = False
+    for flag in invalidation_flags:
+        if isinstance(flag, dict) and "is_hard" not in flag:
+            normalized_flags.append({**flag, "is_hard": False})
+            changed = True
+        else:
+            normalized_flags.append(flag)
+
+    if not changed:
+        return payload
+    return {
+        **payload,
+        "explain": {**explain, "invalidation_flags": normalized_flags},
+    }
 
 
 def _rs_publication_identity(
@@ -159,6 +185,9 @@ def _map_orchestrator_result(scan_id: str, symbol: str, raw: dict) -> dict:
 
     setup_engine = raw.get("setup_engine")
     if isinstance(setup_engine, dict):
+        setup_engine = _normalize_legacy_setup_engine_payload(setup_engine)
+        if setup_engine is not raw.get("setup_engine"):
+            raw = {**raw, "setup_engine": setup_engine}
         validation_errors = validate_setup_engine_report_payload(setup_engine)
         if validation_errors:
             logger.warning(
@@ -882,6 +911,10 @@ def _map_row_to_domain(
         "field_availability": joined.get("field_availability"),
         "growth_reporting_cadence": joined.get("growth_reporting_cadence"),
         "growth_metric_basis": joined.get("growth_metric_basis"),
+        "correction_survivor": details.get("correction_survivor"),
+        "resilience_score": details.get("resilience_score"),
+        "action_state": details.get("action_state"),
+        "opportunity_state": details.get("opportunity_state"),
         "minervini_score": result.minervini_score,
         "canslim_score": result.canslim_score,
         "ipo_score": result.ipo_score,

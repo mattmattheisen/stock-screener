@@ -9,6 +9,20 @@ import StaticScanPage from './StaticScanPage';
 const filterPanelSpy = vi.fn();
 const resultsTableSpy = vi.fn();
 const staticChartModalSpy = vi.fn();
+const resultsTableTestState = vi.hoisted(() => ({ renderReal: false }));
+
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }) => ({
+    getVirtualItems: () => Array.from({ length: count }, (_, index) => ({
+      index,
+      start: index * 48,
+      end: (index + 1) * 48,
+      size: 48,
+      key: index,
+    })),
+    getTotalSize: () => count * 48,
+  }),
+}));
 
 vi.mock('../../components/Scan/FilterPanel', () => ({
   default: (props) => {
@@ -17,9 +31,15 @@ vi.mock('../../components/Scan/FilterPanel', () => ({
   },
 }));
 
-vi.mock('../../components/Scan/ResultsTable', () => ({
-  default: (props) => {
+vi.mock('../../components/Scan/ResultsTable', async () => {
+  const actual = await vi.importActual('../../components/Scan/ResultsTable');
+  return {
+    default: (props) => {
     resultsTableSpy(props);
+    if (resultsTableTestState.renderReal) {
+      const ActualResultsTable = actual.default;
+      return <ActualResultsTable {...props} />;
+    }
     return (
       <div>
         <div data-testid="results-table-page">{props.page}</div>
@@ -38,7 +58,8 @@ vi.mock('../../components/Scan/ResultsTable', () => ({
       </div>
     );
   },
-}));
+  };
+});
 
 vi.mock('../StaticChartViewerModal', () => ({
   default: (props) => {
@@ -81,6 +102,7 @@ describe('StaticScanPage', () => {
     filterPanelSpy.mockClear();
     resultsTableSpy.mockClear();
     staticChartModalSpy.mockClear();
+    resultsTableTestState.renderReal = false;
   });
 
   afterEach(() => {

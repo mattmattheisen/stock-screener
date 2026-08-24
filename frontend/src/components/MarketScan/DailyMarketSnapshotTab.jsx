@@ -24,6 +24,7 @@ import { getScanResults } from '../../api/scans';
 import PriceSparkline from '../Scan/PriceSparkline';
 import MarketHealthExposure from './MarketHealthExposure';
 import ChartViewerModal from '../Scan/ChartViewerModalLazy';
+import CorrectionSurvivorsPanel from '../shared/CorrectionSurvivorsPanel';
 import DailyScanRowsTable from '../shared/DailyScanRowsTable';
 import RankChangeCell from '../shared/RankChangeCell';
 import TickerCell from '../common/TickerCell';
@@ -83,6 +84,7 @@ function DailyMarketSnapshotTab() {
     ? (snapshot?.top_candidates?.rows ?? EMPTY_ROWS)
     : (filteredResultsQuery.data?.results ?? EMPTY_ROWS);
   const leaders = snapshot?.leaders?.rows ?? EMPTY_ROWS;
+  const correctionSurvivorRows = snapshot?.correction_survivors?.rows ?? EMPTY_ROWS;
   const topGroups = (snapshot?.top_groups ?? EMPTY_ROWS).slice(0, 10);
 
   const keyMarkets = useMemo(() => (
@@ -100,9 +102,18 @@ function DailyMarketSnapshotTab() {
       .map((row) => row?.symbol)
       .filter((symbol) => symbol && !seen.has(symbol) && seen.add(symbol));
   }, [topResults]);
+  const leaderSymbols = useMemo(
+    () => leaders.map((row) => row?.symbol).filter(Boolean),
+    [leaders],
+  );
+  const correctionSurvivorSymbols = useMemo(
+    () => correctionSurvivorRows.map((row) => row?.symbol).filter(Boolean),
+    [correctionSurvivorRows],
+  );
 
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const [modalNavigationSymbols, setModalNavigationSymbols] = useState([]);
 
   if (snapshotQuery.isLoading) {
     return (
@@ -116,9 +127,10 @@ function DailyMarketSnapshotTab() {
     return <Alert severity="error">Failed to load the daily snapshot.</Alert>;
   }
 
-  const handleRowClick = (symbol) => {
+  const handleRowClick = (symbol, navigationSymbols = topResultSymbols) => {
     if (!scanId) return;
     setSelectedSymbol(symbol);
+    setModalNavigationSymbols(navigationSymbols);
     setChartModalOpen(true);
   };
 
@@ -203,6 +215,16 @@ function DailyMarketSnapshotTab() {
 
       <MarketHealthExposure exposure={snapshot?.market_health_exposure} />
 
+      {snapshot?.correction_survivors?.available === true && (
+        <CorrectionSurvivorsPanel
+          summary={snapshot.correction_survivors}
+          posture={snapshot?.market_health_exposure}
+          navigationSymbols={correctionSurvivorSymbols}
+          onOpenChart={scanId ? handleRowClick : null}
+          opportunityTelemetrySurface="daily"
+        />
+      )}
+
       <DailyScanRowsTable
         title="Top Scan Candidates"
         subtitle={
@@ -216,6 +238,7 @@ function DailyMarketSnapshotTab() {
         errorMessage="Failed to load scan candidates."
         emptyMessage="No scan candidates match the current filters."
         showRating
+        navigationSymbols={topResultSymbols}
         onOpenChart={scanId ? handleRowClick : null}
         action={(
           <TextField
@@ -245,6 +268,7 @@ function DailyMarketSnapshotTab() {
         rows={leaders}
         emptyMessage="No leaders in leading groups match the current snapshot."
         showRs
+        navigationSymbols={leaderSymbols}
         onOpenChart={scanId ? handleRowClick : null}
       />
 
@@ -296,8 +320,11 @@ function DailyMarketSnapshotTab() {
           filters={{}}
           sortBy="composite_score"
           sortOrder="desc"
-          navigationSymbolsOverride={topResultSymbols}
-          currentPageResults={topResults}
+          navigationSymbolsOverride={modalNavigationSymbols}
+          currentPageResults={modalNavigationSymbols.map((symbol) => (
+            [...topResults, ...leaders, ...correctionSurvivorRows]
+              .find((row) => row.symbol === symbol)
+          )).filter(Boolean)}
         />
       )}
     </Box>

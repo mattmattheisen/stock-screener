@@ -20,6 +20,16 @@ def _leaders_screen():
     )
 
 
+def test_correction_survivor_preset_contract():
+    screen = next(
+        item for item in PRESET_SCREENS if item["id"] == "correction_survivors"
+    )
+
+    assert screen["filters"] == {"correctionSurvivor": True}
+    assert screen["sort_by"] == "resilience_score"
+    assert screen["sort_order"] == "desc"
+
+
 def test_leaders_in_leading_groups_preset_filters_for_v1_contract():
     screen = _leaders_screen()
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from app.domain.scanning.opportunity_state import ActionState
+
 # Bump when payload shape changes in a non-additive way. Additive (new
 # optional fields) does NOT require a bump — readers must tolerate missing
 # optional fields. Non-additive changes (renaming, removing, type change)
@@ -25,6 +27,34 @@ class MetricKey:
     EXTRACTION_SUCCESS = "extraction_success"
     COMPLETENESS_DISTRIBUTION = "completeness_distribution"
     FIELD_COVERAGE = "field_coverage"
+    OPPORTUNITY_STATE = "opportunity_state"
+    OPPORTUNITY_EVIDENCE_OPEN = "opportunity_evidence_open"
+
+
+OPPORTUNITY_ACTION_STATES = tuple(state.value for state in ActionState)
+
+
+def opportunity_state_payload(
+    *,
+    run_id: int,
+    rows_total: int,
+    survivor_count: int,
+    action_state_counts: Dict[str, int],
+) -> Dict[str, Any]:
+    """Build a symbol-free aggregate snapshot for one published feature run."""
+    counts = {
+        state: int(action_state_counts.get(state, 0))
+        for state in OPPORTUNITY_ACTION_STATES
+    }
+    total = int(rows_total)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": int(run_id),
+        "rows_total": total,
+        "survivor_count": int(survivor_count),
+        "action_state_counts": counts,
+        "unknown_input_rate": counts["data_limited"] / total if total else 0.0,
+    }
 
 
 def freshness_lag_payload(

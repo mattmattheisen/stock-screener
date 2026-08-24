@@ -38,12 +38,12 @@ from app.domain.feature_store.models import (
     RunType,
 )
 from app.domain.feature_store.quality import DQThresholds
-from app.domain.scanning.signature import (
-    build_scan_signature_payload,
-    hash_scan_signature,
-    hash_universe_symbols,
+from app.domain.providers.price_symbol_support import split_supported_price_symbols
+from app.domain.scanning.materialization import (
+    with_opportunity_state_materialization,
 )
 from app.domain.scanning.models import ProgressEvent
+from app.domain.scanning.opportunity_state.model import OPPORTUNITY_PROJECTION_KEYS
 from app.domain.scanning.ports import (
     CancellationToken,
     MarketRsReader,
@@ -52,7 +52,11 @@ from app.domain.scanning.ports import (
     StockDataProvider,
     StockScanner,
 )
-from app.domain.providers.price_symbol_support import split_supported_price_symbols
+from app.domain.scanning.signature import (
+    build_scan_signature_payload,
+    hash_scan_signature,
+    hash_universe_symbols,
+)
 from app.use_cases.feature_store.publish_run import (
     PublishFeatureRunUseCase,
     PublishRunCommand,
@@ -147,6 +151,22 @@ def _extract_data_errors(result: object) -> dict[str, str]:
 def _format_exception(exc: Exception) -> str:
     """Format an exception for bounded per-symbol diagnostics."""
     return f"{exc.__class__.__name__}: {exc}"
+
+
+def _assert_chunk_opportunity_projections(rows: Sequence[FeatureRowWrite]) -> None:
+    """Refuse to checkpoint non-error rows missing materialized policy fields."""
+    omissions: list[str] = []
+    for row in rows:
+        details = row.details
+        present = set(details) if isinstance(details, Mapping) else set()
+        missing = sorted(set(OPPORTUNITY_PROJECTION_KEYS) - present)
+        if missing:
+            omissions.append(f"{row.symbol}: {', '.join(missing)}")
+    if omissions:
+        raise RuntimeError(
+            "Non-error snapshot rows are missing the opportunity projection: "
+            + "; ".join(omissions)
+        )
 
 
 def _serialize_universe_definition(universe_def: object) -> dict[str, object]:
@@ -446,13 +466,13 @@ class BuildDailyFeatureSnapshotUseCase:
                 composite_method=cmd.composite_method,
                 criteria=cmd.criteria,
             )
-            run_config = {
+            run_config = with_opportunity_state_materialization({
                 **signature_payload,
                 "signature": signature_payload,
                 "universe": _serialize_universe_definition(cmd.universe_def),
                 "market": cmd.market,
                 "publish_pointer_key": cmd.publish_pointer_key,
-            }
+            })
             if bootstrap_gate_report is not None:
                 run_config["bootstrap_cache_only_gate"] = bootstrap_gate_report
             if rs_resolution is not None:
@@ -806,6 +826,7 @@ class BuildDailyFeatureSnapshotUseCase:
 
             # 3c — Persist chunk (checkpoint)
             if chunk_rows:
+                _assert_chunk_opportunity_projections(chunk_rows)
                 uow.feature_store.upsert_snapshot_rows(run_id, chunk_rows)
             uow.commit()
 

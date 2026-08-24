@@ -38,7 +38,12 @@ import {
 import {
   legacyFiltersToExpression,
 } from '../legacyFilterExpression';
+import {
+  filterPresetsForOpportunityCapability,
+  resolveLiveOpportunityCapability,
+} from '../opportunityCapabilityPolicy';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
+import { useOpportunityCapabilityTransition } from '../hooks/useOpportunityCapabilityTransition';
 import {
   createScanFilterQuery,
   stableScanFilterQueryKey,
@@ -132,6 +137,11 @@ function ScanPage() {
     initialFilters: DEFAULT_SCAN_FILTERS,
     initialExpression: DEFAULT_SCAN_EXPRESSION,
   });
+  const opportunityCapability = resolveLiveOpportunityCapability(
+    displayedResultsData,
+  );
+  const opportunityStateAvailable = opportunityCapability.available;
+  const opportunityStateCapabilityResolved = opportunityCapability.resolved;
   const [logicBuilderOpen, setLogicBuilderOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
@@ -225,8 +235,20 @@ function ScanPage() {
     isUpdating: presetIsUpdating,
   } = useFilterPresets();
 
-  const presetState = useScanFilterPresets({
+  const availablePresets = useMemo(() => (
+    filterPresetsForOpportunityCapability(
+      presets,
+      opportunityStateCapabilityResolved,
+      opportunityStateAvailable,
+    )
+  ), [
+    opportunityStateAvailable,
+    opportunityStateCapabilityResolved,
     presets,
+  ]);
+
+  const presetState = useScanFilterPresets({
+    presets: availablePresets,
     createPresetAsync,
     updatePresetAsync,
     deletePreset,
@@ -234,6 +256,20 @@ function ScanPage() {
     sortOrder,
     applyQuery: requestQuery,
     expression: draftExpression,
+  });
+  const activePresetId = presetState.activePresetId;
+  const clearActivePreset = presetState.clearActivePreset;
+  const activePreset = useMemo(
+    () => presets.find((preset) => preset.id === activePresetId),
+    [activePresetId, presets],
+  );
+  const opportunityStateCleanupPending = useOpportunityCapabilityTransition({
+    capabilityResolved: opportunityStateCapabilityResolved,
+    available: opportunityStateAvailable,
+    query: displayedQuery,
+    activePreset,
+    onSanitizedQuery: requestQuery,
+    onUnsupportedPreset: clearActivePreset,
   });
 
   const scanBootstrapQuery = useQuery({
@@ -673,7 +709,7 @@ function ScanPage() {
           filterOptions={normalizedFilterOptions}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}
-          presets={presets}
+          presets={presetState.availablePresets}
           activePresetId={presetState.activePresetId}
           hasUnsavedChanges={presetState.hasUnsavedChanges()}
           presetsLoading={presetsLoading}
@@ -698,7 +734,7 @@ function ScanPage() {
 
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (
         <ScanResultsSection
-          resultsLoading={resultsLoading}
+          resultsLoading={resultsLoading || opportunityStateCleanupPending}
           resultsData={displayedResultsData}
           expression={displayedQuery.expression}
           resultsFetching={resultsFetching}
@@ -748,6 +784,7 @@ function ScanPage() {
             presetState.clearActivePreset();
           }}
           filterOptions={normalizedFilterOptions}
+          opportunityStateAvailable={opportunityStateAvailable}
         />
       )}
     </Container>

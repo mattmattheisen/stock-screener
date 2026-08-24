@@ -18,7 +18,6 @@ from typing import Any
 
 import pandas as pd
 import pytest
-
 from app.domain.common.errors import EntityNotFoundError, InvalidTransitionError
 from app.domain.common.query import PageSpec
 from app.domain.common.uow import UnitOfWork
@@ -73,6 +72,7 @@ class FakeScan:
     idempotency_key: str | None = None
     task_id: str | None = None
     feature_run_id: int | None = None
+    feature_run: Any = None
     trigger_source: str = "manual"
     universe: str | None = None
     universe_key: str | None = None
@@ -82,6 +82,7 @@ class FakeScan:
     universe_index: str | None = None
     universe_symbols: list[str] | None = None
     criteria: dict | None = None
+    metadata_json: dict | None = None
     warnings: list[dict[str, object]] | None = None
     started_at: Any = None
 
@@ -434,6 +435,42 @@ class FakeStockDataProvider(StockDataProvider):
 # ---------------------------------------------------------------------------
 
 
+def with_test_opportunity_projection(result: dict) -> dict:
+    """Make a fake non-error scanner payload satisfy the orchestrator contract."""
+    payload = dict(result)
+    if payload.get("result_status") == "error" or "error" in payload:
+        return payload
+    payload.setdefault("correction_survivor", False)
+    payload.setdefault("resilience_score", None)
+    payload.setdefault("action_state", "data_limited")
+    payload.setdefault(
+        "opportunity_state",
+        {
+            "schema_version": 1,
+            "policy_version": "correction-survivors-v1",
+            "as_of_date": None,
+            "market": "US",
+            "mic": None,
+            "benchmark_symbol": None,
+            "benchmark_as_of_date": None,
+            "passed_checks": [],
+            "failed_checks": ["required_evidence"],
+            "warnings": [],
+            "score_pillars": {
+                "benchmark_leadership": None,
+                "multi_horizon_rs": None,
+                "trend_integrity": None,
+                "structure_tightness": None,
+                "liquidity_freshness": None,
+            },
+            "metrics": {},
+            "data_availability": {"required_evidence": "incomplete"},
+            "action_reasons": ["test_fixture"],
+        },
+    )
+    return payload
+
+
 class FakeScanner:
     """Fake StockScanner (satisfies Protocol) with configurable results.
 
@@ -455,14 +492,16 @@ class FakeScanner:
         pre_fetched_data: object | None = None,
     ) -> dict:
         self.calls.append(symbol)
-        return self._results.get(
-            symbol,
-            {
-                "composite_score": 75.0,
-                "rating": "Buy",
-                "passes_template": True,
-                "current_price": 100.0,
-            },
+        return with_test_opportunity_projection(
+            self._results.get(
+                symbol,
+                {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                },
+            )
         )
 
 

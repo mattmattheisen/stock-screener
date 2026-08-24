@@ -38,6 +38,7 @@ import {
   EXPRESSION_LIMITS,
   fieldMeta,
   fieldValueOptions,
+  isOpportunityStateField,
 } from '../scanFilterFields';
 
 const groupId = () => `setup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -46,7 +47,13 @@ function clone(value) {
   return structuredClone(value);
 }
 
-function ConditionEditor({ condition, onChange, onDelete, valueOptions = [] }) {
+function ConditionEditor({
+  condition,
+  fieldCatalog,
+  onChange,
+  onDelete,
+  valueOptions = [],
+}) {
   const meta = fieldMeta(condition.field, condition.kind);
   const categoricalValueCount = condition.values?.length ?? 0;
   const categoricalLimitExceeded = (
@@ -68,7 +75,7 @@ function ConditionEditor({ condition, onChange, onDelete, valueOptions = [] }) {
             value={condition.field}
             onChange={(event) => handleFieldChange(event.target.value)}
           >
-            {BUILDER_FIELD_CATALOG.map((item) => (
+            {fieldCatalog.map((item) => (
               <MenuItem key={item.field} value={item.field}>
                 <Box>
                   <Typography variant="body2">{item.label}</Typography>
@@ -185,6 +192,7 @@ function SetupGroupCard({
   onDuplicate,
   optionValues,
   defaultField,
+  fieldCatalog,
 }) {
   const updateCondition = (conditionIndex, condition) => {
     const conditions = [...group.conditions];
@@ -244,6 +252,7 @@ function SetupGroupCard({
           <ConditionEditor
             key={`${group.id}-${conditionIndex}`}
             condition={condition}
+            fieldCatalog={fieldCatalog}
             onChange={(next) => updateCondition(conditionIndex, next)}
             onDelete={() => onChange({
               ...group,
@@ -282,6 +291,7 @@ export default function GuidedFilterBuilderDialog({
   onClose,
   onApply,
   filterOptions = {},
+  opportunityStateAvailable = false,
 }) {
   const [draft, setDraft] = useState(() => clone(expression));
   const [showErrors, setShowErrors] = useState(false);
@@ -293,9 +303,15 @@ export default function GuidedFilterBuilderDialog({
     }
   }, [expression, open]);
 
-  const defaultField = BUILDER_FIELD_CATALOG.some((item) => item.field === 'composite_score')
+  const fieldCatalog = useMemo(
+    () => (opportunityStateAvailable
+      ? BUILDER_FIELD_CATALOG
+      : BUILDER_FIELD_CATALOG.filter((item) => !isOpportunityStateField(item.field))),
+    [opportunityStateAvailable],
+  );
+  const defaultField = fieldCatalog.some((item) => item.field === 'composite_score')
     ? 'composite_score'
-    : BUILDER_FIELD_CATALOG[0]?.field;
+    : fieldCatalog[0]?.field;
   const errors = useMemo(
     () => validateExpression(draft),
     [draft],
@@ -391,6 +407,7 @@ export default function GuidedFilterBuilderDialog({
               }}
               optionValues={filterOptions.optionValues || {}}
               defaultField={defaultField}
+              fieldCatalog={fieldCatalog}
             />
           ))}
         </Stack>

@@ -17,6 +17,8 @@ const runtimeState = {
   features: {},
 };
 const useRuntimeActivityMock = vi.hoisted(() => vi.fn());
+const filterPresetsState = vi.hoisted(() => ({ presets: [] }));
+const CAPABILITY_TRANSITION_TIMEOUT = 10_000;
 const STALE_TAIL_WARNING = {
   code: 'market_data_stale_tail_omitted',
   message: 'Omitted 1 stale symbol from this broad scan (99.00% fresh).',
@@ -40,7 +42,7 @@ vi.mock('../contexts/StrategyProfileContext', () => ({
 
 vi.mock('../hooks/useFilterPresets', () => ({
   useFilterPresets: () => ({
-    presets: [],
+    presets: filterPresetsState.presets,
     isLoading: false,
     createPresetAsync: vi.fn(),
     updatePresetAsync: vi.fn(),
@@ -78,6 +80,7 @@ beforeEach(() => {
   runtimeState.scanDefaults = DEFAULT_SCAN_DEFAULTS;
   runtimeState.universeOptions = null;
   runtimeState.features = {};
+  filterPresetsState.presets = [];
   useRuntimeActivityMock.mockReset();
   useRuntimeActivityMock.mockReturnValue({
     data: {
@@ -193,6 +196,152 @@ describe('ScanPage', () => {
       expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
     });
     expect(screen.getByText('Filters')).toBeInTheDocument();
+  });
+
+  it('sanitizes a capable survivor query before showing results from a legacy scan', async () => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    filterPresetsState.presets = [{
+      id: 'correction-survivors-live',
+      name: 'Correction Survivors',
+      filters: { correctionSurvivor: true },
+      sort_by: 'resilience_score',
+      sort_order: 'desc',
+    }];
+    scanApi.getScans.mockResolvedValue({
+      scans: [
+        {
+          scan_id: 'scan-capable',
+          status: 'completed',
+          started_at: '2026-08-21T20:00:00Z',
+          trigger_source: 'manual',
+          passed_stocks: 1,
+          total_stocks: 1,
+          universe_def: { type: 'market', market: 'US' },
+        },
+        {
+          scan_id: 'scan-legacy',
+          status: 'completed',
+          started_at: '2026-08-20T20:00:00Z',
+          trigger_source: 'manual',
+          passed_stocks: 1,
+          total_stocks: 1,
+          universe_def: { type: 'market', market: 'US' },
+        },
+      ],
+    });
+    let resolveLegacyUnsafe;
+    let resolveLegacySafe;
+    const legacyUnsafe = new Promise((resolve) => {
+      resolveLegacyUnsafe = resolve;
+    });
+    const legacySafe = new Promise((resolve) => {
+      resolveLegacySafe = resolve;
+    });
+    scanApi.queryScanResults.mockImplementation((scanId, request) => {
+      const usesSurvivorFilter = request.required.conditions.some(
+        (condition) => condition.field === 'correction_survivor',
+      );
+      if (scanId === 'scan-capable') {
+        return Promise.resolve(usesSurvivorFilter
+          ? {
+              total: 0,
+              unfiltered_total: 1,
+              results: [],
+              capabilities: { opportunity_state: true },
+            }
+          : {
+              total: 1,
+              unfiltered_total: 1,
+              results: [{ symbol: 'CURRENT', company_name: 'Current Corp' }],
+              capabilities: { opportunity_state: true },
+            });
+      }
+      return usesSurvivorFilter ? legacyUnsafe : legacySafe;
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    expect(await screen.findByText(
+      /Results:\s*1 stocks/i,
+      {},
+      { timeout: CAPABILITY_TRANSITION_TIMEOUT },
+    )).toBeInTheDocument();
+    await user.click(screen.getByText('Select Preset'));
+    await user.click(await screen.findByRole(
+      'option',
+      { name: 'Correction Survivors' },
+      { timeout: CAPABILITY_TRANSITION_TIMEOUT },
+    ));
+    expect(await screen.findByText(
+      'No stocks match the applied logic',
+      {},
+      { timeout: CAPABILITY_TRANSITION_TIMEOUT },
+    )).toBeInTheDocument();
+
+    const capableRequests = scanApi.queryScanResults.mock.calls.filter(
+      ([scanId]) => scanId === 'scan-capable',
+    );
+    expect(capableRequests).toHaveLength(2);
+    expect(capableRequests[1][1]).toMatchObject({
+      sort: { field: 'resilience_score', order: 'desc' },
+      page: { number: 1, size: 50 },
+    });
+
+    await user.click(screen.getByRole('combobox', { name: 'Previous Scans' }));
+    const scanOptions = await screen.findAllByRole('option');
+    await user.click(scanOptions.at(-1));
+    await waitFor(() => {
+      expect(scanApi.queryScanResults.mock.calls.some(
+        ([scanId, request]) => (
+          scanId === 'scan-legacy'
+          && request.required.conditions.some(
+            (condition) => condition.field === 'correction_survivor',
+          )
+        ),
+      )).toBe(true);
+    }, { timeout: CAPABILITY_TRANSITION_TIMEOUT });
+
+    await act(async () => {
+      resolveLegacyUnsafe({
+        total: 0,
+        unfiltered_total: 1,
+        results: [],
+      });
+    });
+
+    await waitFor(() => {
+      const legacyRequests = scanApi.queryScanResults.mock.calls.filter(
+        ([scanId]) => scanId === 'scan-legacy',
+      );
+      expect(legacyRequests).toHaveLength(2);
+      expect(legacyRequests[1][1]).toMatchObject({
+        required: { conditions: [] },
+        groups: [],
+        sort: { field: 'composite_score', order: 'desc' },
+        page: { number: 1, size: 50 },
+      });
+    }, { timeout: CAPABILITY_TRANSITION_TIMEOUT });
+    expect(screen.queryByText('No stocks match the applied logic')).not.toBeInTheDocument();
+    expect(screen.getByText('Loading results...')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveLegacySafe({
+        total: 1,
+        unfiltered_total: 1,
+        results: [{ symbol: 'LEGACY', company_name: 'Legacy Corp' }],
+      });
+    });
+
+    expect(await screen.findByText(
+      /Results:\s*1 stocks/i,
+      {},
+      { timeout: CAPABILITY_TRANSITION_TIMEOUT },
+    )).toBeInTheDocument();
+    expect(screen.getByText('Select Preset')).toBeInTheDocument();
+    expect(scanApi.queryScanResults.mock.calls.filter(
+      ([scanId]) => scanId === 'scan-legacy',
+    )).toHaveLength(2);
   });
 
   it('keeps the applied rows and sort indicator atomic when a grouped query fails', async () => {

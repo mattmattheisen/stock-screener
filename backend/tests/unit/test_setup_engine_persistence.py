@@ -1,7 +1,7 @@
 """Round-trip persistence & backward-compatibility tests for setup_engine.
 
 Verifies:
-1. ScanOrchestrator._combine_results() promotes setup_engine to top level
+1. ScanResultAssembler promotes setup_engine to top level
 2. _map_orchestrator_result() preserves the promoted dict through to details
 3. json_extract(details, '$.setup_engine.*') resolves non-NULL in SQLite
 4. Feature store mapper preserves the promoted dict and json_extract works
@@ -15,15 +15,31 @@ from typing import Any
 
 import pandas as pd
 import pytest
-from sqlalchemy import Column, Date, Float, Integer, MetaData, String, Table, Text, create_engine, text
+from sqlalchemy import (
+    Column,
+    Date,
+    Float,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    text,
+)
 from sqlalchemy.orm import Session
 
-from app.scanners.base_screener import ScreenerResult, StockData
-from app.scanners.scan_orchestrator import ScanOrchestrator
 from app.infra.db.repositories.scan_result_repo import _map_orchestrator_result
 from app.infra.query.feature_store_query import _FIELD_BINDINGS as FS_FIELD_BINDINGS
 from app.infra.query.scan_result_query import _FIELD_BINDINGS as SR_FIELD_BINDINGS
-from app.use_cases.feature_store.build_daily_snapshot import _map_orchestrator_to_feature_row
+from app.scanners.base_screener import ScreenerResult, StockData
+from app.scanners.scan_result_assembler import (
+    ScanResultAssembler,
+    ScanResultAssemblyRequest,
+)
+from app.use_cases.feature_store.build_daily_snapshot import (
+    _map_orchestrator_to_feature_row,
+)
 
 
 def _sqlite_json_path(path_segments):
@@ -95,7 +111,7 @@ _SE_PAYLOAD: dict[str, Any] = {
 
 
 def _make_stub_stock_data(symbol: str = "TEST") -> StockData:
-    """Minimal StockData for _combine_results()."""
+    """Minimal StockData for result assembly."""
     dates = pd.date_range(end="2026-02-20", periods=10, freq="B")
     df = pd.DataFrame(
         {"Open": 100.0, "High": 105.0, "Low": 99.0, "Close": 102.0, "Volume": 1_000_000},
@@ -133,20 +149,21 @@ def _make_minervini_screener_result() -> ScreenerResult:
     )
 
 
-def _call_combine_results(
+def _assemble_result(
     screener_results: dict[str, ScreenerResult],
     stock_data: StockData | None = None,
 ) -> dict[str, Any]:
-    """Call ScanOrchestrator._combine_results() without running a full scan."""
-    orch = ScanOrchestrator.__new__(ScanOrchestrator)
+    """Assemble a persistable result without fetching external stock data."""
     sd = stock_data or _make_stub_stock_data()
-    return orch._combine_results(
-        symbol=sd.symbol,
-        screener_results=screener_results,
-        stock_data=sd,
-        composite_score=80.0,
-        overall_rating="Buy",
-        composite_method="weighted_average",
+    return ScanResultAssembler().assemble(
+        ScanResultAssemblyRequest(
+            symbol=sd.symbol,
+            screener_results=screener_results,
+            stock_data=sd,
+            composite_score=80.0,
+            overall_rating="Buy",
+            composite_method="weighted_average",
+        )
     )
 
 
@@ -156,10 +173,10 @@ def _call_combine_results(
 
 
 class TestOrchestratorPromotion:
-    """Pure unit tests on _combine_results() output structure."""
+    """Pure unit tests on assembled result structure."""
 
     def test_setup_engine_promoted_to_top_level(self):
-        result = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result = _assemble_result({"setup_engine": _make_se_screener_result()})
         assert "setup_engine" in result, "setup_engine should be promoted to top level"
         assert result["setup_engine"]["setup_score"] == 82.5
         assert result["setup_engine"]["pattern_primary"] == "VCP"
@@ -167,14 +184,14 @@ class TestOrchestratorPromotion:
 
     def test_promoted_dict_is_shallow_copy(self):
         """Promoted dict must not share identity with nested details."""
-        result = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result = _assemble_result({"setup_engine": _make_se_screener_result()})
         nested = result["details"]["screeners"]["setup_engine"]["details"]["setup_engine"]
         promoted = result["setup_engine"]
         assert promoted is not nested, "Promoted dict should be a shallow copy"
         assert promoted == nested, "Values should be equal"
 
     def test_promotion_skipped_when_scanner_absent(self):
-        result = _call_combine_results({"minervini": _make_minervini_screener_result()})
+        result = _assemble_result({"minervini": _make_minervini_screener_result()})
         assert "setup_engine" not in result
 
     def test_promotion_skipped_for_insufficient_data(self):
@@ -186,7 +203,7 @@ class TestOrchestratorPromotion:
             details={"reason": "Not enough price history"},
             screener_name="setup_engine",
         )
-        result = _call_combine_results({"setup_engine": sr})
+        result = _assemble_result({"setup_engine": sr})
         assert "setup_engine" not in result, (
             "Insufficient data result has no 'setup_engine' key in details"
         )
@@ -200,11 +217,11 @@ class TestOrchestratorPromotion:
             details={"error": "Something went wrong"},
             screener_name="setup_engine",
         )
-        result = _call_combine_results({"setup_engine": sr})
+        result = _assemble_result({"setup_engine": sr})
         assert "setup_engine" not in result
 
     def test_coexists_with_minervini(self):
-        result = _call_combine_results({
+        result = _assemble_result({
             "minervini": _make_minervini_screener_result(),
             "setup_engine": _make_se_screener_result(),
         })
@@ -275,7 +292,7 @@ class TestScanResultRoundTrip:
 
     @pytest.mark.parametrize("field_name,json_path", _SR_SE_PARAMS)
     def test_all_se_fields_resolve_non_null(self, sr_db_session, field_name, json_path):
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         _insert_sr_row(sr_db_session, "AAPL", result_dict)
         sqlite_path = _sqlite_json_path(json_path)
 
@@ -286,7 +303,7 @@ class TestScanResultRoundTrip:
         assert rows[0][0] is not None, f"{field_name} ({sqlite_path}) should be non-NULL"
 
     def test_numeric_values_match_input(self, sr_db_session):
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         _insert_sr_row(sr_db_session, "AAPL", result_dict)
 
         checks = [
@@ -302,7 +319,7 @@ class TestScanResultRoundTrip:
             assert row[0] == pytest.approx(expected), f"{json_path} mismatch"
 
     def test_boolean_fields_roundtrip(self, sr_db_session):
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         _insert_sr_row(sr_db_session, "AAPL", result_dict)
 
         # setup_ready = True → stored as 1 in SQLite JSON
@@ -318,7 +335,7 @@ class TestScanResultRoundTrip:
         assert row[0] == 1
 
     def test_rs_line_leadership_fields_map_to_columns_and_details(self):
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         result_dict.update(
             {
                 "rs_line_new_high": True,
@@ -353,7 +370,7 @@ class TestScanResultRoundTrip:
         assert mapped["rs_line_new_high_date"] is None
 
     def test_string_fields_roundtrip(self, sr_db_session):
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         _insert_sr_row(sr_db_session, "AAPL", result_dict)
 
         row = sr_db_session.execute(
@@ -367,7 +384,7 @@ class TestScanResultRoundTrip:
         assert row[0] == "breakout"
 
     def test_validation_guard_accepts_valid_payload(self, sr_db_session):
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         mapped = _map_orchestrator_result("scan-1", "AAPL", result_dict)
         # Valid payload should be preserved in details
         assert "setup_engine" in mapped["details"], (
@@ -378,11 +395,11 @@ class TestScanResultRoundTrip:
     def test_row_without_setup_engine_returns_null(self, sr_db_session):
         """Old rows without setup_engine should return NULL for SE json paths."""
         # Insert a new-style row with SE data
-        se_result = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        se_result = _assemble_result({"setup_engine": _make_se_screener_result()})
         _insert_sr_row(sr_db_session, "AAPL", se_result)
 
         # Insert an old-style row without SE data
-        old_result = _call_combine_results({"minervini": _make_minervini_screener_result()})
+        old_result = _assemble_result({"minervini": _make_minervini_screener_result()})
         _insert_sr_row(sr_db_session, "MSFT", old_result)
 
         sr_db_session.flush()
@@ -402,7 +419,7 @@ class TestScanResultRoundTrip:
     def test_domain_mapper_handles_setup_engine_dict(self):
         """_map_row_to_domain requires a ScanResult ORM row; verify _map_orchestrator_result
         produces details with a setup_engine dict that doesn't break reader-side expectations."""
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         mapped = _map_orchestrator_result("scan-1", "AAPL", result_dict)
         details = mapped["details"]
         # The details dict should be json-serializable (no weird types)
@@ -485,7 +502,7 @@ class TestFeatureStoreRoundTrip:
 
     @pytest.mark.parametrize("field_name,json_path", _FS_SE_PARAMS)
     def test_all_se_fields_resolve_non_null(self, fs_db_session, field_name, json_path):
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         _insert_fs_row(fs_db_session, "AAPL", result_dict)
         sqlite_path = _sqlite_json_path(json_path)
 
@@ -497,7 +514,7 @@ class TestFeatureStoreRoundTrip:
 
     def test_non_se_fields_also_resolve(self, fs_db_session):
         """Existing fields like $.rs_rating and $.stage still work alongside SE promotion."""
-        result_dict = _call_combine_results({
+        result_dict = _assemble_result({
             "minervini": _make_minervini_screener_result(),
             "setup_engine": _make_se_screener_result(),
         })
@@ -531,14 +548,42 @@ class TestValidationGuard:
     """Pure function tests on _map_orchestrator_result() validation guard."""
 
     def test_valid_payload_passes_through(self):
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         mapped = _map_orchestrator_result("scan-1", "AAPL", result_dict)
         assert "setup_engine" in mapped["details"]
         assert mapped["details"]["setup_engine"]["setup_score"] == pytest.approx(82.5)
 
+    def test_legacy_invalidation_flag_without_is_hard_is_backfilled_soft(self):
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
+        result_dict["setup_engine"] = {
+            **result_dict["setup_engine"],
+            "explain": {
+                **result_dict["setup_engine"]["explain"],
+                "invalidation_flags": [
+                    {
+                        "code": "legacy_warning",
+                        "message": "Serialized before hard flags were introduced",
+                        "severity": "medium",
+                    }
+                ],
+            },
+        }
+
+        mapped = _map_orchestrator_result("scan-1", "AAPL", result_dict)
+
+        flags = mapped["details"]["setup_engine"]["explain"]["invalidation_flags"]
+        assert flags == [
+            {
+                "code": "legacy_warning",
+                "message": "Serialized before hard flags were introduced",
+                "severity": "medium",
+                "is_hard": False,
+            }
+        ]
+
     def test_invalid_payload_dropped(self):
         """A setup_engine dict missing required keys should be dropped."""
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         # Corrupt the promoted setup_engine to be invalid
         result_dict["setup_engine"] = {"setup_score": 50.0}  # missing many required keys
         mapped = _map_orchestrator_result("scan-1", "AAPL", result_dict)
@@ -547,7 +592,7 @@ class TestValidationGuard:
 
     def test_invalid_payload_no_cascade(self):
         """Even when SE payload is invalid, other fields are still populated."""
-        result_dict = _call_combine_results({
+        result_dict = _assemble_result({
             "minervini": _make_minervini_screener_result(),
             "setup_engine": _make_se_screener_result(),
         })
@@ -560,7 +605,7 @@ class TestValidationGuard:
 
     def test_non_dict_ignored(self):
         """When setup_engine is a non-dict (e.g. string), validation is skipped."""
-        result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
+        result_dict = _assemble_result({"setup_engine": _make_se_screener_result()})
         result_dict["setup_engine"] = "some_string"
         mapped = _map_orchestrator_result("scan-1", "AAPL", result_dict)
         # Should not crash; non-dict is not validated

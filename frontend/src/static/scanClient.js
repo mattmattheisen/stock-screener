@@ -14,6 +14,8 @@ const RATING_SORT_ORDER = {
   'Insufficient Data': 0,
 };
 
+const SCORE_SORT_FIELDS = new Set(['composite_score', 'resilience_score']);
+
 const compareValues = (left, right) => {
   if (left == null && right == null) return 0;
   if (left == null) return 1;
@@ -45,7 +47,10 @@ export const sortStaticScanRows = (
   return [...rows].sort((left, right) => {
     const leftValue = getSortValue(left, sortBy);
     const rightValue = getSortValue(right, sortBy);
-    if (sortBy === 'composite_score' && sortOrder === 'desc') {
+    if (SCORE_SORT_FIELDS.has(sortBy)) {
+      if (leftValue == null && rightValue == null) {
+        return compareValues(left.symbol, right.symbol);
+      }
       if (leftValue == null && rightValue != null) {
         return 1;
       }
@@ -53,7 +58,9 @@ export const sortStaticScanRows = (
         return -1;
       }
     }
-    const comparison = compareValues(leftValue, rightValue);
+    const comparison = sortBy === 'resilience_score'
+      ? Number(leftValue) - Number(rightValue)
+      : compareValues(leftValue, rightValue);
     if (comparison !== 0) {
       return comparison * direction;
     }

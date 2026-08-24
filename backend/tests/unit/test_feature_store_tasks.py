@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from celery.exceptions import Retry, SoftTimeLimitExceeded
@@ -852,6 +852,79 @@ def test_build_daily_snapshot_creates_auto_scan_after_publish():
         criteria=get_default_scan_profile("US")["criteria"],
         composite_method=get_default_scan_profile("US")["composite_method"],
     )
+
+
+def test_build_daily_snapshot_records_opportunity_telemetry_after_publish():
+    fake_use_case = _FakeUseCase()
+    telemetry = SimpleNamespace(record_opportunity_state_from_db=MagicMock())
+
+    with patch(
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ), patch(
+        "app.services.telemetry.get_telemetry",
+        return_value=telemetry,
+    ):
+        result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
+
+    assert result["status"] == "published"
+    telemetry.record_opportunity_state_from_db.assert_called_once_with("US", 11)
+
+
+def test_build_daily_snapshot_publication_survives_opportunity_telemetry_failure():
+    fake_use_case = _FakeUseCase()
+    telemetry = SimpleNamespace(
+        record_opportunity_state_from_db=MagicMock(
+            side_effect=RuntimeError("telemetry unavailable")
+        )
+    )
+
+    with patch(
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ), patch(
+        "app.services.telemetry.get_telemetry",
+        return_value=telemetry,
+    ):
+        result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
+
+    assert result["status"] == "published"
+    assert result["run_id"] == 11
+    telemetry.record_opportunity_state_from_db.assert_called_once_with("US", 11)
 
 
 def test_build_daily_snapshot_can_defer_ibd_metadata_enrichment():

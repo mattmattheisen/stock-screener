@@ -87,6 +87,8 @@ export default function ScanResultsSection({
           onOpenChart={onOpenChart}
           onRowHover={onRowHover}
           loading={resultsLoading}
+          showOpportunityState={resultsData.capabilities?.opportunity_state === true}
+          opportunityTelemetrySurface="scan"
         />
       </>
     );

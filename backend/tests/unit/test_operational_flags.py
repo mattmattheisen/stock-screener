@@ -19,7 +19,6 @@ from app.analysis.patterns.operational_flags import (
     compute_operational_flags,
 )
 
-
 DEFAULT_PARAMS = SetupEngineParameters()
 
 
@@ -289,5 +288,6 @@ class TestToPayload:
                 "code": "too_extended",
                 "message": "too extended",
                 "severity": "medium",
+                "is_hard": False,
             }
         ]

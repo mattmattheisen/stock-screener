@@ -25,6 +25,9 @@ import FieldAvailabilityChip from './FieldAvailabilityChip';
 import MarketBadge from './MarketBadge';
 import MarketThemesList from '../Stock/MarketThemesList';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
+import OpportunityEvidenceDrawer from '../shared/OpportunityEvidenceDrawer';
+import OpportunityResultCells from './OpportunityResultCells';
+import { useOpportunityEvidenceSelection } from './useOpportunityEvidenceSelection';
 import {
   getStageColor,
   getRatingColor,
@@ -43,6 +46,11 @@ import {
 // Row height constant for virtualization
 const ROW_HEIGHT = 48;
 const SYMBOL_COLUMN_WIDTH = 210;
+const OPPORTUNITY_COLUMNS_WIDTH = 153;
+const TABLE_MIN_WIDTH = Object.freeze({
+  WITH_ACTIONS: 2673,
+  WITHOUT_ACTIONS: 2613,
+});
 
 // MCap column display modes. USD is the default per 3axp: cross-market
 // parity is the common case; local is one click away. Kept as constants
@@ -98,6 +106,8 @@ const columns = [
   { id: 'se_rs_line_blue_dot', label: 'SEBD', sortable: false, width: 42 },
   { id: 'rs_line_blue_dot_recent', label: 'RSBD', sortable: true, width: 42 },
   { id: 'se_pivot_price', label: 'Pvt$', sortable: true, width: 55 },
+  { id: 'resilience_score', label: 'Res', sortable: true, width: 48 },
+  { id: 'action_state', label: 'Action', sortable: true, width: 105 },
   { id: 'rs_rating', label: 'RS', sortable: true, width: 40 },
   { id: 'rs_rating_1m', label: '1M', sortable: true, width: 40 },
   { id: 'rs_rating_3m', label: '3M', sortable: true, width: 40 },
@@ -161,6 +171,8 @@ const VirtualTableRow = memo(function VirtualTableRow({
   showWatchlistMenu,
   chartEnabled,
   mcapDisplay,
+  showOpportunityState,
+  onOpenOpportunity,
 }) {
   const statusChip = getStatusChipProps(row);
   const handleRowClick = useCallback(() => {
@@ -388,6 +400,12 @@ const VirtualTableRow = memo(function VirtualTableRow({
         {row.se_pivot_price != null ? `$${row.se_pivot_price.toFixed(2)}` : '-'}
       </TableCell>
 
+      <OpportunityResultCells
+        row={row}
+        visible={showOpportunityState}
+        onOpenEvidence={onOpenOpportunity}
+      />
+
       <TableCell align="center" sx={{ fontFamily: 'monospace', width: 40, minWidth: 40 }}>
         {row.rs_rating?.toFixed(0) || '-'}
       </TableCell>
@@ -519,37 +537,6 @@ const VirtualTableRow = memo(function VirtualTableRow({
       </TableCell>
     </TableRow>
   );
-}, (prevProps, nextProps) => {
-  // Custom comparison - only re-render if the row data actually changed
-  return prevProps.row.symbol === nextProps.row.symbol &&
-         prevProps.row.company_name === nextProps.row.company_name &&
-         prevProps.row.market === nextProps.row.market &&
-         prevProps.row.exchange === nextProps.row.exchange &&
-         prevProps.row.field_availability === nextProps.row.field_availability &&
-         prevProps.row.growth_metric_basis === nextProps.row.growth_metric_basis &&
-         prevProps.row.composite_score === nextProps.row.composite_score &&
-         prevProps.row.rs_rating === nextProps.row.rs_rating &&
-         prevProps.row.current_price === nextProps.row.current_price &&
-         prevProps.row.price_change_1d === nextProps.row.price_change_1d &&
-         prevProps.row.gics_sector === nextProps.row.gics_sector &&
-         prevProps.row.ibd_industry_group === nextProps.row.ibd_industry_group &&
-         prevProps.row.ibd_group_rank === nextProps.row.ibd_group_rank &&
-         prevProps.row.ibd_group_rank_date === nextProps.row.ibd_group_rank_date &&
-         prevProps.row.scan_mode === nextProps.row.scan_mode &&
-         prevProps.row.data_status === nextProps.row.data_status &&
-         prevProps.row.is_scannable === nextProps.row.is_scannable &&
-         prevProps.row.composite_reason === nextProps.row.composite_reason &&
-         prevProps.row.se_rs_line_blue_dot === nextProps.row.se_rs_line_blue_dot &&
-         prevProps.row.rs_line_blue_dot_recent === nextProps.row.rs_line_blue_dot_recent &&
-         prevProps.row.rs_line_new_high_date === nextProps.row.rs_line_new_high_date &&
-         (prevProps.row.market_themes || []).join('|') === (nextProps.row.market_themes || []).join('|') &&
-         JSON.stringify(prevProps.row.matched_groups || []) ===
-           JSON.stringify(nextProps.row.matched_groups || []) &&
-         prevProps.row.rating === nextProps.row.rating &&
-         prevProps.mcapDisplay === nextProps.mcapDisplay &&
-         prevProps.showActions === nextProps.showActions &&
-         prevProps.showWatchlistMenu === nextProps.showWatchlistMenu &&
-         prevProps.chartEnabled === nextProps.chartEnabled;
 });
 
 /**
@@ -573,19 +560,32 @@ function ResultsTable({
   showWatchlistMenu = true,
   sortingEnabled = true,
   isChartEnabled,
+  showOpportunityState = false,
+  opportunityTelemetrySurface,
 }) {
   const parentRef = useRef(null);
   // MCap column display mode — kept as local state; scan-level persistence
   // can lift this up later if users want it to survive navigation.
   const [mcapDisplay, setMcapDisplay] = useState(MCAP_DISPLAY.USD);
+  const {
+    selectedRow: opportunityRow,
+    openEvidence: handleOpenOpportunity,
+    closeEvidence: handleCloseOpportunity,
+  } = useOpportunityEvidenceSelection({
+    rows: results,
+    enabled: showOpportunityState,
+  });
   const visibleColumns = useMemo(() => {
-    const base = showActions ? columns : columns.filter((column) => column.id !== 'chart');
+    const base = columns.filter((column) => (
+      (showActions || column.id !== 'chart') &&
+      (showOpportunityState || !['resilience_score', 'action_state'].includes(column.id))
+    ));
     return base.map((column) =>
       column.id === 'market_cap'
         ? { ...column, label: mcapDisplay === MCAP_DISPLAY.USD ? 'MCap ($)' : 'MCap (local)' }
         : column,
     );
-  }, [showActions, mcapDisplay]);
+  }, [showActions, showOpportunityState, mcapDisplay]);
 
   const toggleMcapDisplay = useCallback(() => {
     setMcapDisplay((mode) =>
@@ -657,7 +657,16 @@ function ResultsTable({
           overflow: 'auto',
         }}
       >
-        <Table stickyHeader size="small" sx={{ minWidth: showActions ? 2673 : 2613 }}>
+        <Table
+          stickyHeader
+          size="small"
+          sx={{
+            minWidth: (showActions
+              ? TABLE_MIN_WIDTH.WITH_ACTIONS
+              : TABLE_MIN_WIDTH.WITHOUT_ACTIONS) +
+              (showOpportunityState ? OPPORTUNITY_COLUMNS_WIDTH : 0),
+          }}
+        >
           <TableHead>
             <TableRow>
               {visibleColumns.map((column) => (
@@ -707,6 +716,8 @@ function ResultsTable({
                     (isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart))
                   }
                   mcapDisplay={mcapDisplay}
+                  showOpportunityState={showOpportunityState}
+                  onOpenOpportunity={handleOpenOpportunity}
                 />
               );
             })}
@@ -731,6 +742,13 @@ function ResultsTable({
           onPageChange(1); // Reset to first page when changing per-page
         }}
       />
+
+      <OpportunityEvidenceDrawer
+        open={showOpportunityState && Boolean(opportunityRow)}
+        row={opportunityRow}
+        onClose={handleCloseOpportunity}
+        opportunityTelemetrySurface={opportunityTelemetrySurface}
+      />
     </Paper>
   );
 }
@@ -749,6 +767,8 @@ export default memo(ResultsTable, (prevProps, nextProps) => {
     prevProps.showActions === nextProps.showActions &&
     prevProps.showWatchlistMenu === nextProps.showWatchlistMenu &&
     prevProps.isChartEnabled === nextProps.isChartEnabled &&
-    prevProps.sortingEnabled === nextProps.sortingEnabled
+    prevProps.sortingEnabled === nextProps.sortingEnabled &&
+    prevProps.showOpportunityState === nextProps.showOpportunityState &&
+    prevProps.opportunityTelemetrySurface === nextProps.opportunityTelemetrySurface
   );
 });

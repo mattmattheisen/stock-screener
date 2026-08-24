@@ -6,18 +6,17 @@ handling, missing-data detection, bulk operations, and adapter delegation.
 
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-
 from app.domain.common.errors import DataFetchError
 from app.infra.providers.stock_data import DataPrepStockDataProvider
 from app.scanners.base_screener import DataRequirements, StockData
 from app.scanners.data_preparation import DataPreparationLayer
 from app.services.benchmark_cache_service import BenchmarkDataBundle
 from app.services.rate_limiter import RateLimitTimeoutError
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -86,13 +85,31 @@ def mock_fundamentals_cache():
 
 
 @pytest.fixture
+def mock_event_context():
+    service = MagicMock()
+    service.get_next_earnings_summary_with_status.return_value = (
+        date(2026, 9, 3),
+        11,
+        True,
+    )
+    return service
+
+
+@pytest.fixture
 def mock_sleep():
     with patch("app.scanners.data_preparation.time.sleep") as sl:
         yield sl
 
 
 @pytest.fixture
-def data_layer(mock_price_cache, mock_yfinance, mock_benchmark_cache, mock_fundamentals_cache, mock_sleep):
+def data_layer(
+    mock_price_cache,
+    mock_yfinance,
+    mock_benchmark_cache,
+    mock_fundamentals_cache,
+    mock_event_context,
+    mock_sleep,
+):
     """Real DataPreparationLayer with all external I/O mocked."""
     layer = DataPreparationLayer.__new__(DataPreparationLayer)
     layer._max_retries = 2
@@ -102,7 +119,43 @@ def data_layer(mock_price_cache, mock_yfinance, mock_benchmark_cache, mock_funda
     layer.price_cache = mock_price_cache
     layer.benchmark_cache = mock_benchmark_cache
     layer.fundamentals_cache = mock_fundamentals_cache
+    layer.event_context_service = mock_event_context
     return layer
+
+
+def test_event_calendar_requirement_hydrates_explicit_stock_context(
+    data_layer,
+    mock_event_context,
+):
+    """Break caught: production scans relying on a test-only fundamentals key."""
+    requirements = DataRequirements(needs_event_calendar=True)
+
+    result = data_layer.prepare_data("AAPL", requirements)
+
+    assert result.next_earnings_date == date(2026, 9, 3)
+    assert result.event_calendar_available is True
+    mock_event_context.get_next_earnings_summary_with_status.assert_called_once_with(
+        "AAPL",
+        as_of_date=result.price_data.index[-1].date(),
+    )
+
+
+def test_event_calendar_fetch_failure_is_not_reported_as_successful_empty(
+    data_layer,
+    mock_event_context,
+):
+    requirements = DataRequirements(needs_event_calendar=True)
+    mock_event_context.get_next_earnings_summary_with_status.return_value = (
+        None,
+        None,
+        False,
+    )
+
+    result = data_layer.prepare_data("AAPL", requirements)
+
+    assert result.next_earnings_date is None
+    assert result.event_calendar_available is False
+    assert result.fetch_errors["event_calendar"] == "Event calendar provider unavailable"
 
 
 # ===================================================================
@@ -437,6 +490,126 @@ class TestBulkDataPreparation:
         assert all(isinstance(v, StockData) for v in results.values())
         # Only GOOG should have triggered the yfinance API
         mock_yfinance.get_historical_data.assert_called_once()
+
+    def test_bulk_event_calendar_uses_persisted_fundamentals_without_remote_calls(
+        self,
+        data_layer,
+        mock_price_cache,
+        mock_fundamentals_cache,
+        mock_event_context,
+    ):
+        price_data = _make_price_df()
+        as_of_date = price_data.index[-1].date()
+        next_earnings_date = as_of_date + pd.Timedelta(days=11)
+        mock_price_cache.get_many.return_value = {"AAPL": price_data}
+        mock_fundamentals_cache.get_many.return_value = {
+            "AAPL": {
+                "event_calendar_as_of_date": as_of_date,
+                "next_earnings_date": next_earnings_date,
+            }
+        }
+        requirements = DataRequirements(needs_event_calendar=True)
+
+        result = data_layer.prepare_data_bulk(["AAPL"], requirements)["AAPL"]
+
+        assert result.next_earnings_date == next_earnings_date
+        assert result.event_calendar_available is True
+        assert "event_calendar" not in result.fetch_errors
+        mock_event_context.get_next_earnings_summary_with_status.assert_not_called()
+
+    def test_bulk_event_calendar_without_persisted_evidence_is_unavailable_not_remote(
+        self,
+        data_layer,
+        mock_price_cache,
+        mock_fundamentals_cache,
+        mock_event_context,
+    ):
+        mock_price_cache.get_many.return_value = {"AAPL": _make_price_df()}
+        mock_fundamentals_cache.get_many.return_value = {}
+        requirements = DataRequirements(needs_event_calendar=True)
+
+        result = data_layer.prepare_data_bulk(["AAPL"], requirements)["AAPL"]
+
+        assert result.next_earnings_date is None
+        assert result.event_calendar_available is False
+        assert result.fetch_errors["event_calendar"] == (
+            "No current persisted event calendar evidence"
+        )
+        mock_event_context.get_next_earnings_summary_with_status.assert_not_called()
+
+    def test_bulk_successful_empty_calendar_snapshot_remains_available(
+        self,
+        data_layer,
+        mock_price_cache,
+        mock_fundamentals_cache,
+        mock_event_context,
+    ):
+        price_data = _make_price_df()
+        as_of_date = price_data.index[-1].date()
+        mock_price_cache.get_many.return_value = {"AAPL": price_data}
+        mock_fundamentals_cache.get_many.return_value = {
+            "AAPL": {
+                "event_calendar_as_of_date": as_of_date,
+                "next_earnings_date": None,
+            }
+        }
+
+        result = data_layer.prepare_data_bulk(
+            ["AAPL"], DataRequirements(needs_event_calendar=True)
+        )["AAPL"]
+
+        assert result.next_earnings_date is None
+        assert result.event_calendar_available is True
+        assert "event_calendar" not in result.fetch_errors
+        mock_event_context.get_next_earnings_summary_with_status.assert_not_called()
+
+    def test_bulk_stale_calendar_snapshot_is_unavailable_not_remote(
+        self,
+        data_layer,
+        mock_price_cache,
+        mock_fundamentals_cache,
+        mock_event_context,
+    ):
+        price_data = _make_price_df()
+        as_of_date = price_data.index[-1].date()
+        mock_price_cache.get_many.return_value = {"AAPL": price_data}
+        mock_fundamentals_cache.get_many.return_value = {
+            "AAPL": {
+                "event_calendar_as_of_date": as_of_date - pd.Timedelta(days=8),
+                "next_earnings_date": as_of_date + pd.Timedelta(days=3),
+            }
+        }
+
+        result = data_layer.prepare_data_bulk(
+            ["AAPL"], DataRequirements(needs_event_calendar=True)
+        )["AAPL"]
+
+        assert result.event_calendar_available is False
+        assert "event_calendar" in result.fetch_errors
+        mock_event_context.get_next_earnings_summary_with_status.assert_not_called()
+
+    def test_bulk_accepts_weekend_calendar_refresh_for_last_trading_day(
+        self,
+        data_layer,
+        mock_price_cache,
+        mock_fundamentals_cache,
+    ):
+        price_data = _make_price_df()
+        as_of_date = price_data.index[-1].date()
+        mock_price_cache.get_many.return_value = {"AAPL": price_data}
+        mock_fundamentals_cache.get_many.return_value = {
+            "AAPL": {
+                "event_calendar_as_of_date": as_of_date + pd.Timedelta(days=2),
+                "next_earnings_date": as_of_date + pd.Timedelta(days=11),
+            }
+        }
+
+        result = data_layer.prepare_data_bulk(
+            ["AAPL"], DataRequirements(needs_event_calendar=True)
+        )["AAPL"]
+
+        assert result.event_calendar_available is True
+        assert "event_calendar" not in result.fetch_errors
 
     def test_bulk_allow_partial_false_processes_all_then_raises(
         self, data_layer, mock_price_cache, mock_yfinance,

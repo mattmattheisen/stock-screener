@@ -1,5 +1,5 @@
 """Stock-related database models"""
-from sqlalchemy import Column, Integer, String, Float, BigInteger, Date, DateTime, Index, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, BigInteger, Date, DateTime, Index, UniqueConstraint
 from sqlalchemy.sql import func
 from ..database import Base
 from .types import JsonColumn
@@ -76,6 +76,12 @@ class StockFundamental(Base):
     growth_metric_basis = Column(String(40))  # quarterly_qoq | comparable_period_yoy | unavailable
     growth_comparable_period_date = Column(String(50))  # Same-period prior-year statement date
     growth_reference_gap_days = Column(Integer)  # Gap between recent and previous statement periods
+
+    # Event-calendar snapshot bundled with the fundamentals refresh. The
+    # observation date distinguishes a successful empty response from a
+    # provider failure, where both columns remain NULL/unchanged.
+    next_earnings_date = Column(Date)
+    event_calendar_as_of_date = Column(Date)
 
     # Profitability metrics
     profit_margin = Column(Float)

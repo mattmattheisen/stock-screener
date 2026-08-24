@@ -1,6 +1,8 @@
 """Scan and scan result models"""
 import logging
+
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     Column,
@@ -9,13 +11,13 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     false,
     text,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+
 from ..database import Base
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,7 @@ class Scan(Base):
 
     # Scan configuration
     criteria = Column(JSON)  # Scan criteria configuration
+    metadata_json = Column(JSON, nullable=True)  # Backend-owned capability/version metadata
     universe = Column(String(50))  # Legacy: "test", "all", "custom" — kept for backward compat
 
     # Structured universe fields (populated by UniverseDefinition)

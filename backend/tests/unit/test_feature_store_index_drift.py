@@ -15,13 +15,23 @@ key, since the migration's ``_index_expr`` only emits the single-segment
 from __future__ import annotations
 
 import importlib.util
+from io import StringIO
 from pathlib import Path
 
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import create_mock_engine
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Session
 
+from app.domain.common.query import BooleanFilter
+from app.domain.scanning.filter_expression_model import FilterExpression
 from app.infra.db.models.feature_store import StockFeatureDaily
 from app.infra.db.portability import json_number
-from app.infra.query.feature_store_query import _FIELD_BINDINGS
+from app.infra.query.feature_store_query import (
+    _FIELD_BINDINGS,
+    compile_filter_expression,
+)
 
 _MIGRATION = (
     Path(__file__).parents[2]
@@ -29,10 +39,17 @@ _MIGRATION = (
     / "versions"
     / "20260617_0021_add_feature_store_preset_filter_indexes.py"
 )
+_CORRECTION_SURVIVORS_MIGRATION = (
+    Path(__file__).parents[2]
+    / "alembic"
+    / "versions"
+    / "20260821_0028_seed_correction_survivors_preset.py"
+)
 
 
-def _load_migration():
-    spec = importlib.util.spec_from_file_location("_wsb_migration", _MIGRATION)
+def _load_migration(path: Path = _MIGRATION):
+    assert path.exists(), f"migration is missing: {path.name}"
+    spec = importlib.util.spec_from_file_location(f"_wsb_migration_{path.stem}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -76,3 +93,113 @@ def test_index_expr_matches_query_builder():
             f"index expression for {field} drifted from json_number(); the "
             f"Postgres planner will stop using ix_sfd_run_{field}"
         )
+
+
+def test_resilience_index_expr_matches_numeric_query_builder():
+    migration = _load_migration(_CORRECTION_SURVIVORS_MIGRATION)
+
+    assert migration._index_expr("resilience_score") == _builder_expr(
+        "resilience_score"
+    )
+
+
+def test_survivor_index_expr_matches_compiled_boolean_predicate():
+    migration = _load_migration(_CORRECTION_SURVIVORS_MIGRATION)
+    engine = create_mock_engine("postgresql://", lambda *_args, **_kwargs: None)
+    query = Session(bind=engine).query(StockFeatureDaily)
+    predicate = compile_filter_expression(
+        query,
+        FilterExpression(
+            required_conditions=(BooleanFilter("correction_survivor", True),)
+        ),
+    )
+    compiled = str(predicate.compile(dialect=postgresql.dialect())).replace(
+        "stock_feature_daily.", ""
+    )
+
+    assert _FIELD_BINDINGS["correction_survivor"].json_path == (
+        "correction_survivor",
+    )
+    assert migration._index_expr("correction_survivor") in compiled
+
+
+def test_correction_survivor_migration_emits_exact_postgres_indexes():
+    migration = _load_migration(_CORRECTION_SURVIVORS_MIGRATION)
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+
+    migration._create_indexes()
+
+    statements = [
+        line
+        for line in output.getvalue().splitlines()
+        if line.startswith("CREATE INDEX")
+    ]
+    assert statements == [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sfd_run_correction_survivor "
+        "ON stock_feature_daily (run_id, "
+        "(lower(details_json ->> 'correction_survivor')));",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sfd_run_resilience_score "
+        "ON stock_feature_daily (run_id, "
+        "(CAST(details_json ->> 'resilience_score' AS FLOAT)));",
+    ]
+
+
+def test_correction_survivor_migration_emits_exact_concurrent_drops():
+    migration = _load_migration(_CORRECTION_SURVIVORS_MIGRATION)
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+
+    migration._drop_indexes()
+
+    statements = [
+        line
+        for line in output.getvalue().splitlines()
+        if line.startswith("DROP INDEX")
+    ]
+    assert statements == [
+        "DROP INDEX CONCURRENTLY IF EXISTS ix_sfd_run_correction_survivor;",
+        "DROP INDEX CONCURRENTLY IF EXISTS ix_sfd_run_resilience_score;",
+    ]
+
+
+def test_correction_survivor_index_ddl_runs_inside_autocommit_block():
+    migration = _load_migration(_CORRECTION_SURVIVORS_MIGRATION)
+    events: list[object] = []
+
+    class _AutocommitBlock:
+        def __enter__(self):
+            events.append("enter")
+
+        def __exit__(self, *_args):
+            events.append("exit")
+
+    class _Context:
+        @staticmethod
+        def autocommit_block():
+            return _AutocommitBlock()
+
+    class _Operations:
+        @staticmethod
+        def get_context():
+            return _Context()
+
+        @staticmethod
+        def execute(statement):
+            events.append(statement)
+
+    migration.op = _Operations()
+
+    migration._create_indexes()
+
+    assert events[0] == "enter"
+    assert events[-1] == "exit"
+    assert all("CONCURRENTLY" in statement for statement in events[1:-1])

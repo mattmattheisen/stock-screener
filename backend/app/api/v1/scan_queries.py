@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
+from collections.abc import Callable
 from typing import Any, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,12 +11,16 @@ from fastapi.responses import StreamingResponse
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.query import PageSpec
-from app.domain.scanning.filter_expression_model import QuerySpec, filter_spec_to_expression
+from app.domain.scanning.filter_expression_model import (
+    QuerySpec,
+    filter_spec_to_expression,
+)
 from app.domain.scanning.models import ExportFormat
 from app.schemas.filter_expression import ScanQueryRequest
 from app.schemas.scanning import (
     FilterOptionsResponse,
     ScanResultItem,
+    ScanResultsCapabilities,
     ScanResultsResponse,
     ScanSymbolsResponse,
 )
@@ -33,7 +37,6 @@ from app.wiring.bootstrap import (
 )
 
 from .scan_filter_params import parse_page_spec, parse_scan_filters, parse_scan_sort
-
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -73,6 +76,9 @@ def _results_response(
         per_page=result.page.per_page,
         pages=result.page.total_pages,
         query_fingerprint=result.query_fingerprint,
+        capabilities=ScanResultsCapabilities(
+            opportunity_state=result.opportunity_state_available
+        ),
         results=[
             ScanResultItem.from_domain(
                 item,

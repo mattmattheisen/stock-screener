@@ -31,6 +31,7 @@ from tests.unit.use_cases.conftest import (
     FakeStockDataProvider,
     FakeUnitOfWork,
     FakeUniverseRepository,
+    with_test_opportunity_projection,
 )
 
 # All tests patch _is_us_trading_day to avoid real calendar lookups.
@@ -178,6 +179,35 @@ class TestBuildDailySnapshotCommand:
 
 
 class TestHappyPath:
+    @_PATCH_TRADING_DAY
+    def test_missing_opportunity_projection_fails_before_chunk_persistence(
+        self, _mock_td
+    ):
+        """Break caught: publishing non-error rows after a systemic materialization omission."""
+        class ProjectionOmittingScanner:
+            def scan_stock_multi(self, symbol, screener_names, **kwargs):
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "result_status": "ok",
+                }
+
+        uow, _scanner = _make_uow(symbols=["AAPL"])
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=ProjectionOmittingScanner()
+        )
+
+        with pytest.raises(RuntimeError, match="opportunity projection"):
+            use_case.execute(
+                uow,
+                _make_cmd(),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+        assert uow.feature_store.count_by_run_id(1) == 0
+        assert uow.feature_runs.get_run(1).status == RunStatus.FAILED
+
     def test_execute_uses_market_calendar_for_requested_market(self, monkeypatch):
         calls = []
 
@@ -249,6 +279,14 @@ class TestHappyPath:
         # All 3 symbols should have feature rows in the store
         count = uow.feature_store.count_by_run_id(result.run_id)
         assert count == 3
+        row = uow.feature_store.get_row_by_symbol(result.run_id, "AAPL")
+        assert row is not None
+        assert {
+            "correction_survivor",
+            "resilience_score",
+            "action_state",
+            "opportunity_state",
+        }.issubset(row.details)
 
     @_PATCH_TRADING_DAY
     def test_publish_dq_inputs_are_loaded_from_persisted_rows(self, _mock_td):
@@ -310,6 +348,7 @@ class TestHappyPath:
         assert run.config["signature"]["signature_version"] == 1
         assert run.config["publish_pointer_key"] == "latest_published"
         assert run.config["universe"] == {}
+        assert run.config["materialization_versions"] == {"opportunity_state": 1}
 
     @_PATCH_TRADING_DAY
     def test_exact_balanced_rs_is_hydrated_and_audited_on_feature_run(
@@ -325,12 +364,12 @@ class TestHappyPath:
 
             def scan_stock_multi(self, symbol, screener_names, **kwargs):
                 captured_data.append(kwargs["pre_fetched_data"])
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         class _Reader:
             def __init__(self):
@@ -421,12 +460,12 @@ class TestHappyPath:
             ):
                 del symbol, screener_names
                 captured_resolutions.append(market_rs_resolution)
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         pinned = MarketRsResolution.canonical(
             market="US",
@@ -592,12 +631,12 @@ class TestBulkDataPreparation:
                         "pre_fetched_data": pre_fetched_data,
                     }
                 )
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         provider = RecordingProvider()
         scanner = BulkAwareScanner()
@@ -670,12 +709,12 @@ class TestBulkDataPreparation:
                         "pre_fetched_data": pre_fetched_data,
                     }
                 )
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         provider = FailingProvider()
         scanner = BulkAwareScanner()
@@ -725,12 +764,12 @@ class TestBulkDataPreparation:
 
             def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
                 self.calls.append(symbol)
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         provider = FailingProvider()
         scanner = BulkAwareScanner()
@@ -829,12 +868,12 @@ class TestBulkDataPreparation:
 
             def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
                 self.calls.append(symbol)
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         provider = CountingProvider()
         scanner = BulkAwareScanner()
@@ -928,12 +967,12 @@ class TestBulkDataPreparation:
 
             def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
                 self.calls.append(symbol)
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         scanner = BulkAwareScanner()
         use_case = BuildDailyFeatureSnapshotUseCase(
@@ -998,12 +1037,12 @@ class TestBulkDataPreparation:
 
             def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
                 self.calls.append(symbol)
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         scanner = BulkAwareScanner()
         use_case = BuildDailyFeatureSnapshotUseCase(
@@ -1071,12 +1110,12 @@ class TestBulkDataPreparation:
 
             def scan_stock_multi(self, symbol: str, **kwargs) -> dict:
                 self.calls.append((symbol, kwargs.get("pre_fetched_data")))
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         scanner = BulkAwareScanner()
         use_case = BuildDailyFeatureSnapshotUseCase(
@@ -1115,12 +1154,12 @@ class TestBulkDataPreparation:
 
             def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
                 self.calls.append(symbol)
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "passes_template": True,
                     "current_price": 100.0,
-                }
+                })
 
         scanner = RecordingScanner()
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
@@ -1376,11 +1415,11 @@ class TestPartialFailures:
             def scan_stock_multi(self, symbol, screener_names, **kw):
                 if symbol == "BOOM":
                     raise RuntimeError("kaboom")
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "screeners_passed": 1,
-                }
+                })
 
         uow, _ = _make_uow(symbols=["AAPL", "BOOM", "GOOGL"])
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=ExplodingScanner())
@@ -1443,11 +1482,11 @@ class TestPartialFailures:
             def scan_stock_multi(self, symbol, screener_names, **kw):
                 if symbol == "BOOM":
                     raise RuntimeError("kaboom")
-                return {
+                return with_test_opportunity_projection({
                     "composite_score": 75.0,
                     "rating": "Buy",
                     "screeners_passed": 1,
-                }
+                })
 
         uow, _ = _make_uow(symbols=["AAPL", "BOOM", "GOOGL"])
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=ExplodingScanner())

@@ -23,6 +23,35 @@ from app.services.watchlist_stewardship_service import WatchlistStewardshipServi
 pytestmark = pytest.mark.integration
 
 
+SETUP_READY_PROJECTION = {
+    "correction_survivor": True,
+    "resilience_score": 91.5,
+    "action_state": "setup_ready",
+    "opportunity_state": {
+        "schema_version": 1,
+        "policy_version": "correction-survivors-v1",
+        "as_of_date": "2026-04-04",
+        "market": "US",
+        "mic": "XNAS",
+        "benchmark_symbol": "SPY",
+        "benchmark_as_of_date": "2026-04-04",
+        "passed_checks": ["required_evidence", "leadership_gate"],
+        "failed_checks": [],
+        "warnings": [],
+        "score_pillars": {
+            "benchmark_leadership": 20.0,
+            "multi_horizon_rs": 18.5,
+            "trend_integrity": 20.0,
+            "structure_tightness": 16.0,
+            "liquidity_freshness": 17.0,
+        },
+        "metrics": {"setup_ready": True},
+        "data_availability": {"prior_run": "available"},
+        "action_reasons": ["setup_ready"],
+    },
+}
+
+
 class _FakeEventContextService:
     def __init__(self, earnings_map: dict[str, tuple[date | None, int | None]] | None = None):
         self._earnings_map = earnings_map or {}
@@ -252,6 +281,200 @@ def test_watchlist_stewardship_service_tolerates_non_numeric_stage_and_rs_values
 
     nvda = next(item for item in payload.items if item.symbol == "NVDA")
     assert nvda.rs_delta is None
+
+
+def test_watchlist_exit_stewardship_overlays_setup_ready_projection(session):
+    """Break caught: an exit-risk stewardship signal losing to persisted setup-ready evidence."""
+    watchlist = _seed_watchlist_stewardship_data(session)
+    current = (
+        session.query(StockFeatureDaily)
+        .filter(StockFeatureDaily.run_id == 10, StockFeatureDaily.symbol == "TSLA")
+        .one()
+    )
+    current.details_json = {**current.details_json, **SETUP_READY_PROJECTION}
+    session.commit()
+
+    payload = WatchlistStewardshipService(
+        event_context_service=_FakeEventContextService()
+    ).get_watchlist_stewardship(
+        session,
+        watchlist_id=watchlist.id,
+        as_of_date=date(2026, 4, 4),
+        profile="default",
+    )
+
+    item = next(item for item in payload.items if item.symbol == "TSLA")
+    assert item.status == "exit_risk"
+    assert item.correction_survivor is True
+    assert item.resilience_score == 91.5
+    assert item.action_state == "exit_risk"
+    assert item.opportunity_state.action_reasons == ["setup_ready", "stewardship_exit_risk"]
+
+
+def test_watchlist_current_exit_risk_overlays_without_prior_feature_row(session):
+    """Break caught: first-observation exit risk losing to persisted setup-ready state."""
+    watchlist = _seed_watchlist_stewardship_data(session)
+    current = (
+        session.query(StockFeatureDaily)
+        .filter(StockFeatureDaily.run_id == 10, StockFeatureDaily.symbol == "TSLA")
+        .one()
+    )
+    current.details_json = {**current.details_json, **SETUP_READY_PROJECTION}
+    session.query(StockFeatureDaily).filter(
+        StockFeatureDaily.run_id == 9,
+        StockFeatureDaily.symbol == "TSLA",
+    ).delete()
+    session.commit()
+
+    payload = WatchlistStewardshipService(
+        event_context_service=_FakeEventContextService()
+    ).get_watchlist_stewardship(
+        session,
+        watchlist_id=watchlist.id,
+        as_of_date=date(2026, 4, 4),
+        profile="default",
+    )
+
+    item = next(item for item in payload.items if item.symbol == "TSLA")
+    assert item.status == "exit_risk"
+    assert item.action_state == "exit_risk"
+    assert item.opportunity_state.action_reasons == [
+        "setup_ready",
+        "stewardship_exit_risk",
+    ]
+
+
+def test_watchlist_deterioration_overlays_setup_ready_projection(session):
+    """Break caught: cross-run deterioration not overlaying a lower-priority persisted state."""
+    watchlist = _seed_watchlist_stewardship_data(session)
+    current = (
+        session.query(StockFeatureDaily)
+        .filter(StockFeatureDaily.run_id == 10, StockFeatureDaily.symbol == "NVDA")
+        .one()
+    )
+    current.details_json = {**current.details_json, **SETUP_READY_PROJECTION}
+    session.commit()
+
+    payload = WatchlistStewardshipService(
+        event_context_service=_FakeEventContextService()
+    ).get_watchlist_stewardship(
+        session,
+        watchlist_id=watchlist.id,
+        as_of_date=date(2026, 4, 4),
+        profile="default",
+    )
+
+    item = next(item for item in payload.items if item.symbol == "NVDA")
+    assert item.status == "deteriorating"
+    assert item.action_state == "deteriorating"
+    assert item.opportunity_state.action_reasons == ["setup_ready", "stewardship_deteriorating"]
+
+
+def test_watchlist_deteriorating_overlay_remains_prior_gated_without_prior_feature_row(
+    session,
+):
+    """Break caught: a lost-theme cross-run signal overlaying without a prior feature row."""
+    watchlist = _seed_watchlist_stewardship_data(session)
+    current = (
+        session.query(StockFeatureDaily)
+        .filter(StockFeatureDaily.run_id == 10, StockFeatureDaily.symbol == "NVDA")
+        .one()
+    )
+    current.details_json = {**current.details_json, **SETUP_READY_PROJECTION}
+    session.query(StockFeatureDaily).filter(
+        StockFeatureDaily.run_id == 9,
+        StockFeatureDaily.symbol == "NVDA",
+    ).delete()
+    session.commit()
+
+    payload = WatchlistStewardshipService(
+        event_context_service=_FakeEventContextService()
+    ).get_watchlist_stewardship(
+        session,
+        watchlist_id=watchlist.id,
+        as_of_date=date(2026, 4, 4),
+        profile="default",
+    )
+
+    item = next(item for item in payload.items if item.symbol == "NVDA")
+    assert item.status == "deteriorating"
+    assert item.action_state == "setup_ready"
+    assert item.opportunity_state.action_reasons == ["setup_ready"]
+
+
+def test_legacy_watchlist_rows_remain_not_computed(session):
+    """Break caught: synthesizing partial Action State fields for rows without persisted evidence."""
+    watchlist = _seed_watchlist_stewardship_data(session)
+
+    payload = WatchlistStewardshipService(
+        event_context_service=_FakeEventContextService()
+    ).get_watchlist_stewardship(
+        session,
+        watchlist_id=watchlist.id,
+        as_of_date=date(2026, 4, 4),
+        profile="default",
+    )
+
+    for item in payload.items:
+        assert item.correction_survivor is None
+        assert item.resilience_score is None
+        assert item.action_state is None
+        assert item.opportunity_state is None
+
+
+def test_watchlist_partial_top_level_projection_raises_instead_of_becoming_legacy(session):
+    """Break caught: the adapter masking a supplied projection fragment as absent."""
+    watchlist = _seed_watchlist_stewardship_data(session)
+    current = (
+        session.query(StockFeatureDaily)
+        .filter(StockFeatureDaily.run_id == 10, StockFeatureDaily.symbol == "AAPL")
+        .one()
+    )
+    current.details_json = {
+        **current.details_json,
+        "correction_survivor": True,
+    }
+    session.commit()
+
+    with pytest.raises(ValueError, match="all null or all present"):
+        WatchlistStewardshipService(
+            event_context_service=_FakeEventContextService()
+        ).get_watchlist_stewardship(
+            session,
+            watchlist_id=watchlist.id,
+            as_of_date=date(2026, 4, 4),
+            profile="default",
+        )
+
+
+def test_watchlist_overlay_does_not_invent_cross_run_state_without_prior_row(session):
+    """Break caught: treating a missing prior row as evidence for a live stewardship overlay."""
+    watchlist = _seed_watchlist_stewardship_data(session)
+    current = (
+        session.query(StockFeatureDaily)
+        .filter(StockFeatureDaily.run_id == 10, StockFeatureDaily.symbol == "AAPL")
+        .one()
+    )
+    current.details_json = {**current.details_json, **SETUP_READY_PROJECTION}
+    session.query(StockFeatureDaily).filter(
+        StockFeatureDaily.run_id == 9,
+        StockFeatureDaily.symbol == "AAPL",
+    ).delete()
+    session.commit()
+
+    payload = WatchlistStewardshipService(
+        event_context_service=_FakeEventContextService()
+    ).get_watchlist_stewardship(
+        session,
+        watchlist_id=watchlist.id,
+        as_of_date=date(2026, 4, 4),
+        profile="default",
+    )
+
+    item = next(item for item in payload.items if item.symbol == "AAPL")
+    assert item.status == "unchanged"
+    assert item.action_state == "setup_ready"
+    assert item.opportunity_state.action_reasons == ["setup_ready"]
 
 
 @pytest.mark.asyncio

@@ -59,6 +59,26 @@ def test_invalidation_flag_requires_snake_case_code():
         InvalidationFlag("BadCode")
 
 
+def test_invalidation_payload_preserves_hardness():
+    payload = InvalidationFlag("breaks_50d_support", is_hard=True).to_payload()
+
+    assert payload["is_hard"] is True
+
+
+@pytest.mark.parametrize("value", [None, "true", 1])
+def test_report_validator_rejects_missing_or_non_boolean_invalidation_hardness(value):
+    payload = canonical_setup_engine_report_examples()[0]
+    flag = payload["explain"]["invalidation_flags"][0]
+    if value is None:
+        del flag["is_hard"]
+    else:
+        flag["is_hard"] = value
+
+    errors = validate_setup_engine_report_payload(payload)
+
+    assert any("is_hard must be bool" in error for error in errors)
+
+
 def test_report_validator_rejects_non_json_types():
     payload = canonical_setup_engine_report_examples()[0]
     payload["candidates"][0]["metrics"]["bad_value"] = {"nested"}

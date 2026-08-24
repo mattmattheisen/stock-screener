@@ -4,6 +4,7 @@ import {
   applyScanFilterDefaults,
   buildDefaultScanFilters,
 } from '../features/scan/defaultFilters';
+import { fieldValueOptions } from '../features/scan/scanFilterFields';
 import {
   filterStaticScanRows,
   paginateStaticScanRows,
@@ -131,6 +132,33 @@ describe('static scan client', () => {
     const filtered = filterStaticScanRows(testRows, filters);
 
     expect(filtered.map((row) => row.symbol)).toEqual(['BDOT']);
+  });
+
+  it('filters correction survivors without treating missing legacy values as false', () => {
+    const testRows = [
+      { symbol: 'READY', correction_survivor: true },
+      { symbol: 'NOPE', correction_survivor: false },
+      { symbol: 'LEGACY' },
+    ];
+    const filters = buildDefaultScanFilters();
+    expect(filters.correctionSurvivor).toBeNull();
+    filters.correctionSurvivor = true;
+
+    const filtered = filterStaticScanRows(testRows, filters);
+
+    expect(filtered.map((row) => row.symbol)).toEqual(['READY']);
+  });
+
+  it('publishes the fixed action-state filter options', () => {
+    expect(fieldValueOptions('action_state')).toEqual([
+      'exit_risk',
+      'deteriorating',
+      'event_risk',
+      'extended',
+      'data_limited',
+      'setup_ready',
+      'watch',
+    ]);
   });
 
   it('does not coerce missing static RS blue-dot values to false', () => {
@@ -297,6 +325,47 @@ describe('static scan client', () => {
     ], 'composite_score', 'asc');
 
     expect(sorted.map((row) => row.symbol)).toEqual(['FULL70', 'FULL80', 'IPO95', 'NEW1']);
+  });
+
+  it('sorts resilience descending numerically with nulls last and symbol ties', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'LEGACY', resilience_score: null },
+      { symbol: 'BETA', resilience_score: '84' },
+      { symbol: 'LOW', resilience_score: '9' },
+      { symbol: 'ALPHA', resilience_score: '84' },
+    ], 'resilience_score', 'desc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['ALPHA', 'BETA', 'LOW', 'LEGACY']);
+  });
+
+  it('sorts resilience ascending numerically with nulls last and symbol ties', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'LEGACY', resilience_score: null },
+      { symbol: 'BETA', resilience_score: 84 },
+      { symbol: 'LOW', resilience_score: 9 },
+      { symbol: 'ALPHA', resilience_score: 84 },
+    ], 'resilience_score', 'asc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['LOW', 'ALPHA', 'BETA', 'LEGACY']);
+  });
+
+  it('uses symbol ties when both resilience scores are omitted', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'LEGACY-Z' },
+      { symbol: 'LEGACY-A' },
+    ], 'resilience_score', 'desc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['LEGACY-A', 'LEGACY-Z']);
+  });
+
+  it('keeps ascending composite score nulls last on the shared score path', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'LEGACY', composite_score: null },
+      { symbol: 'HIGH', composite_score: 84 },
+      { symbol: 'LOW', composite_score: 9 },
+    ], 'composite_score', 'asc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['LOW', 'HIGH', 'LEGACY']);
   });
 
   it('uses symbol tiebreaks for equal ascending composite scores', () => {

@@ -9,7 +9,7 @@ from __future__ import annotations
 import yfinance as yf
 import pandas as pd
 from typing import TYPE_CHECKING, Optional, Dict, Any, List
-from datetime import date
+from datetime import UTC, date, datetime
 import logging
 from threading import RLock
 
@@ -217,6 +217,14 @@ class YFinanceService:
 
             ticker = yf.Ticker(symbol)
             info = ticker.info
+            calendar_dates, calendar_available = (
+                self._get_upcoming_earnings_dates_from_ticker(
+                    ticker,
+                    symbol=symbol,
+                    limit=4,
+                )
+            )
+            calendar_as_of_date = datetime.now(UTC).date()
 
             result = {
                 "symbol": symbol,
@@ -241,6 +249,16 @@ class YFinanceService:
                 # IPO date - yfinance provides this as milliseconds timestamp
                 "first_trade_date_ms": info.get("firstTradeDateMilliseconds"),
             }
+            if calendar_available:
+                result["event_calendar_as_of_date"] = calendar_as_of_date
+                result["next_earnings_date"] = next(
+                    (
+                        value
+                        for value in calendar_dates
+                        if value >= calendar_as_of_date
+                    ),
+                    None,
+                )
 
             # Calculate EPS Rating components from income statements
             eps_data = self._extract_eps_rating_data(ticker)
@@ -327,24 +345,18 @@ class YFinanceService:
             logger.error(f"Error fetching earnings history for {symbol}: {e}")
             return None
 
-    def get_upcoming_earnings_dates(self, symbol: str, limit: int = 4) -> List[date]:
-        """
-        Get upcoming earnings dates from yfinance.
-
-        Args:
-            symbol: Stock ticker symbol
-            limit: Maximum number of upcoming earnings rows to inspect
-
-        Returns:
-            List of upcoming earnings dates normalized to Python dates
-        """
+    def _get_upcoming_earnings_dates_from_ticker(
+        self,
+        ticker: Any,
+        *,
+        symbol: str,
+        limit: int,
+    ) -> tuple[List[date], bool]:
+        """Normalize one ticker calendar lookup without another rate-limit wait."""
         try:
-            self._wait_for_yfinance_rate_limit()
-
-            ticker = yf.Ticker(symbol)
             earnings_dates = ticker.earnings_dates
             if earnings_dates is None or earnings_dates.empty:
-                return []
+                return [], True
 
             normalized = earnings_dates.reset_index()
             result: List[date] = []
@@ -356,10 +368,46 @@ class YFinanceService:
                 if pd.isna(timestamp):
                     continue
                 result.append(timestamp.date())
-            return sorted({value for value in result})
+            return sorted({value for value in result}), True
+        except Exception as exc:
+            logger.error("Error fetching earnings dates for %s: %s", symbol, exc)
+            return [], False
+
+    def get_upcoming_earnings_dates_with_status(
+        self,
+        symbol: str,
+        limit: int = 4,
+    ) -> tuple[List[date], bool]:
+        """Get upcoming dates and preserve whether Yahoo answered successfully.
+
+        Args:
+            symbol: Stock ticker symbol
+            limit: Maximum number of upcoming earnings rows to inspect
+
+        Returns:
+            A normalized date list and an availability flag. A successful
+            empty response is ``([], True)``; provider failure is
+            ``([], False)``.
+        """
+        try:
+            self._wait_for_yfinance_rate_limit()
+            ticker = yf.Ticker(symbol)
         except Exception as e:
             logger.error(f"Error fetching earnings dates for {symbol}: {e}")
-            return []
+            return [], False
+        return self._get_upcoming_earnings_dates_from_ticker(
+            ticker,
+            symbol=symbol,
+            limit=limit,
+        )
+
+    def get_upcoming_earnings_dates(self, symbol: str, limit: int = 4) -> List[date]:
+        """Backward-compatible dates-only calendar lookup."""
+        dates, _available = self.get_upcoming_earnings_dates_with_status(
+            symbol,
+            limit=limit,
+        )
+        return dates
 
     def get_quarterly_growth(
         self,

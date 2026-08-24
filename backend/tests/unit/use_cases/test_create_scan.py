@@ -3,6 +3,7 @@
 import pytest
 
 from app.domain.common.errors import ValidationError
+from app.domain.scanning.errors import SingleActiveScanViolation
 from app.domain.scanning.models import (
     FreshnessDecision,
     FreshnessOmissionWarning,
@@ -10,12 +11,9 @@ from app.domain.scanning.models import (
 from app.use_cases.scanning.create_scan import (
     ActiveScanConflictError,
     CreateScanCommand,
-    CreateScanResult,
     CreateScanUseCase,
     StaleMarketDataError,
 )
-from app.domain.scanning.errors import SingleActiveScanViolation
-
 from tests.unit.use_cases.conftest import (
     FakeFeatureRunRepository,
     FakeScanRepository,
@@ -23,7 +21,6 @@ from tests.unit.use_cases.conftest import (
     FakeUnitOfWork,
     FakeUniverseRepository,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -108,6 +105,10 @@ class TestCreateScanUseCase:
         assert scan.trigger_source == "manual"
         assert scan.total_stocks == 1
         assert scan.task_id == "fake-task-123"
+        assert scan.criteria == {}
+        assert scan.metadata_json == {
+            "materialization_versions": {"opportunity_state": 1}
+        }
 
     def test_stores_universe_metadata(self):
         uow = _make_uow(["AAPL"])
@@ -499,6 +500,7 @@ class TestFreshnessChecker:
 
     def test_feature_run_hash_uses_filtered_symbols(self):
         from datetime import date
+
         from app.domain.feature_store.models import RunStats, RunType
         from app.domain.scanning.signature import (
             build_scan_signature_payload,
@@ -560,6 +562,7 @@ class TestFeatureRunBinding:
     def test_exact_match_completes_instantly_without_dispatch(self):
         """Exact ALL-universe match reuses a published snapshot."""
         from datetime import date
+
         from app.domain.feature_store.models import RunStats, RunType
         from app.domain.scanning.signature import (
             build_scan_signature_payload,
@@ -607,6 +610,7 @@ class TestFeatureRunBinding:
 
     def test_non_matching_published_run_leaves_feature_run_id_none(self):
         from datetime import date
+
         from app.domain.feature_store.models import RunStats, RunType
 
         feature_runs = FakeFeatureRunRepository()
@@ -639,6 +643,7 @@ class TestFeatureRunBinding:
 
     def test_market_universe_exact_match_completes_instantly_without_dispatch(self):
         from datetime import date
+
         from app.domain.feature_store.models import RunStats, RunType
         from app.domain.scanning.signature import (
             build_scan_signature_payload,
@@ -689,6 +694,7 @@ class TestFeatureRunBinding:
 
     def test_non_all_universe_stays_async_even_if_exact_run_exists(self):
         from datetime import date
+
         from app.domain.feature_store.models import RunStats, RunType
         from app.domain.scanning.signature import (
             build_scan_signature_payload,

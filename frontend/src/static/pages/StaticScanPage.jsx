@@ -29,6 +29,11 @@ import {
   stableExpressionKey,
 } from '../../features/scan/filterExpressionModel';
 import {
+  filterPresetsForOpportunityCapability,
+  resolveStaticOpportunityCapability,
+} from '../../features/scan/opportunityCapabilityPolicy';
+import { useOpportunityCapabilityTransition } from '../../features/scan/hooks/useOpportunityCapabilityTransition';
+import {
   legacyFiltersToExpression,
 } from '../../features/scan/legacyFilterExpression';
 import {
@@ -93,7 +98,18 @@ function StaticScanPage() {
   );
   const manifestDefaultSortBy = scanManifestQuery.data?.sort?.field ?? 'composite_score';
   const manifestDefaultSortOrder = scanManifestQuery.data?.sort?.order ?? 'desc';
-  const presetScreens = scanManifestQuery.data?.preset_screens;
+  const showOpportunityState = resolveStaticOpportunityCapability(marketEntry);
+  const presetScreens = useMemo(() => {
+    const screens = scanManifestQuery.data?.preset_screens;
+    if (!Array.isArray(screens)) {
+      return screens;
+    }
+    return filterPresetsForOpportunityCapability(
+      screens,
+      Boolean(scanManifestQuery.data),
+      showOpportunityState,
+    );
+  }, [scanManifestQuery.data, showOpportunityState]);
 
   useEffect(() => {
     if (scanManifestQuery.data?.default_page_size) {
@@ -202,6 +218,27 @@ function StaticScanPage() {
     screens: presetScreens,
     allRows: hydratedRows,
     hydrationComplete,
+  });
+
+  const appliedQuery = useMemo(() => ({
+      expression: appliedExpression,
+      sortBy,
+      sortOrder,
+  }), [appliedExpression, sortBy, sortOrder]);
+  const handleUnsupportedOpportunityQuery = useCallback((sanitized) => {
+    dispatchFilterState({
+      type: 'apply-expression',
+      expression: sanitized.expression,
+    });
+    setSortBy(sanitized.sortBy);
+    setSortOrder(sanitized.sortOrder);
+    setActiveScreenId(null);
+  }, [setActiveScreenId]);
+  useOpportunityCapabilityTransition({
+    capabilityResolved: Boolean(scanManifestQuery.data),
+    available: showOpportunityState,
+    query: appliedQuery,
+    onSanitizedQuery: handleUnsupportedOpportunityQuery,
   });
 
   const handleSelectScreen = useCallback((screenId) => {
@@ -399,6 +436,7 @@ function StaticScanPage() {
         showWatchlistMenu={false}
         isChartEnabled={isChartEnabled}
         sortingEnabled={hydrationComplete}
+        showOpportunityState={showOpportunityState}
       />
 
       <StaticChartViewerModal
@@ -420,6 +458,7 @@ function StaticScanPage() {
           setLogicBuilderOpen(false);
         }}
         filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
+        opportunityStateAvailable={showOpportunityState}
       />
     </Box>
   );

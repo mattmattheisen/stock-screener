@@ -221,6 +221,146 @@ def _static_rrg_payload(market: str, as_of_date: str) -> dict:
     }
 
 
+def _export_zero_row_feature_run(
+    *,
+    service: StaticSiteExportService,
+    session_factory,
+    monkeypatch,
+    output_dir,
+    run_id: int,
+    config_json: dict,
+):
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=run_id,
+            as_of_date=date(2026, 8, 21),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 8, 21, 21, 30, 0),
+            config_json={"universe": {"market": "US"}, **config_json},
+        ),
+        pointer_run_id=run_id,
+        pointer_key="latest_published_market:US",
+    )
+    filter_options = SimpleNamespace(
+        ibd_industries=(),
+        gics_sectors=(),
+        ratings=(),
+    )
+    unavailable_section = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "available": False,
+        "payload": {},
+    }
+    monkeypatch.setattr(
+        service,
+        "_load_scan_export_source",
+        lambda *_args, **_kwargs: ([], filter_options),
+    )
+    monkeypatch.setattr(
+        service,
+        "_export_chart_bundle",
+        lambda **_kwargs: {
+            "path": "markets/us/charts/index.json",
+            "limit": 200,
+            "symbols_total": 0,
+            "available": False,
+            "skipped_symbols": [],
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_groups_payload",
+        lambda **_kwargs: unavailable_section,
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_groups_rrg_payload",
+        lambda **_kwargs: unavailable_section,
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_breadth_payload",
+        lambda **_kwargs: unavailable_section,
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_home_payload",
+        lambda **_kwargs: {
+            "schema_version": STATIC_SITE_SCHEMA_VERSION,
+            "as_of_date": "2026-08-21",
+            "freshness": {"scan_run_id": run_id},
+        },
+    )
+
+    service.export(
+        output_dir,
+        markets=("US",),
+        feature_run_ids_by_market={"US": run_id},
+    )
+    root_manifest = json.loads(
+        (output_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    scan_manifest = json.loads(
+        (output_dir / "markets" / "us" / "scan" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return root_manifest, scan_manifest
+
+
+def test_explicit_legacy_run_hides_static_opportunity_workflow(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    """Break caught: advertising capability or its preset for exact legacy run metadata."""
+    service, session_factory = service_and_session_factory
+
+    root_manifest, scan_manifest = _export_zero_row_feature_run(
+        service=service,
+        session_factory=session_factory,
+        monkeypatch=monkeypatch,
+        output_dir=tmp_path / "legacy-static",
+        run_id=120,
+        config_json={},
+    )
+
+    assert root_manifest["features"]["opportunity_state"] is False
+    assert root_manifest["markets"]["US"]["features"]["opportunity_state"] is False
+    assert scan_manifest["features"]["opportunity_state"] is False
+    assert "correction_survivors" not in {
+        preset["id"] for preset in scan_manifest["preset_screens"]
+    }
+
+
+def test_explicit_capable_zero_row_run_retains_static_opportunity_workflow(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    """Break caught: inferring capability from an empty row set instead of exact run metadata."""
+    service, session_factory = service_and_session_factory
+
+    root_manifest, scan_manifest = _export_zero_row_feature_run(
+        service=service,
+        session_factory=session_factory,
+        monkeypatch=monkeypatch,
+        output_dir=tmp_path / "capable-static",
+        run_id=121,
+        config_json={"materialization_versions": {"opportunity_state": 1}},
+    )
+
+    assert root_manifest["features"]["opportunity_state"] is True
+    assert root_manifest["markets"]["US"]["features"]["opportunity_state"] is True
+    assert scan_manifest["features"]["opportunity_state"] is True
+    assert "correction_survivors" in {
+        preset["id"] for preset in scan_manifest["preset_screens"]
+    }
+    assert scan_manifest["rows_total"] == 0
+
+
 def test_export_chart_bundle_does_not_rewire_exporter_dependencies(
     service_and_session_factory,
 ):
@@ -401,6 +541,7 @@ def test_export_writes_serializable_manifest_and_page_bundles(
                 "market_rs_run_id": 42,
                 "rs_as_of_date": "2026-03-31",
                 "rs_universe_size": 5000,
+                "materialization_versions": {"opportunity_state": 1},
             },
         ),
         pointer_run_id=7,
@@ -488,10 +629,12 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert manifest["default_market"] == "US"
     assert manifest["supported_markets"] == ["US"]
     assert manifest["features"]["charts"] is True
+    assert manifest["features"]["opportunity_state"] is True
     assert manifest["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["assets"]["charts"]["path"] == "charts/index.json"
     assert manifest["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
     assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
+    assert manifest["markets"]["US"]["features"]["opportunity_state"] is True
     assert manifest["markets"]["US"]["assets"]["charts"]["path"] == "charts/index.json"
     assert manifest["markets"]["US"]["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
     assert manifest["markets"]["US"]["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
@@ -698,7 +841,10 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
             as_of_date=date(2026, 3, 31),
             run_type="daily_snapshot",
             status="published",
-            config_json={"market": "US"},
+            config_json={
+                "market": "US",
+                "materialization_versions": {"opportunity_state": 1},
+            },
             published_at=datetime(2026, 3, 31, 21, 30, 0),
         ),
         pointer_run_id=11,
@@ -756,6 +902,8 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     second_chunk = json.loads((tmp_path / "scan" / "chunks" / "chunk-0002.json").read_text(encoding="utf-8"))
 
     assert manifest["chunk_size"] == 3
+    assert manifest["schema_version"] == "static-scan-v2"
+    assert manifest["features"] == {"opportunity_state": True}
     assert manifest["rows_total"] == 5
     assert manifest["default_filters"] == {"minVolume": 100_000_000}
     leaders_screen = next(
@@ -769,6 +917,7 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     assert [row["symbol"] for row in manifest["preview_rows"]] == ["SYM0", "SYM2", "SYM4"]
     assert [chunk["count"] for chunk in manifest["chunks"]] == [3, 2]
     assert [row["symbol"] for row in first_chunk["rows"]] == ["SYM0", "SYM1", "SYM2"]
+    assert first_chunk["schema_version"] == "static-scan-v2"
     assert [row["symbol"] for row in second_chunk["rows"]] == ["SYM3", "SYM4"]
 
 
@@ -1148,6 +1297,58 @@ def test_serialize_scan_row_preserves_young_ipo_partial_metrics(service_and_sess
     assert payload["adr_percent"] == 10.0
     assert payload["rs_rating_1m"] == 50.0
     assert payload["rs_rating"] is None
+
+
+def test_serialize_scan_row_preserves_compact_opportunity_evidence_only(
+    service_and_session_factory,
+):
+    service, _session_factory = service_and_session_factory
+    evidence = {
+        "schema_version": 1,
+        "policy_version": "correction-survivors-v1",
+        "as_of_date": "2026-08-21",
+        "market": "US",
+        "mic": "XNAS",
+        "benchmark_symbol": "SPY",
+        "benchmark_as_of_date": "2026-08-21",
+        "passed_checks": ["benchmark_leadership"],
+        "failed_checks": [],
+        "warnings": [],
+        "score_pillars": {
+            "benchmark_leadership": 20.0,
+            "multi_horizon_rs": 17.0,
+            "trend_integrity": 20.0,
+            "structure_tightness": 17.0,
+            "liquidity_freshness": 10.0,
+        },
+        "metrics": {"benchmark_relative_return_65d": 0.083},
+        "data_availability": {"features": "available"},
+        "action_reasons": ["survivor", "setup_ready"],
+    }
+    row = SimpleNamespace(
+        symbol="READY",
+        composite_score=91.0,
+        rating="Strong Buy",
+        current_price=101.0,
+        screeners_run=["minervini", "setup_engine"],
+        extended_fields={
+            "correction_survivor": True,
+            "resilience_score": 84.0,
+            "action_state": "setup_ready",
+            "opportunity_state": evidence,
+            "se_explain": {"summary": "full setup evidence"},
+            "se_candidates": [{"pattern": "vcp"}],
+        },
+    )
+
+    payload = service._serialize_scan_row(row)  # noqa: SLF001
+
+    assert payload["correction_survivor"] is True
+    assert payload["resilience_score"] == 84.0
+    assert payload["action_state"] == "setup_ready"
+    assert payload["opportunity_state"] == evidence
+    assert "se_explain" not in payload
+    assert "se_candidates" not in payload
 
 
 def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):

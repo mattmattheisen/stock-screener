@@ -9,7 +9,9 @@ Provides the foundation for implementing multiple screening strategies:
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Any
+from datetime import date
+from typing import Any, Dict, Optional
+
 import pandas as pd
 
 from app.analysis.patterns.rs_line import RsLineLeadershipSnapshot
@@ -29,6 +31,7 @@ class DataRequirements:
     needs_quarterly_growth: bool = False  # Quarterly earnings/revenue growth
     needs_benchmark: bool = False  # Market benchmark data for RS calculation
     needs_earnings_history: bool = False  # Historical earnings data
+    needs_event_calendar: bool = False  # Upcoming earnings/event date context
 
     def merge(self, other: 'DataRequirements') -> 'DataRequirements':
         """
@@ -51,7 +54,8 @@ class DataRequirements:
             needs_fundamentals=self.needs_fundamentals or other.needs_fundamentals,
             needs_quarterly_growth=self.needs_quarterly_growth or other.needs_quarterly_growth,
             needs_benchmark=self.needs_benchmark or other.needs_benchmark,
-            needs_earnings_history=self.needs_earnings_history or other.needs_earnings_history
+            needs_earnings_history=self.needs_earnings_history or other.needs_earnings_history,
+            needs_event_calendar=self.needs_event_calendar or other.needs_event_calendar,
         )
 
     @classmethod
@@ -132,6 +136,8 @@ class StockData:
     fundamentals: Optional[Dict[str, Any]] = None  # Basic fundamentals
     quarterly_growth: Optional[Dict[str, Any]] = None  # Quarterly growth metrics
     earnings_history: Optional[pd.DataFrame] = None  # Historical earnings data
+    next_earnings_date: date | None = None
+    event_calendar_available: bool = False
 
     # Additional metadata
     benchmark_symbol: Optional[str] = None

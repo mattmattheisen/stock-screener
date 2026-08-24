@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { buildDefaultScanFilters } from '../defaultFilters';
+import { createEmptyExpression } from '../filterExpressionModel';
 import { legacyFiltersToExpression } from '../legacyFilterExpression';
 import { useScanFilterPresets } from './useScanFilterPresets';
 
@@ -53,6 +54,87 @@ function setup(overrides = {}) {
 }
 
 describe('useScanFilterPresets', () => {
+  it('does not apply capability heuristics to preset CRUD state', () => {
+    const { hook, applyQuery } = setup({
+      opportunityStateAvailable: false,
+      presets: [
+        {
+          id: 'correction-survivors-live',
+          name: 'Correction Survivors',
+          filters: { ...buildDefaultScanFilters(), correctionSurvivor: true },
+          sort_by: 'resilience_score',
+          sort_order: 'desc',
+        },
+        {
+          id: 'momentum',
+          name: 'Momentum',
+          filters: buildDefaultScanFilters(),
+          sort_by: 'composite_score',
+          sort_order: 'desc',
+        },
+      ],
+    });
+
+    expect(hook.result.current.availablePresets.map(({ name }) => name)).toEqual([
+      'Correction Survivors',
+      'Momentum',
+    ]);
+
+    act(() => hook.result.current.handleLoadPreset('correction-survivors-live'));
+    expect(applyQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes the supplied presets unchanged', () => {
+    const { hook } = setup({
+      opportunityStateAvailable: true,
+      presets: [{
+        id: 'correction-survivors-live',
+        name: 'Correction Survivors',
+        filters: { ...buildDefaultScanFilters(), correctionSurvivor: true },
+        sort_by: 'resilience_score',
+        sort_order: 'desc',
+      }],
+    });
+
+    expect(hook.result.current.availablePresets).toHaveLength(1);
+  });
+
+  it('does not mutate queries when capability props change', () => {
+    const expression = createEmptyExpression([
+      { kind: 'boolean', field: 'correction_survivor', value: true },
+    ]);
+    const { hook, props, applyQuery } = setup({
+      expression,
+      sortBy: 'resilience_score',
+      opportunityStateAvailable: true,
+    });
+
+    act(() => {
+      hook.rerender({
+        ...props,
+        expression,
+        sortBy: 'resilience_score',
+        opportunityStateAvailable: false,
+      });
+    });
+
+    expect(applyQuery).not.toHaveBeenCalled();
+  });
+
+  it('does not sanitize opportunity query state while capability remains true', () => {
+    const expression = createEmptyExpression([
+      { kind: 'boolean', field: 'correction_survivor', value: true },
+    ]);
+    const { applyQuery } = setup({
+      expression,
+      sortBy: 'resilience_score',
+      sortOrder: 'desc',
+      opportunityStateAvailable: true,
+    });
+
+    expect(applyQuery).not.toHaveBeenCalled();
+  });
+
   it('loads a preset as one canonical filter + sort transition', () => {
     const { hook, applyQuery } = setup();
 
@@ -72,6 +154,39 @@ describe('useScanFilterPresets', () => {
       sortBy: 'composite_score',
       sortOrder: 'desc',
     }));
+  });
+
+  it('loads the Correction Survivors live preset with survivor semantics', () => {
+    const { hook, applyQuery } = setup({
+      opportunityStateAvailable: true,
+      presets: [{
+        id: 'correction-survivors-live',
+        name: 'Correction Survivors',
+        filters: { ...buildDefaultScanFilters(), correctionSurvivor: true },
+        sort_by: 'resilience_score',
+        sort_order: 'desc',
+      }],
+    });
+
+    act(() => {
+      hook.result.current.handleLoadPreset('correction-survivors-live');
+    });
+
+    expect(applyQuery).toHaveBeenCalledWith({
+      expression: expect.objectContaining({
+        required: expect.objectContaining({
+          conditions: [
+            expect.objectContaining({
+              kind: 'boolean',
+              field: 'correction_survivor',
+              value: true,
+            }),
+          ],
+        }),
+      }),
+      sortBy: 'resilience_score',
+      sortOrder: 'desc',
+    });
   });
 
   it('omits static-only legacy aliases when loading a live preset', () => {
