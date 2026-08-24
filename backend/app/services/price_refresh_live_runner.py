@@ -13,33 +13,26 @@ from .price_refresh_activity import (
     task_id,
 )
 from .price_refresh_execution import (
-    PriceRefreshExecutionAccumulator,
+    PriceBatchCache,
+    PriceBatchFetcher,
+    PriceRefreshBatchExecutionError,
+    PriceRefreshBatchExecutor,
+    PriceRefreshBatchOutcome,
     PriceRefreshExecutionSummary,
-    iter_price_refresh_batches,
+    SymbolFailureTracker,
 )
 from .price_refresh_planning import PriceRefreshJob
 
 
 @dataclass(frozen=True)
 class LivePriceRefreshRunnerDependencies:
-    fetch_with_backoff: Callable[..., Mapping[str, Mapping[str, Any]]]
-    track_symbol_failures: Callable[..., None]
+    fetch_with_backoff: PriceBatchFetcher
+    track_symbol_failures: SymbolFailureTracker
     data_fetch_lock_factory: Callable[[], Any]
     raise_if_transient_database_error: Callable[[Exception], None]
 
 
-class PriceRefreshExecutionError(Exception):
-    def __init__(
-        self,
-        summary: PriceRefreshExecutionSummary,
-        cause: Exception,
-    ) -> None:
-        super().__init__(str(cause))
-        self.summary = summary
-        self.cause = cause
-
-    def __str__(self) -> str:
-        return str(self.cause)
+PriceRefreshExecutionError = PriceRefreshBatchExecutionError
 
 
 class LivePriceRefreshRunner:
@@ -51,7 +44,7 @@ class LivePriceRefreshRunner:
         *,
         task: CeleryTaskLike,
         bulk_fetcher: Any,
-        price_cache: Any,
+        price_cache: PriceBatchCache,
         db: Any,
         jobs: Sequence[PriceRefreshJob],
         total: int,
@@ -62,8 +55,6 @@ class LivePriceRefreshRunner:
         symbol_markets: Mapping[str, str],
         activity_reporter: PriceRefreshActivityReporter,
     ) -> PriceRefreshExecutionSummary:
-        accumulator = PriceRefreshExecutionAccumulator(total=total)
-
         def market_for_symbol(symbol: str) -> str:
             return symbol_markets.get(str(symbol).upper(), effective_market)
 
@@ -91,66 +82,45 @@ class LivePriceRefreshRunner:
                 failed=0,
             )
 
-        def fetch_batch(
-            symbols: Sequence[str],
-            *,
-            period: str,
-            market: str | None,
-            progress_callback: Callable[[int], None] | None = None,
-        ):
-            return self._deps.fetch_with_backoff(
-                bulk_fetcher,
-                list(symbols),
-                period=period,
+        def after_batch(
+            batch: PriceRefreshBatchOutcome,
+            summary: PriceRefreshExecutionSummary,
+        ) -> None:
+            percent = (summary.processed / total) * 100 if total else 100.0
+            activity_reporter.publish_progress(
+                db,
+                price_cache,
+                task=task,
                 market=market,
-                progress_callback=progress_callback,
+                effective_market=effective_market,
+                lifecycle=activity_lifecycle,
+                current=summary.processed,
+                total=total,
+                percent=percent,
+                message=f"Batch {batch.batch_number}/{batch.total_batches} · refreshing prices",
+                refreshed=summary.refreshed,
+                failed=summary.failed,
             )
+            self._extend_lock(task, market=market)
 
-        try:
-            for batch in iter_price_refresh_batches(
-                jobs=jobs,
-                batch_size=batch_size,
-                market=market,
-                fetch_batch=fetch_batch,
-                market_for_symbol=market_for_symbol,
-                raise_if_transient_database_error=self._deps.raise_if_transient_database_error,
-                progress_callback=progress_callback,
-            ):
-                if batch.price_data_by_symbol:
-                    price_cache.store_batch_in_cache(
-                        dict(batch.price_data_by_symbol),
-                        also_store_db=True,
-                    )
-                self._deps.track_symbol_failures(
-                    price_cache,
-                    list(batch.successes),
-                    list(batch.failures),
-                    db,
-                    failure_details=dict(batch.failure_details),
-                )
-
-                accumulator.add(batch)
-                summary = accumulator.summary()
-                percent = (summary.processed / total) * 100 if total else 100.0
-                activity_reporter.publish_progress(
-                    db,
-                    price_cache,
-                    task=task,
-                    market=market,
-                    effective_market=effective_market,
-                    lifecycle=activity_lifecycle,
-                    current=summary.processed,
-                    total=total,
-                    percent=percent,
-                    message=f"Batch {batch.batch_number}/{batch.total_batches} · refreshing prices",
-                    refreshed=summary.refreshed,
-                    failed=summary.failed,
-                )
-                self._extend_lock(task, market=market)
-        except Exception as exc:
-            raise PriceRefreshExecutionError(accumulator.summary(), exc) from exc
-
-        return accumulator.summary()
+        return PriceRefreshBatchExecutor(
+            fetch_with_backoff=self._deps.fetch_with_backoff,
+            track_symbol_failures=self._deps.track_symbol_failures,
+            raise_if_transient_database_error=(
+                self._deps.raise_if_transient_database_error
+            ),
+        ).run(
+            bulk_fetcher=bulk_fetcher,
+            price_cache=price_cache,
+            db=db,
+            jobs=jobs,
+            total=total,
+            batch_size=batch_size,
+            market=market,
+            market_for_symbol=market_for_symbol,
+            progress_callback=progress_callback,
+            after_batch=after_batch,
+        )
 
     def _extend_lock(self, task: CeleryTaskLike, *, market: str | None) -> None:
         self._deps.data_fetch_lock_factory().extend_lock(

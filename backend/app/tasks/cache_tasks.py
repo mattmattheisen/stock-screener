@@ -6,7 +6,7 @@ Provides background tasks for:
 - Weekly full cache refresh
 - On-demand cache warming
 
-All data-fetching tasks use the @serialized_data_fetch decorator
+All data-fetching tasks use the @serialized_data_fetch_task decorator
 to ensure only one task fetches external data at a time.
 """
 import logging
@@ -20,6 +20,10 @@ from ..config import settings
 from ..database import SessionLocal, is_corruption_error, safe_rollback
 from ..services.benchmark_registry_service import benchmark_registry
 from ..services.cache_manager import CacheManager
+from ..services.failed_price_retry_runner import (
+    FailedPriceRetryRunner,
+    FailedPriceRetryRunnerDependencies,
+)
 from ..services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
@@ -27,27 +31,21 @@ from ..services.market_activity_service import (
     mark_market_activity_started,
 )
 from ..services.price_fetch_failures import (
-    classify_price_fetch_error,
     is_no_data_price_failure,
 )
 from ..services.price_fetch_failures import (
     is_rate_limit_error as is_price_rate_limit_error,
 )
-from ..services.price_fetch_failures import (
-    is_retryable_price_failure,
-)
 from ..services.price_refresh_activity import (
     PriceRefreshActivityDependencies,
     PriceRefreshActivityReporter,
 )
-from ..services.price_refresh_execution import classify_price_refresh_batch
 from ..services.price_refresh_live_runner import (
     LivePriceRefreshRunner,
     LivePriceRefreshRunnerDependencies,
     PriceRefreshRetryScheduler,
 )
 from ..services.price_refresh_plan_builder import build_market_price_refresh_plan
-from ..services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
 from ..services.price_refresh_workflow import (
     PriceRefreshMarketGateway,
     PriceRefreshWorkflow,
@@ -66,7 +64,7 @@ from ..wiring.bootstrap import (
     get_rate_limiter,
     get_stock_universe_service,
 )
-from .data_fetch_lock import serialized_data_fetch
+from .data_fetch_lock import serialized_data_fetch_task
 from .runtime_activity_failure_hooks import RuntimeActivityTrackedTask
 from .transient_database import raise_if_transient_database_error
 
@@ -465,8 +463,11 @@ def warm_top_symbols(symbols: Optional[List[str]] = None, count: Optional[int] =
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.cache_tasks.daily_cache_warmup')
-@serialized_data_fetch('daily_cache_warmup')
+@serialized_data_fetch_task(
+    celery_app,
+    "daily_cache_warmup",
+    name="app.tasks.cache_tasks.daily_cache_warmup",
+)
 def daily_cache_warmup(self, market: str | None = None):
     """
     Compatibility wrapper for the daily full smart refresh.
@@ -486,12 +487,12 @@ def daily_cache_warmup(self, market: str | None = None):
     return smart_refresh_cache(self, mode="full", market=market)
 
 
-@celery_app.task(
-    bind=True,
+@serialized_data_fetch_task(
+    celery_app,
+    "weekly_full_refresh",
     name='app.tasks.cache_tasks.weekly_full_refresh',
     soft_time_limit=14400,
 )
-@serialized_data_fetch('weekly_full_refresh')
 def weekly_full_refresh(self, market: str | None = None):
     """
     Weekly full cache refresh.
@@ -922,8 +923,11 @@ def _prewarm_scan_cache_impl(task, symbol_list: List[str], priority: str = 'norm
             db.close()
 
 
-@celery_app.task(name='app.tasks.cache_tasks.prewarm_scan_cache', bind=True)
-@serialized_data_fetch('prewarm_scan_cache')
+@serialized_data_fetch_task(
+    celery_app,
+    "prewarm_scan_cache",
+    name="app.tasks.cache_tasks.prewarm_scan_cache",
+)
 def prewarm_scan_cache(self, symbol_list: List[str], priority: str = 'normal'):
     """
     Pre-warm cache for upcoming scan.
@@ -942,8 +946,11 @@ def prewarm_scan_cache(self, symbol_list: List[str], priority: str = 'normal'):
     return _prewarm_scan_cache_impl(self, symbol_list, priority)
 
 
-@celery_app.task(bind=True, name='app.tasks.cache_tasks.prewarm_all_active_symbols')
-@serialized_data_fetch('prewarm_all_active_symbols')
+@serialized_data_fetch_task(
+    celery_app,
+    "prewarm_all_active_symbols",
+    name="app.tasks.cache_tasks.prewarm_all_active_symbols",
+)
 def prewarm_all_active_symbols(self):
     """
     Warm cache for all active symbols after market close.
@@ -1317,12 +1324,12 @@ def _filter_active_symbols(symbols: List[str]) -> List[str]:
         db.close()
 
 
-@celery_app.task(
-    bind=True,
+@serialized_data_fetch_task(
+    celery_app,
+    "retry_failed_price_symbols",
     name="app.tasks.cache_tasks.retry_failed_price_symbols",
     soft_time_limit=3600,
 )
-@serialized_data_fetch("retry_failed_price_symbols")
 def retry_failed_price_symbols(
     self,
     symbols: list[str],
@@ -1345,84 +1352,34 @@ def retry_failed_price_symbols(
 
     price_cache = get_price_cache()
     bulk_fetcher = BulkDataFetcher()
-    refreshed = 0
-    successes: list[str] = []
-    failed_symbols: list[str] = []
-    failure_details: dict[str, str] = {}
-    failure_kinds: dict[str, str] = {}
-    try:
-        batch_results = _fetch_with_backoff(
-            bulk_fetcher,
-            deduped_symbols,
-            period="2y",
-            market=market,
+    result = FailedPriceRetryRunner(
+        FailedPriceRetryRunnerDependencies(
+            fetch_with_backoff=_fetch_with_backoff,
+            track_symbol_failures=_track_symbol_failures,
+            raise_if_transient_database_error=raise_if_transient_database_error,
+            schedule_failed_symbol_retry=_schedule_failed_symbol_retry,
         )
-        retry_job = PriceRefreshJob(
-            kind=PriceRefreshJobKind.NO_HISTORY,
-            symbols=tuple(deduped_symbols),
-            period="2y",
-        )
-        outcome = classify_price_refresh_batch(
-            batch_number=1,
-            total_batches=1,
-            job=retry_job,
-            symbols=tuple(deduped_symbols),
-            batch_results=batch_results,
-            market_for_symbol=lambda _symbol: market,
-        )
-        refreshed = outcome.refreshed
-        successes = list(outcome.successes)
-        failed_symbols = list(outcome.failures)
-        failure_details = dict(outcome.failure_details)
-        failure_kinds = dict(outcome.failure_kinds)
-        if outcome.price_data_by_symbol:
-            price_cache.store_batch_in_cache(dict(outcome.price_data_by_symbol), also_store_db=True)
-    except SoftTimeLimitExceeded:
-        raise
-    except Exception as exc:
-        raise_if_transient_database_error(exc)
-        logger.warning(
-            "Failed-symbol price retry attempt %s failed for %s",
-            attempt,
-            market,
-            exc_info=True,
-        )
-        failed_symbols = deduped_symbols
-        failure_details = {symbol: str(exc) for symbol in deduped_symbols}
-        kind = classify_price_fetch_error(str(exc))
-        if kind is not None:
-            failure_kinds = {symbol: kind.value for symbol in deduped_symbols}
-
-    _track_symbol_failures(
-        price_cache,
-        successes,
-        failed_symbols,
-        failure_details=failure_details,
+    ).run(
+        price_cache=price_cache,
+        bulk_fetcher=bulk_fetcher,
+        symbols=deduped_symbols,
+        market=market,
+        attempt=attempt,
+        retry_countdown=retry_countdown,
+        batch_size=settings.price_refresh_live_batch_size,
     )
-    retryable_failed_symbols = [
-        symbol
-        for symbol in failed_symbols
-        if is_retryable_price_failure(
-            kind=failure_kinds.get(symbol),
-            error=failure_details.get(symbol, ""),
-        )
-    ]
-    if retryable_failed_symbols and attempt < 3:
-        _schedule_failed_symbol_retry(
-            retryable_failed_symbols,
-            market=market,
-            attempt=attempt + 1,
-            countdown=retry_countdown,
-        )
-    return {
-        "status": "completed" if not failed_symbols else "partial",
+    payload = {
+        "status": result.status,
         "market": market,
         "attempt": attempt,
-        "refreshed": refreshed,
-        "failed": len(failed_symbols),
-        "failed_symbols": failed_symbols[:20],
+        "refreshed": result.refreshed,
+        "failed": result.failed,
+        "failed_symbols": list(result.failed_symbols[:20]),
         "completed_at": datetime.now().isoformat(),
     }
+    if result.error is not None:
+        payload["error"] = result.error
+    return payload
 
 
 def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None) -> dict:
@@ -1574,8 +1531,11 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
         }
 
 
-@celery_app.task(bind=True, name='app.tasks.cache_tasks.force_refresh_stale_intraday')
-@serialized_data_fetch('force_refresh_stale_intraday')
+@serialized_data_fetch_task(
+    celery_app,
+    "force_refresh_stale_intraday",
+    name="app.tasks.cache_tasks.force_refresh_stale_intraday",
+)
 def force_refresh_stale_intraday(self, symbols: Optional[List[str]] = None):
     """
     Force refresh symbols with stale intraday data.
@@ -1597,8 +1557,11 @@ def force_refresh_stale_intraday(self, symbols: Optional[List[str]] = None):
     return _force_refresh_stale_intraday_impl(self, symbols)
 
 
-@celery_app.task(bind=True, name='app.tasks.cache_tasks.auto_refresh_after_close')
-@serialized_data_fetch('auto_refresh_after_close')
+@serialized_data_fetch_task(
+    celery_app,
+    "auto_refresh_after_close",
+    name="app.tasks.cache_tasks.auto_refresh_after_close",
+)
 def auto_refresh_after_close(self, market: str | None = None):
     """
     Automatic post-close refresh of stale intraday data.
@@ -1730,13 +1693,13 @@ def run_smart_price_refresh(
     )
 
 
-@celery_app.task(
-    bind=True,
+@serialized_data_fetch_task(
+    celery_app,
+    "smart_refresh_cache",
     base=RuntimeActivityTrackedTask,
     name='app.tasks.cache_tasks.smart_refresh_cache',
     soft_time_limit=14400,
 )
-@serialized_data_fetch('smart_refresh_cache')
 def smart_refresh_cache(
     self,
     mode: str = "auto",

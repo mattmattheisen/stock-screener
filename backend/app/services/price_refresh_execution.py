@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -19,6 +19,39 @@ from .price_refresh_planning import PriceRefreshJob
 logger = logging.getLogger(__name__)
 
 MappingResult = Mapping[str, Mapping[str, Any]]
+
+
+class PriceBatchCache(Protocol):
+    def store_batch_in_cache(
+        self,
+        price_data: Mapping[str, Any],
+        *,
+        also_store_db: bool,
+    ) -> None: ...
+
+
+class PriceBatchFetcher(Protocol):
+    def __call__(
+        self,
+        bulk_fetcher: Any,
+        symbols: list[str],
+        *,
+        period: str,
+        market: str | None,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> MappingResult: ...
+
+
+class SymbolFailureTracker(Protocol):
+    def __call__(
+        self,
+        price_cache: PriceBatchCache,
+        successes: list[str],
+        failures: list[str],
+        db: Any | None = None,
+        *,
+        failure_details: dict[str, str] | None = None,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -338,6 +371,112 @@ def iter_price_refresh_batches(
                 refreshed_by_market=refreshed_by_market,
                 failed_by_market=failed_by_market,
             )
+
+
+class PriceRefreshBatchExecutionError(Exception):
+    def __init__(
+        self,
+        *,
+        summary: PriceRefreshExecutionSummary,
+        unresolved_symbols: Iterable[str],
+        cause: Exception,
+    ) -> None:
+        super().__init__(str(cause))
+        self.summary = summary
+        self.unresolved_symbols = tuple(unresolved_symbols)
+        self.cause = cause
+
+
+class PriceRefreshBatchExecutor:
+    """Canonical fetch, persistence, tracking, and accumulation lifecycle."""
+
+    def __init__(
+        self,
+        *,
+        fetch_with_backoff: PriceBatchFetcher,
+        track_symbol_failures: SymbolFailureTracker,
+        raise_if_transient_database_error: Callable[[Exception], None],
+    ) -> None:
+        self._fetch_with_backoff = fetch_with_backoff
+        self._track_symbol_failures = track_symbol_failures
+        self._raise_if_transient_database_error = raise_if_transient_database_error
+
+    def run(
+        self,
+        *,
+        bulk_fetcher: Any,
+        price_cache: PriceBatchCache,
+        db: Any | None,
+        jobs: Sequence[PriceRefreshJob],
+        total: int,
+        batch_size: int | None,
+        market: str | None,
+        market_for_symbol: Callable[[str], str],
+        progress_callback: Callable[[int], None] | None = None,
+        after_batch: Callable[
+            [PriceRefreshBatchOutcome, PriceRefreshExecutionSummary],
+            None,
+        ] | None = None,
+    ) -> PriceRefreshExecutionSummary:
+        accumulator = PriceRefreshExecutionAccumulator(total=total)
+        all_symbols = tuple(symbol for job in jobs for symbol in job.symbols)
+        completed_symbols: set[str] = set()
+
+        def fetch_batch(
+            symbols: Sequence[str],
+            *,
+            period: str,
+            market: str | None,
+            progress_callback: Callable[[int], None] | None = None,
+        ) -> MappingResult:
+            return self._fetch_with_backoff(
+                bulk_fetcher,
+                list(symbols),
+                period=period,
+                market=market,
+                progress_callback=progress_callback,
+            )
+
+        try:
+            for batch in iter_price_refresh_batches(
+                jobs=jobs,
+                batch_size=batch_size,
+                market=market,
+                fetch_batch=fetch_batch,
+                market_for_symbol=market_for_symbol,
+                raise_if_transient_database_error=self._raise_if_transient_database_error,
+                progress_callback=progress_callback,
+            ):
+                if batch.price_data_by_symbol:
+                    price_cache.store_batch_in_cache(
+                        dict(batch.price_data_by_symbol),
+                        also_store_db=True,
+                    )
+                self._track_symbol_failures(
+                    price_cache,
+                    list(batch.successes),
+                    list(batch.failures),
+                    db,
+                    failure_details=dict(batch.failure_details),
+                )
+                accumulator.add(batch)
+                completed_symbols.update(batch.symbols)
+                if after_batch is not None:
+                    after_batch(batch, accumulator.summary())
+        except Exception as exc:
+            if not isinstance(exc, SoftTimeLimitExceeded):
+                self._raise_if_transient_database_error(exc)
+            raise PriceRefreshBatchExecutionError(
+                summary=accumulator.summary(),
+                unresolved_symbols=(
+                    symbol
+                    for symbol in all_symbols
+                    if symbol not in completed_symbols
+                ),
+                cause=exc,
+            ) from exc
+
+        return accumulator.summary()
 
 
 def summarize_price_refresh_batches(

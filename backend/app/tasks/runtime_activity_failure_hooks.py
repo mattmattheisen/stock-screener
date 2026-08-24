@@ -132,6 +132,20 @@ def publish_runtime_activity_failure(
             market=cleanup_market,
         )
 
+    release_runtime_task_resources(task_name, task_id, kwargs)
+
+
+def release_runtime_task_resources(
+    task_name: str | None,
+    task_id: str | None,
+    kwargs: dict[str, Any] | None,
+) -> None:
+    if not task_id:
+        return
+
+    kwargs = kwargs or {}
+    cleanup_market = cleanup_market_for_runtime_task(kwargs.get("market"))
+
     try:
         get_data_fetch_lock().release(task_id, market=cleanup_market)
     except Exception:
@@ -174,7 +188,16 @@ def publish_runtime_activity_failure(
         )
 
 
-class RuntimeActivityFailureRequest(Request):
+class SerializedDataFetchFailureRequest(Request):
+    def _handle_runtime_failure(
+        self,
+        task_name: str | None,
+        task_id: str | None,
+        kwargs: dict[str, Any] | None,
+        exception: BaseException | None,
+    ) -> None:
+        release_runtime_task_resources(task_name, task_id, kwargs)
+
     def on_failure(self, exc_info, send_failed_event=True, return_ok=False):
         result = super().on_failure(
             exc_info,
@@ -183,7 +206,7 @@ class RuntimeActivityFailureRequest(Request):
         )
         exception = getattr(exc_info, "exception", None)
         if not _is_retry_failure(exception):
-            publish_runtime_activity_failure(
+            self._handle_runtime_failure(
                 getattr(getattr(self, "task", None), "name", None),
                 getattr(self, "id", None),
                 getattr(self, "kwargs", None),
@@ -192,5 +215,20 @@ class RuntimeActivityFailureRequest(Request):
         return result
 
 
-class RuntimeActivityTrackedTask(Task):
+class RuntimeActivityFailureRequest(SerializedDataFetchFailureRequest):
+    def _handle_runtime_failure(
+        self,
+        task_name: str | None,
+        task_id: str | None,
+        kwargs: dict[str, Any] | None,
+        exception: BaseException | None,
+    ) -> None:
+        publish_runtime_activity_failure(task_name, task_id, kwargs, exception)
+
+
+class SerializedDataFetchRecoveryTask(Task):
+    Request = SerializedDataFetchFailureRequest
+
+
+class RuntimeActivityTrackedTask(SerializedDataFetchRecoveryTask):
     Request = RuntimeActivityFailureRequest

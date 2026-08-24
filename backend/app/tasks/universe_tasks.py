@@ -25,7 +25,7 @@ from ..services.official_universe_dispatch import (
     ingest_official_market_snapshot,
 )
 from ..wiring.bootstrap import get_provider_snapshot_service, get_stock_universe_service
-from .data_fetch_lock import serialized_data_fetch
+from .data_fetch_lock import serialized_data_fetch_task
 from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
@@ -146,8 +146,11 @@ def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_stock_universe')
-@serialized_data_fetch('refresh_stock_universe')
+@serialized_data_fetch_task(
+    celery_app,
+    "refresh_stock_universe",
+    name="app.tasks.universe_tasks.refresh_stock_universe",
+)
 def refresh_stock_universe(
     self,
     exchange_filter: str = None,
@@ -572,8 +575,11 @@ def refresh_official_market_universe(
             lock.release(task_id, market=_market)
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_hk_universe_csv')
-@serialized_data_fetch('ingest_hk_universe_csv')
+@serialized_data_fetch_task(
+    celery_app,
+    "ingest_hk_universe_csv",
+    name="app.tasks.universe_tasks.ingest_hk_universe_csv",
+)
 def ingest_hk_universe_csv(
     self,
     csv_content: str,
@@ -630,8 +636,11 @@ def ingest_hk_universe_csv(
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_jp_universe_csv')
-@serialized_data_fetch('ingest_jp_universe_csv')
+@serialized_data_fetch_task(
+    celery_app,
+    "ingest_jp_universe_csv",
+    name="app.tasks.universe_tasks.ingest_jp_universe_csv",
+)
 def ingest_jp_universe_csv(
     self,
     csv_content: str,
@@ -688,8 +697,11 @@ def ingest_jp_universe_csv(
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_tw_universe_csv')
-@serialized_data_fetch('ingest_tw_universe_csv')
+@serialized_data_fetch_task(
+    celery_app,
+    "ingest_tw_universe_csv",
+    name="app.tasks.universe_tasks.ingest_tw_universe_csv",
+)
 def ingest_tw_universe_csv(
     self,
     csv_content: str,
@@ -746,8 +758,11 @@ def ingest_tw_universe_csv(
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_ca_universe_csv')
-@serialized_data_fetch('ingest_ca_universe_csv')
+@serialized_data_fetch_task(
+    celery_app,
+    "ingest_ca_universe_csv",
+    name="app.tasks.universe_tasks.ingest_ca_universe_csv",
+)
 def ingest_ca_universe_csv(
     self,
     csv_content: str,
@@ -805,8 +820,11 @@ def ingest_ca_universe_csv(
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_kr_universe_csv')
-@serialized_data_fetch('ingest_kr_universe_csv')
+@serialized_data_fetch_task(
+    celery_app,
+    "ingest_kr_universe_csv",
+    name="app.tasks.universe_tasks.ingest_kr_universe_csv",
+)
 def ingest_kr_universe_csv(
     self,
     csv_content: str,
@@ -863,8 +881,11 @@ def ingest_kr_universe_csv(
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_sp500_membership')
-@serialized_data_fetch('refresh_sp500_membership')
+@serialized_data_fetch_task(
+    celery_app,
+    "refresh_sp500_membership",
+    name="app.tasks.universe_tasks.refresh_sp500_membership",
+)
 def refresh_sp500_membership(self):
     """
     Weekly task to update S&P 500 membership flags.

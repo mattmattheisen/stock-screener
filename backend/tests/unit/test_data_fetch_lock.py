@@ -9,16 +9,17 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from celery import Celery
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 from sqlalchemy.exc import OperationalError
 
 from app.tasks.data_fetch_lock import (
     DataFetchLock,
     LOCK_KEY,
+    _serialized_data_fetch,
     _lock_key_for_market,
     all_market_lock_keys,
     disable_serialized_data_fetch_lock,
-    serialized_data_fetch,
 )
 
 # After bead 9.1 the no-market default path routes to the shared key, not the
@@ -216,7 +217,80 @@ class TestExtendLock:
 # ---------------------------------------------------------------------------
 
 class TestSerializedDataFetchDecorator:
-    """Tests for the @serialized_data_fetch decorator."""
+    """Tests for serialized data-fetch registration and lease handling."""
+
+    def test_task_registration_uses_parent_process_recovery_base(self):
+        import app.tasks.data_fetch_lock as module
+        from app.tasks.runtime_activity_failure_hooks import (
+            SerializedDataFetchRecoveryTask,
+        )
+
+        registration = getattr(module, "serialized_data_fetch_task", None)
+        assert callable(registration), "serialized task registration must be canonical"
+
+        app = Celery("serialized-data-fetch-task-test")
+
+        @registration(
+            app,
+            "test_task",
+            name="tests.serialized_data_fetch_task",
+        )
+        def task(_self):
+            return "ok"
+
+        assert isinstance(task, SerializedDataFetchRecoveryTask)
+
+    def test_task_registration_rejects_unbound_tasks(self):
+        import app.tasks.data_fetch_lock as module
+
+        app = Celery("serialized-data-fetch-bind-test")
+
+        with pytest.raises(TypeError, match="must be bound"):
+
+            @module.serialized_data_fetch_task(
+                app,
+                "unbound_task",
+                name="tests.unbound_serialized_data_fetch_task",
+                bind=False,
+            )
+            def task():
+                return "unreachable"
+
+    @pytest.mark.parametrize(
+        "task_name",
+        [
+            "app.tasks.cache_tasks.daily_cache_warmup",
+            "app.tasks.cache_tasks.weekly_full_refresh",
+            "app.tasks.cache_tasks.prewarm_scan_cache",
+            "app.tasks.cache_tasks.prewarm_all_active_symbols",
+            "app.tasks.cache_tasks.retry_failed_price_symbols",
+            "app.tasks.cache_tasks.force_refresh_stale_intraday",
+            "app.tasks.cache_tasks.auto_refresh_after_close",
+            "app.tasks.cache_tasks.smart_refresh_cache",
+            "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
+            "app.tasks.fundamentals_tasks.refresh_symbol_fundamentals",
+            "app.tasks.fundamentals_tasks.populate_initial_cache",
+            "app.tasks.fundamentals_tasks.refresh_all_fundamentals_hybrid",
+            "app.tasks.fundamentals_tasks.refresh_symbols_hybrid",
+            "app.tasks.universe_tasks.refresh_stock_universe",
+            "app.tasks.universe_tasks.ingest_hk_universe_csv",
+            "app.tasks.universe_tasks.ingest_jp_universe_csv",
+            "app.tasks.universe_tasks.ingest_tw_universe_csv",
+            "app.tasks.universe_tasks.ingest_ca_universe_csv",
+            "app.tasks.universe_tasks.ingest_kr_universe_csv",
+            "app.tasks.universe_tasks.refresh_sp500_membership",
+        ],
+    )
+    def test_every_serialized_task_has_parent_process_recovery(self, task_name):
+        import app.tasks.cache_tasks  # noqa: F401
+        import app.tasks.fundamentals_tasks  # noqa: F401
+        import app.tasks.universe_tasks  # noqa: F401
+        from app.celery_app import celery_app
+        from app.tasks.runtime_activity_failure_hooks import (
+            SerializedDataFetchRecoveryTask,
+        )
+
+        assert isinstance(celery_app.tasks[task_name], SerializedDataFetchRecoveryTask)
 
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
@@ -227,7 +301,7 @@ class TestSerializedDataFetchDecorator:
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             return "ok"
 
@@ -250,7 +324,7 @@ class TestSerializedDataFetchDecorator:
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             raise ValueError("boom")
 
@@ -272,7 +346,7 @@ class TestSerializedDataFetchDecorator:
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             raise Retry("retry")
 
@@ -321,7 +395,7 @@ class TestSerializedDataFetchDecorator:
             retry=_retry,
         )
 
-        @serialized_data_fetch("refresh_stock_universe")
+        @_serialized_data_fetch("refresh_stock_universe")
         def my_func(self, market=None):
             return "ok"
 
@@ -373,7 +447,7 @@ class TestSerializedDataFetchDecorator:
             retry=_retry,
         )
 
-        @serialized_data_fetch("smart_refresh_cache")
+        @_serialized_data_fetch("smart_refresh_cache")
         def my_func(self, market=None):
             return "ok"
 
@@ -427,7 +501,7 @@ class TestSerializedDataFetchDecorator:
             retry=_retry,
         )
 
-        @serialized_data_fetch("smart_refresh_cache")
+        @_serialized_data_fetch("smart_refresh_cache")
         def my_func(self, market=None):
             raise _postgres_recovery_error()
 
@@ -455,7 +529,7 @@ class TestSerializedDataFetchDecorator:
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             raise SoftTimeLimitExceeded()
 
@@ -477,7 +551,7 @@ class TestSerializedDataFetchDecorator:
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             return "ok"
 
@@ -505,7 +579,7 @@ class TestSerializedDataFetchDecorator:
         mock_get_instance.return_value = mock_lock
         executed = False
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             nonlocal executed
             executed = True
@@ -530,7 +604,7 @@ class TestSerializedDataFetchDecorator:
         mock_lock.get_current_holder.return_value = None
         mock_get_instance.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             return "done"
 
@@ -541,7 +615,7 @@ class TestSerializedDataFetchDecorator:
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     def test_decorator_can_bypass_lock_for_in_process_workflows(self, mock_get_instance):
         """Export/bootstrap flows can skip the distributed lock in a single process."""
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             return "ok"
 
@@ -1000,7 +1074,7 @@ class TestDecoratorPassesMarket:
         mock_lock.lock_timeout = 7200
         mock_get_lock.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func(market=None):
             return "ok"
 
@@ -1024,7 +1098,7 @@ class TestDecoratorPassesMarket:
         mock_lock.lock_timeout = 7200
         mock_get_lock.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func():
             return "ok"
 
@@ -1051,7 +1125,7 @@ class TestDecoratorPassesMarket:
         }
         mock_get_lock.return_value = mock_lock
 
-        @serialized_data_fetch("test_task")
+        @_serialized_data_fetch("test_task")
         def my_func(market=None):
             return "ran"
 

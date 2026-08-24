@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_classify_price_refresh_batch_returns_shared_batch_outcome():
     from app.services.price_refresh_execution import classify_price_refresh_batch
@@ -272,3 +274,109 @@ def test_price_refresh_execution_summary_accumulates_batches_incrementally():
     assert summary.failure_kinds == {}
     assert summary.refreshed_by_market == Counter({"US": 1, "HK": 1})
     assert summary.failed_by_market == Counter({"US": 1})
+
+
+def test_batch_executor_persists_tracks_and_accumulates_in_one_canonical_path():
+    import app.services.price_refresh_execution as module
+    from app.services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
+
+    executor_type = getattr(module, "PriceRefreshBatchExecutor", None)
+    assert executor_type is not None, "batch side effects need one canonical executor"
+
+    timeline = []
+
+    class PriceCache:
+        def store_batch_in_cache(self, price_data, *, also_store_db):
+            timeline.append(("store", tuple(price_data), also_store_db))
+
+    executor = executor_type(
+        fetch_with_backoff=lambda _fetcher, symbols, **_kwargs: {
+            symbol: {
+                "has_error": False,
+                "price_data": SimpleNamespace(empty=False),
+            }
+            for symbol in symbols
+        },
+        track_symbol_failures=lambda _cache, successes, failures, _db, **_kwargs: (
+            timeline.append(("track", tuple(successes), tuple(failures)))
+        ),
+        raise_if_transient_database_error=lambda _exc: None,
+    )
+
+    summary = executor.run(
+        bulk_fetcher=object(),
+        price_cache=PriceCache(),
+        db=object(),
+        jobs=(
+            PriceRefreshJob(
+                kind=PriceRefreshJobKind.STALE,
+                symbols=("AAPL", "MSFT"),
+                period="7d",
+            ),
+        ),
+        total=2,
+        batch_size=1,
+        market="US",
+        market_for_symbol=lambda _symbol: "US",
+    )
+
+    assert timeline == [
+        ("store", ("AAPL",), True),
+        ("track", ("AAPL",), ()),
+        ("store", ("MSFT",), True),
+        ("track", ("MSFT",), ()),
+    ]
+    assert summary.refreshed == 2
+    assert summary.processed == 2
+
+
+def test_batch_executor_reports_partial_summary_and_unresolved_symbols():
+    import app.services.price_refresh_execution as module
+    from app.services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
+
+    error_type = getattr(module, "PriceRefreshBatchExecutionError", None)
+    assert error_type is not None, "interrupted execution needs a typed boundary"
+
+    class PriceCache:
+        stores = 0
+
+        def store_batch_in_cache(self, _price_data, *, also_store_db):
+            assert also_store_db is True
+            self.stores += 1
+            if self.stores == 2:
+                raise RuntimeError("storage unavailable")
+
+    executor = module.PriceRefreshBatchExecutor(
+        fetch_with_backoff=lambda _fetcher, symbols, **_kwargs: {
+            symbol: {
+                "has_error": False,
+                "price_data": SimpleNamespace(empty=False),
+            }
+            for symbol in symbols
+        },
+        track_symbol_failures=lambda *_args, **_kwargs: None,
+        raise_if_transient_database_error=lambda _exc: None,
+    )
+
+    with pytest.raises(error_type) as raised:
+        executor.run(
+            bulk_fetcher=object(),
+            price_cache=PriceCache(),
+            db=None,
+            jobs=(
+                PriceRefreshJob(
+                    kind=PriceRefreshJobKind.NO_HISTORY,
+                    symbols=("A", "B", "C"),
+                    period="2y",
+                ),
+            ),
+            total=3,
+            batch_size=1,
+            market="US",
+            market_for_symbol=lambda _symbol: "US",
+        )
+
+    assert raised.value.summary.refreshed == 1
+    assert raised.value.summary.processed == 1
+    assert raised.value.unresolved_symbols == ("B", "C")
+    assert str(raised.value.cause) == "storage unavailable"
