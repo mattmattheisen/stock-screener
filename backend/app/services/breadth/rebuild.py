@@ -90,6 +90,10 @@ class BreadthRebuildService:
     def dialect_name(self) -> str:
         return self.db.get_bind().dialect.name
 
+    def _has_table(self, table_name: str) -> bool:
+        """Inspect through the session connection to avoid cross-connection locks."""
+        return inspect(self.db.connection()).has_table(table_name)
+
     def recreate_staging(self) -> None:
         self.db.execute(text(f"DROP TABLE IF EXISTS {STAGING_TABLE}"))
         self.db.execute(text(f"DROP TABLE IF EXISTS {MANIFEST_TABLE}"))
@@ -130,7 +134,7 @@ class BreadthRebuildService:
         *,
         full_market_set: bool,
     ) -> None:
-        if not inspect(self.db.get_bind()).has_table(MANIFEST_TABLE):
+        if not self._has_table(MANIFEST_TABLE):
             raise RuntimeError("Breadth rebuild manifest table does not exist")
         self.db.execute(text(f"DELETE FROM {MANIFEST_TABLE}"))
         for raw_market, raw_dates in sorted(expected_dates_by_market.items()):
@@ -158,7 +162,7 @@ class BreadthRebuildService:
         *,
         duration_seconds_by_date: Mapping[date, float] | None = None,
     ) -> int:
-        if not inspect(self.db.get_bind()).has_table(STAGING_TABLE):
+        if not self._has_table(STAGING_TABLE):
             raise RuntimeError("Breadth rebuild staging table does not exist")
         columns = _copy_columns()
         placeholders = ", ".join(f":{column}" for column in columns)
@@ -262,13 +266,13 @@ class BreadthRebuildService:
         *,
         expected_dates_by_market: Mapping[str, Iterable[date]] | None = None,
     ) -> dict[str, Any]:
-        if not inspect(self.db.get_bind()).has_table(STAGING_TABLE):
+        if not self._has_table(STAGING_TABLE):
             return {
                 "valid": False,
                 "errors": ["staging_table_missing"],
                 "row_count": 0,
             }
-        if not inspect(self.db.get_bind()).has_table(MANIFEST_TABLE):
+        if not self._has_table(MANIFEST_TABLE):
             return {
                 "valid": False,
                 "errors": ["staging_manifest_missing"],

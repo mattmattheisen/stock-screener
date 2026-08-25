@@ -1,10 +1,13 @@
 from datetime import date
+from unittest.mock import MagicMock
 
+import app.services.breadth.rebuild as rebuild_module
 from app.scripts.rebuild_market_breadth import (
     EXIT_CONFIRMATION_REQUIRED,
     EXIT_VALIDATION_REQUIRED,
     main,
 )
+from app.services.breadth.rebuild import BreadthRebuildService
 
 
 class _FakeRebuildService:
@@ -26,6 +29,20 @@ class _FakeRebuildService:
 
     def cleanup(self):
         self.calls.append(("cleanup", {}))
+
+
+def test_table_inspection_uses_the_session_connection(monkeypatch):
+    db = MagicMock()
+    session_connection = object()
+    db.connection.return_value = session_connection
+    inspector = MagicMock()
+    inspector.has_table.return_value = True
+    inspect_mock = MagicMock(return_value=inspector)
+    monkeypatch.setattr(rebuild_module, "inspect", inspect_mock)
+    service = BreadthRebuildService(db, required_markets=("US",))
+
+    assert service._has_table("market_breadth_rebuild") is True
+    inspect_mock.assert_called_once_with(session_connection)
 
 
 def test_activate_requires_explicit_confirmation():
