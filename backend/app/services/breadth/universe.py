@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from datetime import date
-from typing import Collection, Mapping
 
 import numpy as np
 import pandas as pd

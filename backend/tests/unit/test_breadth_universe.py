@@ -2,7 +2,6 @@ from datetime import date
 
 import pandas as pd
 import pytest
-
 from app.services.breadth.types import BreadthFormulaPolicy, BreadthUniverseMember
 from app.services.breadth.universe import (
     MissingHistoricalFXError,

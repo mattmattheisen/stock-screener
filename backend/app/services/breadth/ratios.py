@@ -71,7 +71,9 @@ def calculate_inclusive_ratios(
     timeline = (*seeds, *current)
     dates = [item.date for item in timeline]
     if len(dates) != len(set(dates)):
-        raise IncompatibleBreadthSeedError("Breadth ratio input contains duplicate dates")
+        raise IncompatibleBreadthSeedError(
+            "Breadth ratio input contains duplicate dates"
+        )
 
     seed_size = len(seeds)
     result: dict[date, BreadthRatios] = {}

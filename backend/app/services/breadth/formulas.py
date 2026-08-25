@@ -75,7 +75,9 @@ def prepare_feature_frame(
     result["fx_to_usd"] = fx.where(fx > 0)
     result["raw_close_usd"] = raw_close * result["fx_to_usd"]
     result["dollar_volume_usd"] = result["raw_close_usd"] * result["volume"]
-    result["adtv20_usd"] = result["dollar_volume_usd"].rolling(20, min_periods=20).mean()
+    result["adtv20_usd"] = (
+        result["dollar_volume_usd"].rolling(20, min_periods=20).mean()
+    )
 
     result["prior_adjusted_close"] = adjusted_close.shift(1)
     result["prior_volume"] = result["volume"].shift(1)
@@ -100,7 +102,9 @@ def prepare_feature_frame(
         ),
         axis=1,
     ).max(axis=1, skipna=True)
-    invalid_ohlc = result[["adjusted_high", "adjusted_low", "adjusted_close"]].isna().any(axis=1)
+    invalid_ohlc = (
+        result[["adjusted_high", "adjusted_low", "adjusted_close"]].isna().any(axis=1)
+    )
     result["true_range"] = true_range.mask(invalid_ohlc)
     result["atr14"] = _wilder_average(result["true_range"], atr_period)
 
@@ -117,10 +121,9 @@ def _row_at(feature_frame: pd.DataFrame, calculation_date: date) -> pd.Series | 
     target = pd.Timestamp(calculation_date)
     if target not in feature_frame.index:
         return None
-    row = feature_frame.loc[target]
-    if isinstance(row, pd.DataFrame):
+    if feature_frame.index.has_duplicates:
         raise ValueError("Feature frame index must contain unique sessions")
-    return row
+    return feature_frame.loc[target]
 
 
 def _finite(*values: object) -> bool:
@@ -128,11 +131,15 @@ def _finite(*values: object) -> bool:
 
 
 def _at_least(value: float, threshold: float) -> bool:
-    return value > threshold or bool(np.isclose(value, threshold, rtol=1e-12, atol=1e-12))
+    return value > threshold or bool(
+        np.isclose(value, threshold, rtol=1e-12, atol=1e-12)
+    )
 
 
 def _at_most(value: float, threshold: float) -> bool:
-    return value < threshold or bool(np.isclose(value, threshold, rtol=1e-12, atol=1e-12))
+    return value < threshold or bool(
+        np.isclose(value, threshold, rtol=1e-12, atol=1e-12)
+    )
 
 
 def signal_flags_at(
@@ -146,11 +153,7 @@ def signal_flags_at(
 
     advance_decline = _finite(row.adjusted_close, row.prior_adjusted_close)
     liquid = _finite(row.adtv20_usd) and float(row.adtv20_usd) >= policy.min_adtv_usd
-    daily = (
-        advance_decline
-        and liquid
-        and _finite(row.volume, row.prior_volume)
-    )
+    daily = advance_decline and liquid and _finite(row.volume, row.prior_volume)
     month = (
         liquid
         and _finite(row.adjusted_close, row.adjusted_close_20, row.raw_close_usd_20)
@@ -165,7 +168,9 @@ def signal_flags_at(
         row.previous_251_high,
         row.previous_251_low,
     )
-    atr_extension = _finite(row.adjusted_close, row.sma50, row.atr14) and float(row.atr14) > 0
+    atr_extension = (
+        _finite(row.adjusted_close, row.sma50, row.atr14) and float(row.atr14) > 0
+    )
 
     eligibility = SymbolMetricEligibility(
         advance_decline=advance_decline,
@@ -185,14 +190,24 @@ def signal_flags_at(
     )
     daily_return = float(row.daily_return) if _finite(row.daily_return) else np.nan
     month_return = float(row.month_return) if _finite(row.month_return) else np.nan
-    gain_from_low_34 = float(row.adjusted_close / row.low_34 - 1.0) if day_34 else np.nan
-    loss_from_high_34 = float(row.adjusted_close / row.high_34 - 1.0) if day_34 else np.nan
-    gain_from_low_65 = float(row.adjusted_close / row.low_65 - 1.0) if quarter else np.nan
-    loss_from_high_65 = float(row.adjusted_close / row.high_65 - 1.0) if quarter else np.nan
+    gain_from_low_34 = (
+        float(row.adjusted_close / row.low_34 - 1.0) if day_34 else np.nan
+    )
+    loss_from_high_34 = (
+        float(row.adjusted_close / row.high_34 - 1.0) if day_34 else np.nan
+    )
+    gain_from_low_65 = (
+        float(row.adjusted_close / row.low_65 - 1.0) if quarter else np.nan
+    )
+    loss_from_high_65 = (
+        float(row.adjusted_close / row.high_65 - 1.0) if quarter else np.nan
+    )
 
     atr_10x = False
     if atr_extension:
-        gain_from_sma50_pct = (float(row.adjusted_close) / float(row.sma50) - 1.0) * 100.0
+        gain_from_sma50_pct = (
+            float(row.adjusted_close) / float(row.sma50) - 1.0
+        ) * 100.0
         atr_pct = float(row.atr14) / float(row.adjusted_close) * 100.0
         atr_10x = (
             gain_from_sma50_pct > 0
@@ -205,9 +220,12 @@ def signal_flags_at(
 
     return SymbolBreadthSignals(
         eligibility=eligibility,
-        advancing=advance_decline and float(row.adjusted_close) > float(row.prior_adjusted_close),
-        declining=advance_decline and float(row.adjusted_close) < float(row.prior_adjusted_close),
-        unchanged=advance_decline and float(row.adjusted_close) == float(row.prior_adjusted_close),
+        advancing=advance_decline
+        and float(row.adjusted_close) > float(row.prior_adjusted_close),
+        declining=advance_decline
+        and float(row.adjusted_close) < float(row.prior_adjusted_close),
+        unchanged=advance_decline
+        and float(row.adjusted_close) == float(row.prior_adjusted_close),
         up_4pct=daily_volume_filter and _at_least(daily_return, 0.04),
         down_4pct=daily_volume_filter and _at_most(daily_return, -0.04),
         up_25pct_quarter=quarter and _at_least(gain_from_low_65, 0.25),
@@ -218,8 +236,10 @@ def signal_flags_at(
         down_50pct_month=month and _at_most(month_return, -0.50),
         up_13pct_34days=day_34 and _at_least(gain_from_low_34, 0.13),
         down_13pct_34days=day_34 and _at_most(loss_from_high_34, -0.13),
-        new_high_52week=high_low_52week and float(row.adjusted_high) > float(row.previous_251_high),
-        new_low_52week=high_low_52week and float(row.adjusted_low) < float(row.previous_251_low),
+        new_high_52week=high_low_52week
+        and float(row.adjusted_high) > float(row.previous_251_high),
+        new_low_52week=high_low_52week
+        and float(row.adjusted_low) < float(row.previous_251_low),
         t2108_above=t2108 and float(row.adjusted_close) > float(row.sma40),
         atr_10x_extension=atr_10x,
     )

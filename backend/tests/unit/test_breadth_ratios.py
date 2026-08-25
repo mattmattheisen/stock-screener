@@ -2,7 +2,6 @@ from datetime import date
 
 import pandas as pd
 import pytest
-
 from app.services.breadth.ratios import (
     IncompatibleBreadthSeedError,
     calculate_inclusive_ratios,

@@ -1,9 +1,7 @@
 import pandas as pd
 import pytest
-
 from app.services.breadth.formulas import prepare_feature_frame, signal_flags_at
 from app.services.breadth.types import BreadthFormulaPolicy
-
 
 CALCULATION_DATE = pd.Timestamp("2026-08-21")
 
@@ -86,7 +84,11 @@ def test_prepare_feature_frame_initializes_and_smooths_wilder_atr():
         ({"daily_return": -0.04}, False, True),
         ({"daily_return": -0.039999}, False, False),
         ({"daily_return": 0.04, "volume": 99_999.0}, False, False),
-        ({"daily_return": 0.04, "volume": 100_000.0, "prior_volume": 100_000.0}, False, False),
+        (
+            {"daily_return": 0.04, "volume": 100_000.0, "prior_volume": 100_000.0},
+            False,
+            False,
+        ),
         ({"daily_return": 0.04, "adtv20_usd": 249_999.99}, False, False),
     ],
 )

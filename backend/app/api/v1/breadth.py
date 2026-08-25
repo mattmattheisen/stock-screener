@@ -182,7 +182,14 @@ async def get_indicator_trend(
         'stocks_up_25pct_month', 'stocks_down_25pct_month',
         'stocks_up_50pct_month', 'stocks_down_50pct_month',
         'stocks_up_13pct_34days', 'stocks_down_13pct_34days',
-        'total_stocks_scanned'
+        'advancing_count', 'declining_count', 'unchanged_count',
+        'new_high_52week_count', 'new_low_52week_count',
+        't2108_count', 't2108_pct', 'atr_10x_extension_count',
+        'broad_universe_count', 'advance_decline_eligible_count',
+        'stockbee_daily_eligible_count', 'stockbee_month_eligible_count',
+        'stockbee_34day_eligible_count', 'stockbee_quarter_eligible_count',
+        't2108_eligible_count', 'high_low_52week_eligible_count',
+        'atr_extension_eligible_count', 'total_stocks_scanned'
     ]
 
     if indicator not in valid_indicators:

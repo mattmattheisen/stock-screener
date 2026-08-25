@@ -6,10 +6,12 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
 
+CURRENT_BREADTH_CALCULATION_REVISION = 2
+
 
 @dataclass(frozen=True, slots=True)
 class BreadthFormulaPolicy:
-    calculation_revision: int = 2
+    calculation_revision: int = CURRENT_BREADTH_CALCULATION_REVISION
     min_adtv_usd: float = 250_000.0
     min_daily_volume: int = 100_000
     min_month_reference_price_usd: float = 5.0
@@ -24,7 +26,7 @@ class BreadthDailyCount:
     stocks_up_4pct: int
     stocks_down_4pct: int
     market: str | None = None
-    calculation_revision: int = 2
+    calculation_revision: int = CURRENT_BREADTH_CALCULATION_REVISION
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +128,7 @@ class BreadthDailyResult:
     broad_universe_count: int
     eligibility_signature: str
     stockbee_eligibility_signature: str
-    calculation_revision: int = 2
+    calculation_revision: int = CURRENT_BREADTH_CALCULATION_REVISION
 
     def to_record_mapping(self) -> dict[str, Any]:
         result: dict[str, Any] = {

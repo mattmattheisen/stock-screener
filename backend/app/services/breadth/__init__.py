@@ -1,6 +1,7 @@
 """Canonical market-breadth calculation primitives."""
 
 from .types import (
+    CURRENT_BREADTH_CALCULATION_REVISION,
     BreadthDailyCount,
     BreadthDailyResult,
     BreadthEligibilityCounts,
@@ -14,6 +15,7 @@ from .types import (
 )
 
 __all__ = [
+    "CURRENT_BREADTH_CALCULATION_REVISION",
     "BreadthDailyCount",
     "BreadthDailyResult",
     "BreadthEligibilityCounts",

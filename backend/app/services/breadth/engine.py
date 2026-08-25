@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date
-from typing import Mapping
 
 import pandas as pd
 
@@ -37,7 +37,9 @@ class BreadthEngineRequest:
 
 
 class BreadthEngine:
-    def calculate(self, request: BreadthEngineRequest) -> Mapping[date, BreadthDailyResult]:
+    def calculate(
+        self, request: BreadthEngineRequest
+    ) -> Mapping[date, BreadthDailyResult]:
         dates = tuple(request.dates)
         if dates != tuple(sorted(set(dates))):
             raise ValueError("Breadth calculation dates must be ordered and unique")
@@ -74,7 +76,9 @@ class BreadthEngine:
                     raise ValueError(f"Missing historical FX series for {currency}")
             aligned_fx = fx.reindex(prices.index)
             if aligned_fx.isna().any():
-                missing_date = pd.Timestamp(aligned_fx[aligned_fx.isna()].index[0]).date()
+                missing_date = pd.Timestamp(
+                    aligned_fx[aligned_fx.isna()].index[0]
+                ).date()
                 raise ValueError(
                     f"Missing historical {currency}->USD FX for "
                     f"{missing_date.isoformat()}"
@@ -129,23 +133,15 @@ class BreadthEngine:
             values = BreadthIndicatorValues(
                 stocks_up_4pct=sum(item.up_4pct for item in signals),
                 stocks_down_4pct=sum(item.down_4pct for item in signals),
-                stocks_up_25pct_quarter=sum(
-                    item.up_25pct_quarter for item in signals
-                ),
+                stocks_up_25pct_quarter=sum(item.up_25pct_quarter for item in signals),
                 stocks_down_25pct_quarter=sum(
                     item.down_25pct_quarter for item in signals
                 ),
                 stocks_up_25pct_month=sum(item.up_25pct_month for item in signals),
-                stocks_down_25pct_month=sum(
-                    item.down_25pct_month for item in signals
-                ),
+                stocks_down_25pct_month=sum(item.down_25pct_month for item in signals),
                 stocks_up_50pct_month=sum(item.up_50pct_month for item in signals),
-                stocks_down_50pct_month=sum(
-                    item.down_50pct_month for item in signals
-                ),
-                stocks_up_13pct_34days=sum(
-                    item.up_13pct_34days for item in signals
-                ),
+                stocks_down_50pct_month=sum(item.down_50pct_month for item in signals),
+                stocks_up_13pct_34days=sum(item.up_13pct_34days for item in signals),
                 stocks_down_13pct_34days=sum(
                     item.down_13pct_34days for item in signals
                 ),
@@ -160,15 +156,11 @@ class BreadthEngine:
                     if eligibility.t2108_eligible_count
                     else None
                 ),
-                atr_10x_extension_count=sum(
-                    item.atr_10x_extension for item in signals
-                ),
+                atr_10x_extension_count=sum(item.atr_10x_extension for item in signals),
             )
 
             if (
-                values.advancing_count
-                + values.declining_count
-                + values.unchanged_count
+                values.advancing_count + values.declining_count + values.unchanged_count
                 != eligibility.advance_decline_eligible_count
             ):
                 raise AssertionError("Advance/decline counts do not reconcile")
