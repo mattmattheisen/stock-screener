@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.market_breadth import MarketBreadth
-from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
+from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from app.services.breadth_backfill import BreadthBackfillPlan
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.static_breadth_eligibility import (
@@ -31,6 +31,7 @@ def _flat_price_df(
             "High": closes,
             "Low": closes,
             "Close": closes,
+            "Adj Close": closes,
             "Volume": [1_000_000] * len(index),
         },
         index=index,
@@ -147,15 +148,20 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
             stocks_up_13pct_34days=0,
             stocks_down_13pct_34days=0,
             total_stocks_scanned=2,
+            broad_universe_count=2,
+            calculation_revision=2,
         ))
     db.commit()
 
     aaa_df = _flat_price_df(date(2026, 3, 13))
     bbb_df = _flat_price_df(date(2026, 3, 13))
-    aaa_df.loc[pd.Timestamp(date(2026, 3, 12)), "Close"] = 105.0
-    aaa_df.loc[pd.Timestamp(date(2026, 3, 13)), "Close"] = 110.0
-    bbb_df.loc[pd.Timestamp(date(2026, 3, 12)), "Close"] = 95.0
-    bbb_df.loc[pd.Timestamp(date(2026, 3, 13)), "Close"] = 100.0
+    aaa_df.loc[pd.Timestamp(date(2026, 3, 12)), ["Close", "Adj Close"]] = 105.0
+    aaa_df.loc[pd.Timestamp(date(2026, 3, 13)), ["Close", "Adj Close"]] = 110.0
+    bbb_df.loc[pd.Timestamp(date(2026, 3, 12)), ["Close", "Adj Close"]] = 95.0
+    bbb_df.loc[pd.Timestamp(date(2026, 3, 13)), ["Close", "Adj Close"]] = 100.0
+    for frame in (aaa_df, bbb_df):
+        frame.loc[pd.Timestamp(date(2026, 3, 12)), "Volume"] = 1_100_000
+        frame.loc[pd.Timestamp(date(2026, 3, 13)), "Volume"] = 1_200_000
 
     price_cache = MagicMock()
     price_cache.get_many_cached_only_fresh.return_value = {"AAA": aaa_df, "BBB": None}
@@ -182,12 +188,12 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     assert len(stored) == 2
     assert stored[0].stocks_up_4pct == 1
     assert stored[0].stocks_down_4pct == 1
-    assert stored[0].ratio_5day == 2.0
-    assert stored[0].ratio_10day == 2.0
+    assert stored[0].ratio_5day == 1.8
+    assert stored[0].ratio_10day == 1.9
     assert stored[1].stocks_up_4pct == 2
     assert stored[1].stocks_down_4pct == 0
-    assert stored[1].ratio_5day == 1.8
-    assert stored[1].ratio_10day == 1.9
+    assert stored[1].ratio_5day == 2.25
+    assert stored[1].ratio_10day == 2.11
 
 def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():
     db = _make_db_session()

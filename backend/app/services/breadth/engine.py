@@ -74,7 +74,18 @@ class BreadthEngine:
                     fx = pd.Series(1.0, index=prices.index)
                 else:
                     raise ValueError(f"Missing historical FX series for {currency}")
-            aligned_fx = fx.reindex(prices.index)
+            rates_by_date = {
+                pd.Timestamp(value).date(): float(rate)
+                for value, rate in fx.items()
+            }
+            aligned_fx = pd.Series(
+                (
+                    rates_by_date.get(pd.Timestamp(value).date())
+                    for value in prices.index
+                ),
+                index=prices.index,
+                dtype=float,
+            )
             if aligned_fx.isna().any():
                 missing_date = pd.Timestamp(
                     aligned_fx[aligned_fx.isna()].index[0]

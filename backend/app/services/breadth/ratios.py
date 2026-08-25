@@ -65,20 +65,17 @@ def calculate_inclusive_ratios(
             is_seed=False,
         )
 
-    if current and seeds and seeds[-1].date >= current[0].date:
-        raise IncompatibleBreadthSeedError("Seed rows must precede calculated rows")
-
-    timeline = (*seeds, *current)
+    timeline = tuple(sorted((*seeds, *current), key=lambda item: item.date))
     dates = [item.date for item in timeline]
     if len(dates) != len(set(dates)):
         raise IncompatibleBreadthSeedError(
             "Breadth ratio input contains duplicate dates"
         )
 
-    seed_size = len(seeds)
     result: dict[date, BreadthRatios] = {}
-    for offset, item in enumerate(current):
-        position = seed_size + offset
+    position_by_date = {item.date: position for position, item in enumerate(timeline)}
+    for item in current:
+        position = position_by_date[item.date]
         five = timeline[position - 4 : position + 1] if position >= 4 else ()
         ten = timeline[position - 9 : position + 1] if position >= 9 else ()
         result[item.date] = BreadthRatios(
