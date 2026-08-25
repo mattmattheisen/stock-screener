@@ -31,7 +31,10 @@ from app.models.stock_universe import StockUniverse
 from app.services.group_ranking_history import select_market_run_series
 from app.services.key_market_history import build_key_market_entries
 from app.services.static_artifact_combiner import StaticArtifactFormulaError
-from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
+from app.services.static_breadth_section_builder import (
+    StaticBreadthEngineInputFactory,
+    StaticBreadthSectionBuilder,
+)
 from app.services.static_chart_bundle_exporter import StaticChartBundleConfig
 from app.services.static_groups_rrg_export import (
     StaticGroupsRRGPayloadBuilder,
@@ -118,6 +121,13 @@ class _FakeBenchmarkCache:
 
     def get_benchmark_symbol(self, market):
         return self._symbol
+
+
+class _FakeHistoricalFx:
+    def get_historical_usd_rates(self, currencies, dates, *, max_age_days=7):
+        del max_age_days
+        index = pd.DatetimeIndex(sorted(dates))
+        return {currency: pd.Series(0.13, index=index) for currency in currencies}
 
 
 def _service_with_static_caches(
@@ -1993,6 +2003,7 @@ def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
                 "High": [value + 1 for value in closes],
                 "Low": [value - 1 for value in closes],
                 "Close": closes,
+                "Adj Close": closes,
                 "Volume": [1000] * len(idx),
             },
             index=idx,
@@ -2011,6 +2022,9 @@ def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
         ),
         fundamentals_cache=object(),
         benchmark_cache=_FakeBenchmarkCache("^HSI"),
+        breadth_engine_input_factory=StaticBreadthEngineInputFactory(
+            fx_service=_FakeHistoricalFx()
+        ),
     )
 
     payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
@@ -2044,6 +2058,7 @@ def test_build_breadth_payload_uses_builder_cache_dependencies_without_rebinding
                 "High": [value + 1 for value in closes],
                 "Low": [value - 1 for value in closes],
                 "Close": closes,
+                "Adj Close": closes,
                 "Volume": [1000] * len(idx),
             },
             index=idx,
@@ -2063,6 +2078,9 @@ def test_build_breadth_payload_uses_builder_cache_dependencies_without_rebinding
         benchmark_cache=SimpleNamespace(
             get_benchmark_candidates=lambda market: ("^HSI",),
             get_benchmark_symbol=lambda market: "^HSI",
+        ),
+        engine_input_factory=StaticBreadthEngineInputFactory(
+            fx_service=_FakeHistoricalFx()
         ),
     )
 
@@ -2090,7 +2108,8 @@ def test_build_breadth_payload_includes_us_group_attribution(
                 "High": [value + 1 for value in closes],
                 "Low": [value - 1 for value in closes],
                 "Close": closes,
-                "Volume": [1000] * len(idx),
+                "Adj Close": closes,
+                "Volume": [100_000] * len(idx),
             },
             index=idx,
         )
@@ -2100,13 +2119,16 @@ def test_build_breadth_payload_includes_us_group_attribution(
         # final session so only 2026-04-24 produces a mover.
         closes = [100.0] * len(idx)
         closes[-1] = 110.0 if direction == "up" else 90.0
+        volume = [100_000] * len(idx)
+        volume[-1] = 200_000
         return pd.DataFrame(
             {
                 "Open": closes,
                 "High": [value + 1 for value in closes],
                 "Low": [value - 1 for value in closes],
                 "Close": closes,
-                "Volume": [1000] * len(idx),
+                "Adj Close": closes,
+                "Volume": volume,
             },
             index=idx,
         )
@@ -2206,7 +2228,8 @@ def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(
                 "High": [value + 1 for value in closes],
                 "Low": [value - 1 for value in closes],
                 "Close": closes,
-                "Volume": [1000] * len(idx),
+                "Adj Close": closes,
+                "Volume": [100_000] * len(idx),
             },
             index=idx,
         )
@@ -2376,8 +2399,19 @@ def test_compute_breadth_metrics_uses_full_history_for_shifted_ranges(service_an
     all_dates = pd.date_range("2025-10-01", periods=200, freq="D")
     canonical_dates = [ts.date() for ts in all_dates[-120:]]
     closes = [100.0 * (1.02 ** index) for index, _ in enumerate(all_dates)]
+    close = pd.Series(closes, index=all_dates)
     price_data = {
-        "AAA": pd.DataFrame({"Close": closes}, index=all_dates),
+        "AAA": pd.DataFrame(
+            {
+                "Open": close,
+                "High": close + 1.0,
+                "Low": close - 1.0,
+                "Close": close,
+                "Adj Close": close,
+                "Volume": 100_000,
+            },
+            index=all_dates,
+        ),
     }
 
     builder = StaticBreadthSectionBuilder(

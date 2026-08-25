@@ -40,7 +40,10 @@ from app.services.static_artifact_combiner import (
     StaticArtifactCombiner,
     StaticArtifactFormulaError,
 )
-from app.services.static_breadth_section_builder import StaticBreadthSectionBuilder
+from app.services.static_breadth_section_builder import (
+    StaticBreadthEngineInputFactory,
+    StaticBreadthSectionBuilder,
+)
 from app.services.static_chart_bundle_exporter import (
     StaticChartBundleConfig,
     StaticChartBundleExporter,
@@ -125,6 +128,7 @@ class StaticSiteExportService:
         fundamentals_cache=None,
         benchmark_cache=None,
         chart_config: StaticChartBundleConfig | None = None,
+        breadth_engine_input_factory: StaticBreadthEngineInputFactory | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._rrg_payload_source = (
@@ -164,6 +168,7 @@ class StaticSiteExportService:
             ui_snapshot_service=self._ui_snapshot_service,
             price_cache=self._price_cache,
             benchmark_cache=self._benchmark_cache,
+            engine_input_factory=breadth_engine_input_factory,
         )
 
     def export(

@@ -61,6 +61,7 @@ from app.schemas.theme import (
     ThemeRankingItem,
     ThemeRankingsResponse,
 )
+from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
 from app.services.group_ranking_payloads import group_snapshot_metadata
 from app.services.theme_discovery_service import ThemeDiscoveryService
 from app.services.theme_pipeline_state_service import compute_pipeline_observability
@@ -451,7 +452,11 @@ class UISnapshotService:
         latest = db.query(func.max(MarketBreadth.date)).filter(
             MarketBreadth.market == normalized_market,
         ).scalar()
-        return latest.isoformat() if latest else "none"
+        return (
+            f"{latest.isoformat()}|breadth-r{CURRENT_BREADTH_CALCULATION_REVISION}"
+            if latest
+            else "none"
+        )
 
     def _resolve_groups_source_revision(self, db: Session) -> str:
         pointer = db.get(MarketRsFormulaPointer, "US")
@@ -992,6 +997,26 @@ def market_breadth_to_dict(row: MarketBreadth | None) -> dict[str, Any] | None:
         "stocks_up_13pct_34days": row.stocks_up_13pct_34days,
         "stocks_down_13pct_34days": row.stocks_down_13pct_34days,
         "total_stocks_scanned": row.total_stocks_scanned,
+        "advancing_count": row.advancing_count,
+        "declining_count": row.declining_count,
+        "unchanged_count": row.unchanged_count,
+        "new_high_52week_count": row.new_high_52week_count,
+        "new_low_52week_count": row.new_low_52week_count,
+        "t2108_count": row.t2108_count,
+        "t2108_pct": row.t2108_pct,
+        "atr_10x_extension_count": row.atr_10x_extension_count,
+        "broad_universe_count": row.broad_universe_count,
+        "advance_decline_eligible_count": row.advance_decline_eligible_count,
+        "stockbee_daily_eligible_count": row.stockbee_daily_eligible_count,
+        "stockbee_month_eligible_count": row.stockbee_month_eligible_count,
+        "stockbee_34day_eligible_count": row.stockbee_34day_eligible_count,
+        "stockbee_quarter_eligible_count": row.stockbee_quarter_eligible_count,
+        "t2108_eligible_count": row.t2108_eligible_count,
+        "high_low_52week_eligible_count": row.high_low_52week_eligible_count,
+        "atr_extension_eligible_count": row.atr_extension_eligible_count,
+        "eligibility_signature": row.eligibility_signature,
+        "stockbee_eligibility_signature": row.stockbee_eligibility_signature,
+        "calculation_revision": row.calculation_revision,
         "calculation_duration_seconds": row.calculation_duration_seconds,
     }
 
