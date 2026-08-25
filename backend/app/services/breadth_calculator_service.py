@@ -6,6 +6,7 @@ in the universe, including daily movers, multi-period ratios, and
 monthly/quarterly performance indicators.
 """
 import logging
+import math
 from collections.abc import Mapping
 from datetime import date, timedelta
 
@@ -156,7 +157,7 @@ class BreadthCalculatorService:
                 except ValueError:
                     outcomes.record_error()
                     continue
-                if not self._has_exact_session(history, calculation_date):
+                if not self._has_usable_target_session(history, calculation_date):
                     outcomes.record_insufficient()
                     continue
                 prices_by_symbol[symbol] = history
@@ -192,14 +193,22 @@ class BreadthCalculatorService:
         )
 
     @staticmethod
-    def _has_exact_session(
+    def _has_usable_target_session(
         history: pd.DataFrame,
         calculation_date: date,
     ) -> bool:
-        return any(
-            pd.Timestamp(value).date() == calculation_date
-            for value in history.index
-        )
+        positions = [
+            position
+            for position, value in enumerate(history.index)
+            if pd.Timestamp(value).date() == calculation_date
+        ]
+        if not positions:
+            return False
+        try:
+            value = float(history["Adj Close"].iloc[positions[-1]])
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(value) and value > 0
 
     def _load_fx_for_prices(
         self,

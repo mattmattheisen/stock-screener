@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+
 from app.services.breadth.formulas import prepare_feature_frame, signal_flags_at
 from app.services.breadth.types import BreadthFormulaPolicy
 
@@ -79,6 +80,24 @@ def test_prepare_feature_frame_normalizes_timezone_aware_daily_sessions():
 
     assert features.index.tz is None
     assert signals.eligibility.advance_decline is True
+
+
+def test_prepare_feature_frame_rejects_a_missing_session():
+    index = pd.DatetimeIndex([pd.Timestamp("2026-03-19"), pd.NaT])
+    prices = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [101.0, 102.0],
+            "Low": [99.0, 100.0],
+            "Close": [100.0, 101.0],
+            "Adj Close": [100.0, 101.0],
+            "Volume": [1_000_000, 1_000_000],
+        },
+        index=index,
+    )
+
+    with pytest.raises(ValueError, match="valid sessions"):
+        prepare_feature_frame(prices, pd.Series(1.0, index=index))
 
 
 def test_prepare_feature_frame_initializes_and_smooths_wilder_atr():

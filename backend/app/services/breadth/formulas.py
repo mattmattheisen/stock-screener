@@ -32,6 +32,8 @@ def validate_price_frame(prices: pd.DataFrame) -> None:
         normalized_index = _normalized_session_index(prices.index)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("Price frame index must contain valid sessions") from exc
+    if normalized_index.isna().any():
+        raise ValueError("Price frame index must contain valid sessions")
     if normalized_index.has_duplicates:
         raise ValueError("Price frame index must contain unique sessions")
 

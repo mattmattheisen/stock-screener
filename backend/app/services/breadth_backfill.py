@@ -294,7 +294,7 @@ class BreadthBackfillExecutor:
                     outcomes_by_date[calculation_date].record_error()
                 elif history is None or history.empty:
                     outcomes_by_date[calculation_date].record_cache_miss()
-                elif calculator._has_exact_session(
+                elif calculator._has_usable_target_session(
                     history,
                     calculation_date,
                 ):

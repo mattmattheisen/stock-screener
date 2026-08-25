@@ -247,6 +247,34 @@ def test_daily_breadth_preserves_month_eligibility_without_prior_close():
     assert result.indicators["stocks_up_25pct_month"] == 1
 
 
+def test_daily_breadth_rejects_an_unusable_target_adjusted_close():
+    db = _make_db_session()
+    db.add(
+        StockUniverse(
+            symbol="NULL_TARGET",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=True,
+        )
+    )
+    db.commit()
+    calculation_date = date(2026, 3, 20)
+    prices = _flat_price_df(calculation_date)
+    prices.loc[prices.index[-1], "Adj Close"] = None
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {"NULL_TARGET": prices}
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.calculate_daily_breadth(calculation_date)
+
+    assert result.coverage.total_stocks_scanned == 0
+    assert result.coverage.insufficient_data_stocks == 1
+    assert result.indicators["advance_decline_eligible_count"] == 0
+    assert result.indicators["stockbee_month_eligible_count"] == 0
+
+
 def test_cache_only_daily_breadth_requires_calculation_session():
     db = MagicMock()
     db.query.return_value.filter.return_value.all.return_value = [

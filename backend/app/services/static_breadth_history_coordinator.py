@@ -11,10 +11,8 @@ from typing import Any, Protocol
 from ..models.market_breadth import MarketBreadth
 from .static_breadth_assessment import (
     classify_static_breadth_backfill,
-    static_breadth_row_has_accepted_coverage,
 )
 from .static_breadth_eligibility import StaticBreadthEligibility
-
 
 STATIC_BREADTH_RATIO_RECOMPUTE_TRADING_DAYS = 10
 
@@ -113,28 +111,12 @@ class StaticBreadthHistoryCoordinator:
                 calculation_date
                 for calculation_date in target_dates
                 if calculation_date in existing_by_date
-                and (
-                    not static_breadth_row_has_accepted_coverage(
-                        getattr(
-                            existing_by_date[calculation_date],
-                            "advance_decline_eligible_count",
-                            None,
-                        ),
-                        eligible_stocks=int(
-                            eligibility.eligible_counts_by_date.get(
-                                calculation_date,
-                                0,
-                            )
-                            or 0
-                        ),
-                    )
-                    or getattr(
-                        existing_by_date[calculation_date],
-                        "eligibility_signature",
-                        None,
-                    )
-                    != eligibility.eligibility_signatures_by_date[calculation_date]
+                and getattr(
+                    existing_by_date[calculation_date],
+                    "eligibility_signature",
+                    None,
                 )
+                != eligibility.eligibility_signatures_by_date[calculation_date]
             ]
             repair_dates = sorted(
                 set(missing_dates + incomplete_existing_dates)
