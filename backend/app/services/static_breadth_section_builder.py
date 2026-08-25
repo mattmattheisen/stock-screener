@@ -7,7 +7,11 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
+from sqlalchemy.orm import Session
 
+from app.services.bounded_history_universe import (
+    CurrentActiveFallbackUniverseResolver,
+)
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
 from app.services.breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
@@ -126,6 +130,7 @@ class StaticBreadthSectionBuilder:
         benchmark_cache,
         engine: BreadthEngine | None = None,
         engine_input_factory: StaticBreadthEngineInputFactory | None = None,
+        universe_resolver=None,
     ) -> None:
         self._ui_snapshot_service = ui_snapshot_service
         self._price_cache = price_cache
@@ -133,6 +138,9 @@ class StaticBreadthSectionBuilder:
         self._engine = engine or BreadthEngine()
         self._engine_input_factory = (
             engine_input_factory or StaticBreadthEngineInputFactory()
+        )
+        self._universe_resolver = (
+            universe_resolver or CurrentActiveFallbackUniverseResolver()
         )
 
     def build(self, **kwargs):
@@ -145,6 +153,7 @@ class StaticBreadthSectionBuilder:
         expected_as_of_date: date,
         market: str = STATIC_DEFAULT_MARKET,
         serialized_rows: list[dict[str, Any]] | None = None,
+        db: Session | None = None,
     ) -> dict[str, Any]:
         if serialized_rows is None:
             snapshot = self._ui_snapshot_service.publish_breadth_bootstrap(market=market).to_dict()
@@ -167,11 +176,32 @@ class StaticBreadthSectionBuilder:
                 "payload": payload,
             }
 
-        symbols = [row["symbol"] for row in serialized_rows if row.get("symbol")]
+        scan_symbols = [
+            str(row["symbol"]).upper()
+            for row in serialized_rows
+            if row.get("symbol")
+        ]
+        currencies_by_symbol: dict[str, str] = {}
+        symbols = scan_symbols
+        if db is not None:
+            universe = self._universe_resolver.resolve(
+                db,
+                market=market,
+                as_of_date=expected_as_of_date,
+            )
+            if universe.symbols:
+                symbols = list(universe.symbols)
+                currencies_by_symbol = {
+                    member.symbol: member.currency
+                    for member in universe.members
+                }
         if not symbols:
             raise StaticSiteSectionUnavailableError(
                 section="breadth",
-                reason=f"No scan rows are available for market {market} on {expected_as_of_date.isoformat()}.",
+                reason=(
+                    f"No common-stock universe is available for market {market} "
+                    f"on {expected_as_of_date.isoformat()}."
+                ),
             )
 
         benchmark_symbol, benchmark = self._get_market_benchmark_history(market, period="1y")
@@ -201,6 +231,7 @@ class StaticBreadthSectionBuilder:
             market=market,
             canonical_dates=canonical_dates,
             price_data=price_data,
+            currencies_by_symbol=currencies_by_symbol,
         )
         metrics_by_date = self._compute_breadth_metrics_by_date(
             canonical_dates,
@@ -291,14 +322,18 @@ class StaticBreadthSectionBuilder:
             }
 
         attribution_dates = ordered_dates[-STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS:]
-        symbols_meta = [
-            {
-                "symbol": row.get("symbol"),
+        metadata_by_symbol = {
+            str(row["symbol"]).upper(): {
+                "symbol": str(row["symbol"]).upper(),
                 "company_name": row.get("company_name"),
                 "ibd_industry_group": row.get("ibd_industry_group"),
             }
             for row in serialized_rows
             if row.get("symbol")
+        }
+        symbols_meta = [
+            metadata_by_symbol.get(symbol, {"symbol": symbol})
+            for symbol in price_data
         ]
         service = BreadthAttributionService()
         history = service.compute(
@@ -334,7 +369,9 @@ class StaticBreadthSectionBuilder:
         *,
         period: str,
     ) -> dict[str, pd.DataFrame | None]:
-        results: dict[str, pd.DataFrame | None] = {}
+        results: dict[str, pd.DataFrame | None] = {
+            str(symbol).upper(): None for symbol in symbols
+        }
         for start in range(0, len(symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
             batch = symbols[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE]
             results.update(self._price_cache.get_many_cached_only(batch, period=period))

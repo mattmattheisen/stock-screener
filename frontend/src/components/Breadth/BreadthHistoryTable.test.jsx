@@ -62,4 +62,21 @@ describe('BreadthHistoryTable', () => {
       overflowX: 'auto',
     });
   });
+
+  it('renders metric values as unavailable when their eligible denominator is zero', () => {
+    renderWithProviders(
+      <BreadthHistoryTable
+        rows={[{
+          ...row,
+          stocks_up_25pct_month: 0,
+          stocks_down_25pct_month: 0,
+          stocks_up_50pct_month: 0,
+          stocks_down_50pct_month: 0,
+          stockbee_month_eligible_count: 0,
+        }]}
+      />,
+    );
+
+    expect(screen.getAllByText('—')).toHaveLength(4);
+  });
 });

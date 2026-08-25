@@ -30,6 +30,9 @@ from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.services.group_ranking_history import select_market_run_series
 from app.services.key_market_history import build_key_market_entries
+from app.services.point_in_time_universe_service import (
+    hash_point_in_time_universe_symbols,
+)
 from app.services.static_artifact_combiner import StaticArtifactFormulaError
 from app.services.static_breadth_section_builder import (
     StaticBreadthEngineInputFactory,
@@ -2042,6 +2045,61 @@ def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
     assert breadth_payload["benchmark_overlay"][-1]["date"] == "2026-04-24"
     # Group attribution is US-only in the first cut.
     assert breadth_payload["group_attribution"]["available"] is False
+
+
+def test_build_breadth_payload_uses_full_common_stock_universe_not_scan_rows(
+    service_and_session_factory,
+):
+    _service, session_factory = service_and_session_factory
+    idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
+    close = pd.Series(100.0, index=idx)
+    history = pd.DataFrame(
+        {
+            "Open": close,
+            "High": close + 1.0,
+            "Low": close - 1.0,
+            "Close": close,
+            "Adj Close": close,
+            "Volume": 100_000,
+        },
+        index=idx,
+    )
+    with session_factory() as db:
+        db.add_all(
+            [
+                StockUniverse(symbol="AAA", name="AAA", market="US"),
+                StockUniverse(symbol="BBB", name="BBB", market="US"),
+                StockUniverse(
+                    symbol="ETF",
+                    name="ETF",
+                    market="US",
+                    is_common_stock=False,
+                ),
+            ]
+        )
+        db.commit()
+
+    service = StaticSiteExportService(
+        session_factory,
+        price_cache=_FakePriceCache(
+            lambda symbols, *, period: {symbol: history for symbol in symbols}
+        ),
+        fundamentals_cache=object(),
+        benchmark_cache=_FakeBenchmarkCache(),
+    )
+
+    payload = service._build_breadth_payload(  # noqa: SLF001 - regression coverage
+        generated_at="2026-04-24T22:00:00Z",
+        expected_as_of_date=date(2026, 4, 24),
+        market="US",
+        serialized_rows=[{"symbol": "AAA"}],
+    )
+
+    current = payload["payload"]["current"]
+    assert current["broad_universe_count"] == 2
+    assert current["eligibility_signature"] == (
+        hash_point_in_time_universe_symbols(("AAA", "BBB"))
+    )
 
 
 def test_build_breadth_payload_uses_builder_cache_dependencies_without_rebinding(

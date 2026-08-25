@@ -191,6 +191,7 @@ def signal_flags_at(
 
     eligibility = SymbolMetricEligibility(
         advance_decline=advance_decline,
+        stockbee_liquidity=liquid,
         stockbee_daily=daily,
         stockbee_month=month,
         stockbee_34day=day_34,

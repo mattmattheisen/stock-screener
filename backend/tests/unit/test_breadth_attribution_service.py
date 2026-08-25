@@ -227,6 +227,24 @@ def test_compute_skips_symbols_without_price_data():
     assert result[0]["groups"] == []
 
 
+def test_compute_isolates_malformed_symbol_history():
+    valid = _frame([100.0, 105.0])
+    malformed = _frame([100.0, 106.0]).drop(columns=["Adj Close"])
+    target = _last_date(valid)
+
+    result = BreadthAttributionService().compute(
+        symbols_meta=[
+            {"symbol": "VALID", "ibd_industry_group": "Software"},
+            {"symbol": "BAD", "ibd_industry_group": "Banks"},
+        ],
+        price_data={"VALID": valid, "BAD": malformed},
+        target_dates=[target],
+    )
+
+    assert result[0]["stocks_up_4pct"] == 1
+    assert result[0]["groups"][0]["up_stocks"][0]["symbol"] == "VALID"
+
+
 def test_compute_uses_adjusted_return_and_stockbee_volume_filters():
     eligible = _frame(
         [50.0, 52.5],

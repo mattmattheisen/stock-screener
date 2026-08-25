@@ -81,6 +81,33 @@ def test_engine_tracks_metric_specific_eligibility_for_mixed_history():
     assert record["total_stocks_scanned"] == record["broad_universe_count"] == 2
 
 
+def test_stockbee_signature_tracks_liquidity_when_daily_history_is_ineligible():
+    index = pd.bdate_range(end="2026-08-21", periods=21)
+    calculation_date = date(2026, 8, 21)
+    prices = _prices(index, [10.0] * len(index))
+    prices.loc[index[-2], "Adj Close"] = float("nan")
+    snapshot = BreadthUniverseSnapshot(
+        calculation_date=calculation_date,
+        members=(BreadthUniverseMember("LIQUID", "USD"),),
+        broad_signature=hash_point_in_time_universe_symbols(("LIQUID",)),
+    )
+
+    result = BreadthEngine().calculate(
+        BreadthEngineRequest(
+            market="US",
+            dates=(calculation_date,),
+            universes_by_date={calculation_date: snapshot},
+            prices_by_symbol={"LIQUID": prices},
+            fx_by_currency={"USD": pd.Series(1.0, index=index)},
+        )
+    )[calculation_date]
+
+    assert result.eligibility.stockbee_daily_eligible_count == 0
+    assert result.stockbee_eligibility_signature == (
+        hash_point_in_time_universe_symbols(("LIQUID",))
+    )
+
+
 def test_engine_isolates_a_malformed_symbol_frame():
     index = pd.bdate_range(end="2026-08-21", periods=252)
     calculation_date = date(2026, 8, 21)

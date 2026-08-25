@@ -112,11 +112,19 @@ class BreadthAttributionService:
                     f"Missing historical {currency}->USD FX for "
                     f"{missing_date.isoformat()}"
                 )
-            features = prepare_feature_frame(
-                history,
-                aligned_fx,
-                atr_period=formula_policy.atr_period,
-            )
+            try:
+                features = prepare_feature_frame(
+                    history,
+                    aligned_fx,
+                    atr_period=formula_policy.atr_period,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "Skipping malformed breadth attribution prices for %s: %s",
+                    symbol,
+                    exc,
+                )
+                continue
 
             group = self._resolve_group(meta.get("ibd_industry_group"))
             name = meta.get("company_name") or meta.get("name")

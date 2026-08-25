@@ -399,6 +399,7 @@ class StaticSiteExportService:
             generated_at=generated_at,
             expected_as_of_date=latest_run.as_of_date,
             build=lambda: self._build_breadth_payload(
+                db=db,
                 generated_at=generated_at,
                 expected_as_of_date=latest_run.as_of_date,
                 market=market,
@@ -517,6 +518,9 @@ class StaticSiteExportService:
         return self._chart_exporter.export(**kwargs)
 
     def _build_breadth_payload(self, **kwargs) -> dict[str, Any]:
+        if kwargs.get("serialized_rows") is not None and kwargs.get("db") is None:
+            with self._session_factory() as db:
+                return self._breadth_builder.build(db=db, **kwargs)
         return self._breadth_builder.build(**kwargs)
 
     @staticmethod

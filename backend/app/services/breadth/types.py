@@ -52,6 +52,7 @@ class BreadthUniverseSnapshot:
 @dataclass(frozen=True, slots=True)
 class SymbolMetricEligibility:
     advance_decline: bool = False
+    stockbee_liquidity: bool = False
     stockbee_daily: bool = False
     stockbee_month: bool = False
     stockbee_34day: bool = False

@@ -194,7 +194,7 @@ class BreadthEngine:
                 sorted(
                     symbol
                     for symbol, item in signals_by_symbol.items()
-                    if item.eligibility.stockbee_daily
+                    if item.eligibility.stockbee_liquidity
                 )
             )
             result = BreadthDailyResult(
