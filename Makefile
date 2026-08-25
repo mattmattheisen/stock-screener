@@ -60,7 +60,8 @@ GATE_3 = \
   tests/unit/test_backfill_setup_engine.py \
   tests/parity/test_canonical_market_rs_parity.py \
   tests/parity/test_scan_parity.py \
-  tests/unit/test_scan_path_parity.py
+  tests/unit/test_scan_path_parity.py \
+  tests/unit/test_breadth_workflow_parity.py
 
 # ── Gate 4: Performance Baselines ───────────────────────────────────
 # Runtime budget regression (blocking in CI).
