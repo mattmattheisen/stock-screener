@@ -24,16 +24,37 @@ const row = {
 
 
 describe('BreadthContextStrip', () => {
-  it('shows context values with their matching eligible denominators', () => {
+  it('shows paired health bars with widths derived from the correct denominators', () => {
     renderWithProviders(<BreadthContextStrip row={row} />);
 
     expect(screen.getByText('60 (60.0%)')).toBeInTheDocument();
     expect(screen.getByText('35 (35.0%)')).toBeInTheDocument();
-    expect(screen.getByText('8 / 80')).toBeInTheDocument();
-    expect(screen.getByText('2 / 80')).toBeInTheDocument();
+    expect(screen.getByText('8 (80.0%)')).toBeInTheDocument();
+    expect(screen.getByText('2 (20.0%)')).toBeInTheDocument();
     expect(screen.getByText('57.89% (55 / 95)')).toBeInTheDocument();
     expect(screen.getByText('3 / 92')).toBeInTheDocument();
     expect(screen.getByText('110')).toBeInTheDocument();
+
+    expect(screen.getByTestId('breadth-health-advance-decline')).toHaveAttribute(
+      'aria-label',
+      'Advancing 60.0%, Declining 35.0%, Unchanged 5.0%',
+    );
+    expect(
+      screen.getByTestId('breadth-health-advance-decline-advancing'),
+    ).toHaveStyle({ width: '60%' });
+    expect(
+      screen.getByTestId('breadth-health-advance-decline-declining'),
+    ).toHaveStyle({ width: '35%' });
+    expect(screen.getByTestId('breadth-health-high-low')).toHaveAttribute(
+      'aria-label',
+      'New High 80.0%, New Low 20.0%',
+    );
+    expect(screen.getByTestId('breadth-health-high-low-high')).toHaveStyle({
+      width: '80%',
+    });
+    expect(screen.getByTestId('breadth-health-high-low-low')).toHaveStyle({
+      width: '20%',
+    });
   });
 
   it('uses an em dash when a metric has no eligible stocks', () => {

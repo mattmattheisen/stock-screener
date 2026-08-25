@@ -8,6 +8,7 @@ import {
   TableRow,
 } from '@mui/material';
 import { format, parseISO } from 'date-fns';
+import { useMemo } from 'react';
 
 import BreadthMetricTooltip from './BreadthMetricTooltip';
 import {
@@ -16,22 +17,12 @@ import {
   secondaryBreadthMetrics,
   tableContextMetrics,
 } from './breadthMetricDefinitions';
-
-
-const upMetrics = new Set([
-  'stocks_up_4pct',
-  'stocks_up_25pct_quarter',
-  'stocks_up_25pct_month',
-  'stocks_up_50pct_month',
-  'stocks_up_13pct_34days',
-]);
-const downMetrics = new Set([
-  'stocks_down_4pct',
-  'stocks_down_25pct_quarter',
-  'stocks_down_25pct_month',
-  'stocks_down_50pct_month',
-  'stocks_down_13pct_34days',
-]);
+import {
+  BREADTH_VISUAL_COLORS,
+  buildDirectionalToneThresholds,
+  isDirectionalMetric,
+  metricTone,
+} from './breadthVisualEncoding';
 
 const formatValue = (row, metric) => {
   const value = row?.[metric];
@@ -46,20 +37,14 @@ const formatValue = (row, metric) => {
   return value;
 };
 
-const metricCellSx = (metric) => ({
+const metricCellSx = (metric, tone) => ({
   fontFamily: 'monospace',
-  fontWeight: upMetrics.has(metric) || downMetrics.has(metric) ? 700 : 500,
-  color: upMetrics.has(metric)
-    ? 'success.main'
-    : downMetrics.has(metric)
-      ? 'error.main'
-      : 'text.primary',
-  backgroundColor: upMetrics.has(metric)
-    ? 'rgba(46, 125, 50, 0.08)'
-    : downMetrics.has(metric)
-      ? 'rgba(211, 47, 47, 0.08)'
-      : 'transparent',
+  fontWeight: isDirectionalMetric(metric) ? 700 : 500,
+  color: '#fff',
+  backgroundColor: BREADTH_VISUAL_COLORS[tone],
+  borderColor: 'rgba(255, 255, 255, 0.06)',
   whiteSpace: 'nowrap',
+  transition: 'background-color 120ms ease',
 });
 
 function MetricHeader({ metric }) {
@@ -79,6 +64,11 @@ function BreadthHistoryTable({ rows = [], maxRows = 90 }) {
     ...secondaryBreadthMetrics,
     ...tableContextMetrics,
   ];
+  const visibleRows = useMemo(() => rows.slice(0, maxRows), [maxRows, rows]);
+  const toneThresholds = useMemo(
+    () => buildDirectionalToneThresholds(visibleRows),
+    [visibleRows],
+  );
   return (
     <TableContainer
       data-testid="breadth-history-scroll"
@@ -108,36 +98,36 @@ function BreadthHistoryTable({ rows = [], maxRows = 90 }) {
           </TableRow>
         </TableHead>
         <TableBody>
-          {rows.slice(0, maxRows).map((row) => (
+          {visibleRows.map((row) => (
             <TableRow key={row.date} hover>
               <TableCell
                 sx={{
                   position: 'sticky',
                   left: 0,
                   zIndex: 2,
-                  bgcolor: 'background.paper',
+                  bgcolor: BREADTH_VISUAL_COLORS.neutral,
+                  color: '#fff',
                   fontFamily: 'monospace',
+                  fontWeight: 600,
                   whiteSpace: 'nowrap',
                 }}
               >
                 {format(parseISO(row.date), 'MM/dd/yy')}
               </TableCell>
-              {metrics.map((metric) => (
-                <TableCell
-                  key={metric}
-                  align="right"
-                  data-testid={
-                    upMetrics.has(metric)
-                      ? 'breadth-up-cell'
-                      : downMetrics.has(metric)
-                        ? 'breadth-down-cell'
-                        : undefined
-                  }
-                  sx={metricCellSx(metric)}
-                >
-                  {formatValue(row, metric)}
-                </TableCell>
-              ))}
+              {metrics.map((metric) => {
+                const tone = metricTone(row, metric, toneThresholds);
+                return (
+                  <TableCell
+                    key={metric}
+                    align="right"
+                    data-testid={`breadth-cell-${metric}`}
+                    data-tone={tone}
+                    sx={metricCellSx(metric, tone)}
+                  >
+                    {formatValue(row, metric)}
+                  </TableCell>
+                );
+              })}
             </TableRow>
           ))}
         </TableBody>

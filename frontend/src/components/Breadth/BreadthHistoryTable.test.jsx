@@ -53,8 +53,8 @@ describe('BreadthHistoryTable', () => {
   it('marks paired cells and exposes formula tooltips accessibly', () => {
     renderWithProviders(<BreadthHistoryTable rows={[row]} />);
 
-    expect(screen.getAllByTestId('breadth-up-cell').length).toBeGreaterThan(0);
-    expect(screen.getAllByTestId('breadth-down-cell').length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('breadth-cell-stocks_up_4pct')).toHaveLength(1);
+    expect(screen.getAllByTestId('breadth-cell-stocks_down_4pct')).toHaveLength(1);
     expect(
       screen.getByRole('button', { name: /stocks up 4%\+ formula details/i }),
     ).toBeInTheDocument();
@@ -78,5 +78,60 @@ describe('BreadthHistoryTable', () => {
     );
 
     expect(screen.getAllByText('—')).toHaveLength(4);
+  });
+
+  it('uses neutral, soft, and strong heat levels for directional count metrics', () => {
+    const rows = Array.from({ length: 10 }, (_, index) => ({
+      ...row,
+      date: `2026-08-${String(index + 1).padStart(2, '0')}`,
+      stocks_up_4pct: index + 1,
+      stocks_down_4pct: index + 1,
+      stockbee_daily_eligible_count: 100,
+    }));
+
+    renderWithProviders(<BreadthHistoryTable rows={rows} />);
+
+    const upCells = screen.getAllByTestId('breadth-cell-stocks_up_4pct');
+    const downCells = screen.getAllByTestId('breadth-cell-stocks_down_4pct');
+    expect(upCells.map((cell) => cell.dataset.tone)).toEqual([
+      'neutral', 'neutral', 'neutral', 'neutral', 'neutral',
+      'neutral', 'neutral', 'up-soft', 'up-soft', 'up-strong',
+    ]);
+    expect(downCells.map((cell) => cell.dataset.tone)).toEqual([
+      'neutral', 'neutral', 'neutral', 'neutral', 'neutral',
+      'neutral', 'neutral', 'down-soft', 'down-soft', 'down-strong',
+    ]);
+    expect(upCells[9]).toHaveStyle({
+      backgroundColor: '#0d7a3e',
+      color: '#fff',
+    });
+    expect(downCells[9]).toHaveStyle({
+      backgroundColor: '#9b1c31',
+      color: '#fff',
+    });
+  });
+
+  it('colors ratios around one by direction and significance', () => {
+    const rows = [0.7, 0.9, 1, 1.2, 2, null].map((ratio, index) => ({
+      ...row,
+      date: `2026-08-${String(index + 1).padStart(2, '0')}`,
+      ratio_5day: ratio,
+      stockbee_daily_eligible_count: 100,
+    }));
+
+    renderWithProviders(<BreadthHistoryTable rows={rows} />);
+
+    expect(
+      screen
+        .getAllByTestId('breadth-cell-ratio_5day')
+        .map((cell) => cell.dataset.tone),
+    ).toEqual([
+      'down-strong',
+      'down-soft',
+      'neutral',
+      'up-soft',
+      'up-strong',
+      'neutral',
+    ]);
   });
 });
