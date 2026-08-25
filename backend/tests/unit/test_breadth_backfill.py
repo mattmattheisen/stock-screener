@@ -233,6 +233,10 @@ def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():
         "2026-03-19": 1,
         "2026-03-20": 1,
     }
+    assert result["broad_universe_stocks_by_date"] == {
+        "2026-03-19": 1,
+        "2026-03-20": 1,
+    }
     assert result["calculation_errors_by_date"] == {
         "2026-03-19": 0,
         "2026-03-20": 0,
@@ -287,6 +291,10 @@ def test_backfill_range_validates_historical_symbols_on_their_eligible_date():
     )
 
     assert result["scanned_stocks_by_date"] == {
+        "2026-03-19": 1,
+        "2026-03-20": 1,
+    }
+    assert result["broad_universe_stocks_by_date"] == {
         "2026-03-19": 1,
         "2026-03-20": 1,
     }

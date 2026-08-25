@@ -98,16 +98,21 @@ def test_classifies_point_in_time_eligibility_and_price_exclusions(universe_sess
 
     assert result.candidate_counts_by_date == {first_date: 5, second_date: 2}
     assert result.eligible_symbols_by_date == {
-        first_date: ("DATE_GAP", "READY"),
-        second_date: ("BECOMES_READY",),
+        first_date: ("BECOMES_READY", "DATE_GAP", "NULL_BAR", "READY"),
+        second_date: ("BECOMES_READY", "DATE_GAP"),
     }
-    assert result.eligible_counts_by_date == {first_date: 2, second_date: 1}
+    assert result.eligible_counts_by_date == {first_date: 4, second_date: 2}
     assert result.universe_policy_by_date == {
         first_date: "point_in_time",
         second_date: "current_active_fallback_v1",
     }
     assert result.by_date[first_date].candidate_count == 5
-    assert result.by_date[first_date].eligible_symbols == ("DATE_GAP", "READY")
+    assert result.by_date[first_date].eligible_symbols == (
+        "BECOMES_READY",
+        "DATE_GAP",
+        "NULL_BAR",
+        "READY",
+    )
     assert result.by_date[first_date].universe_policy == "point_in_time"
     assert (
         result.by_date[first_date].eligibility_signature
@@ -115,11 +120,11 @@ def test_classifies_point_in_time_eligibility_and_price_exclusions(universe_sess
     )
     assert result.unsupported_symbols == ("ABC-W",)
     assert result.unsupported_count == 1
-    assert "BECOMES_READY" in result.insufficient_history_symbols
-    assert "NULL_BAR" in result.insufficient_history_symbols
-    assert result.exact_date_gap_symbols == ("DATE_GAP", "NULL_BAR")
-    assert result.exact_date_gap_count == 2
-    assert len(price_queries) == 1
+    assert result.insufficient_history_symbols == ()
+    assert result.insufficient_history_count == 0
+    assert result.exact_date_gap_symbols == ()
+    assert result.exact_date_gap_count == 0
+    assert price_queries == []
 
 
 def test_exclusion_samples_are_bounded_sorted_and_zero_counts_are_distinct(
@@ -163,4 +168,4 @@ def test_zero_candidate_and_zero_eligible_are_distinguishable(universe_session):
     )
 
     assert result.candidate_counts_by_date == {empty_date: 0, no_history_date: 1}
-    assert result.eligible_counts_by_date == {empty_date: 0, no_history_date: 0}
+    assert result.eligible_counts_by_date == {empty_date: 0, no_history_date: 1}

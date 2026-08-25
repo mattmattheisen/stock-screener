@@ -49,12 +49,16 @@ class BreadthCalculatorService:
     """
     Service for calculating market breadth indicators.
 
-    Processes all active stocks in the universe and calculates:
+    Processes the point-in-time broad universe and calculates:
     - Daily 4%+ movers (up and down)
-    - 5-day and 10-day up/down ratios
-    - Monthly 25%/50% movers (21 trading days)
-    - Quarterly 25% movers (63 trading days)
-    - 34-day 13% movers (IBD-style)
+    - Today-inclusive 5-session and 10-session up/down ratios
+    - Monthly 25%/50% movers versus exactly 20 sessions ago
+    - Quarterly 25% movers versus trailing 65-session extrema
+    - 34-day 13% movers versus trailing 34-session extrema
+    - Advance/decline, 52-week high/low, T2108, and ATR extension context
+
+    Each metric family applies its own history and data eligibility in the
+    shared engine; there is no all-or-nothing history gate.
     """
 
     def __init__(

@@ -342,6 +342,10 @@ class BreadthBackfillExecutor:
                         value.isoformat(): outcomes_by_date[value].report().scanned
                         for value in ordered_dates
                     },
+                    "broad_universe_stocks_by_date": {
+                        value.isoformat(): canonical_by_date[value].broad_universe_count
+                        for value in ordered_dates
+                    },
                     "calculation_errors_by_date": {
                         value.isoformat(): outcomes_by_date[value].report().errors
                         for value in ordered_dates

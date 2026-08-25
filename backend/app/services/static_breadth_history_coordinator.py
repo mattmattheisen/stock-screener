@@ -197,7 +197,7 @@ class StaticBreadthHistoryCoordinator:
                 {
                     date.fromisoformat(raw_date): int(count or 0)
                     for raw_date, count in (
-                        stats.get("scanned_stocks_by_date") or {}
+                        stats.get("broad_universe_stocks_by_date") or {}
                     ).items()
                 }
             )
