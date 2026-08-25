@@ -111,6 +111,7 @@ class BreadthCalculatorService:
             .filter(
                 StockUniverse.is_active == True,
                 StockUniverse.market == self.market,
+                StockUniverse.is_common_stock.is_(True),
             )
             .all(),
             key=lambda stock: stock.symbol,
@@ -122,6 +123,7 @@ class BreadthCalculatorService:
                     getattr(stock, "currency", None)
                     or default_currency_for_market(self.market)
                 ),
+                is_common_stock=getattr(stock, "is_common_stock", True),
             )
             for stock in active_stocks
         )

@@ -144,6 +144,9 @@ rights, debt instruments, indices, benchmarks, and inactive listings.
 The engine consumes the repository's date-specific universe snapshots. Security
 classification must be explicit at this boundary; breadth calculation must not
 assume upstream ingest happened to remove every non-common-stock instrument.
+`stock_universe.is_common_stock` records that classification. Authoritative
+equity ingestion sets it true; manual rows migrate and default to false until
+an operator explicitly confirms they are common equities.
 
 ### StockBee universe
 
@@ -395,15 +398,18 @@ coverage from `total_stocks_scanned`.
 The migration uses a short breadth maintenance window and a temporary shadow
 dataset.
 
-1. Apply an additive Alembic migration with new nullable columns.
+1. Apply additive Alembic migrations for the new nullable breadth columns and
+   explicit common-stock classification. Existing manual rows migrate
+   fail-closed until reviewed.
 2. Build a deployment image containing the shared engine and rebuild command
    without activating revision-2 production writers.
 3. Create a temporary `market_breadth_rebuild` table matching the target schema.
 4. Recalculate every supported market/date from authoritative universe, OHLCV,
    and FX inputs with at least 252 sessions of warm-up data.
 5. Recalculate five- and ten-session ratios only from corrected daily counts.
-6. Validate formulas, row coverage, denominators, signatures, FX provenance,
-   and downstream state distributions.
+6. Persist the exact requested market/date manifest and validate formulas, exact
+   row coverage, denominators, signatures, FX provenance, and downstream state
+   distributions.
 7. Pause every breadth, exposure, digest, snapshot, and static-export writer.
 8. Take a database backup for operational rollback.
 9. In one transaction, delete existing `market_breadth` rows and insert the

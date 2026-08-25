@@ -7,7 +7,7 @@ import {
   TableHead,
   TableRow,
 } from '@mui/material';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 
 import BreadthMetricTooltip from './BreadthMetricTooltip';
 import {
@@ -117,7 +117,7 @@ function BreadthHistoryTable({ rows = [], maxRows = 90 }) {
                   whiteSpace: 'nowrap',
                 }}
               >
-                {format(new Date(row.date), 'MM/dd/yy')}
+                {format(parseISO(row.date), 'MM/dd/yy')}
               </TableCell>
               {metrics.map((metric) => (
                 <TableCell

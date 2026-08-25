@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Iterable, Mapping
 from datetime import date
@@ -30,6 +31,7 @@ from .types import CURRENT_BREADTH_CALCULATION_REVISION, BreadthDailyResult
 
 TARGET_TABLE = "market_breadth"
 STAGING_TABLE = "market_breadth_rebuild"
+MANIFEST_TABLE = "market_breadth_rebuild_manifest"
 _EXCLUDED_COPY_COLUMNS = {"id", "created_at"}
 
 
@@ -68,11 +70,21 @@ class BreadthRebuildService:
         price_cache=None,
         universe_service: PointInTimeUniverseService | None = None,
         calendar_service=None,
+        required_markets: Iterable[str] | None = None,
     ) -> None:
+        if required_markets is None:
+            from app.domain.markets.catalog import get_market_catalog
+
+            required_markets = get_market_catalog().market_codes_with_capability(
+                "breadth"
+            )
         self.db = db
         self._price_cache = price_cache
         self._universe_service = universe_service or PointInTimeUniverseService()
         self._calendar_service = calendar_service
+        self._required_markets = frozenset(
+            str(market).upper() for market in required_markets
+        )
 
     @property
     def dialect_name(self) -> str:
@@ -80,6 +92,7 @@ class BreadthRebuildService:
 
     def recreate_staging(self) -> None:
         self.db.execute(text(f"DROP TABLE IF EXISTS {STAGING_TABLE}"))
+        self.db.execute(text(f"DROP TABLE IF EXISTS {MANIFEST_TABLE}"))
         if self.dialect_name == "postgresql":
             self.db.execute(
                 text(
@@ -101,6 +114,42 @@ class BreadthRebuildService:
                 f"ON {STAGING_TABLE} (date, market)"
             )
         )
+        self.db.execute(
+            text(
+                f"CREATE TABLE {MANIFEST_TABLE} ("
+                "market VARCHAR(8) PRIMARY KEY, "
+                "expected_dates_json TEXT NOT NULL, "
+                "full_market_set BOOLEAN NOT NULL)"
+            )
+        )
+        self.db.commit()
+
+    def record_build_manifest(
+        self,
+        expected_dates_by_market: Mapping[str, Iterable[date]],
+        *,
+        full_market_set: bool,
+    ) -> None:
+        if not inspect(self.db.get_bind()).has_table(MANIFEST_TABLE):
+            raise RuntimeError("Breadth rebuild manifest table does not exist")
+        self.db.execute(text(f"DELETE FROM {MANIFEST_TABLE}"))
+        for raw_market, raw_dates in sorted(expected_dates_by_market.items()):
+            market = raw_market.upper()
+            dates = tuple(sorted(set(raw_dates)))
+            self.db.execute(
+                text(
+                    f"INSERT INTO {MANIFEST_TABLE} "
+                    "(market, expected_dates_json, full_market_set) "
+                    "VALUES (:market, :expected_dates_json, :full_market_set)"
+                ),
+                {
+                    "market": market,
+                    "expected_dates_json": json.dumps(
+                        [value.isoformat() for value in dates]
+                    ),
+                    "full_market_set": bool(full_market_set),
+                },
+            )
         self.db.commit()
 
     def stage_results(
@@ -153,16 +202,25 @@ class BreadthRebuildService:
 
         calendar = self._calendar_service or get_market_calendar_service()
         price_cache = self._price_cache or get_price_cache()
-        self.recreate_staging()
-        reports: dict[str, Any] = {}
-        for raw_market in markets:
-            market = raw_market.upper()
+        normalized_markets = tuple(
+            dict.fromkeys(raw_market.upper() for raw_market in markets)
+        )
+        dates_by_market: dict[str, tuple[date, ...]] = {}
+        for market in normalized_markets:
             market_end = end_date or calendar.market_now(market).date()
-            dates = tuple(
+            dates_by_market[market] = tuple(
                 value
                 for value in pd.date_range(start=start_date, end=market_end).date
                 if calendar.is_trading_day(market, value)
             )
+        self.recreate_staging()
+        self.record_build_manifest(
+            dates_by_market,
+            full_market_set=set(normalized_markets) == self._required_markets,
+        )
+        reports: dict[str, Any] = {}
+        for market in normalized_markets:
+            dates = dates_by_market[market]
             universes: dict[date, BreadthEligibleUniverse] = {}
             for calculation_date in dates:
                 snapshot = self._universe_service.resolve(
@@ -210,10 +268,44 @@ class BreadthRebuildService:
                 "errors": ["staging_table_missing"],
                 "row_count": 0,
             }
+        if not inspect(self.db.get_bind()).has_table(MANIFEST_TABLE):
+            return {
+                "valid": False,
+                "errors": ["staging_manifest_missing"],
+                "row_count": 0,
+            }
         rows = self.db.execute(
             text(f"SELECT * FROM {STAGING_TABLE} ORDER BY market, date")
         ).mappings().all()
         errors: list[str] = []
+        manifest_rows = self.db.execute(
+            text(f"SELECT * FROM {MANIFEST_TABLE} ORDER BY market")
+        ).mappings().all()
+        manifest_dates_by_market: dict[str, set[date]] = {}
+        full_market_flags: set[bool] = set()
+        for manifest_row in manifest_rows:
+            market = str(manifest_row["market"]).upper()
+            try:
+                raw_dates = json.loads(manifest_row["expected_dates_json"])
+                manifest_dates_by_market[market] = {
+                    date.fromisoformat(value) for value in raw_dates
+                }
+            except (TypeError, ValueError, json.JSONDecodeError):
+                errors.append(f"invalid_manifest_dates:{market}")
+            full_market_flags.add(bool(manifest_row["full_market_set"]))
+        if not manifest_rows:
+            errors.append("staging_manifest_empty")
+        if full_market_flags != {True}:
+            errors.append("partial_market_set")
+        manifest_markets = set(manifest_dates_by_market)
+        errors.extend(
+            f"missing_manifest_market:{market}"
+            for market in sorted(self._required_markets - manifest_markets)
+        )
+        errors.extend(
+            f"unexpected_manifest_market:{market}"
+            for market in sorted(manifest_markets - self._required_markets)
+        )
         seen: set[tuple[str, date]] = set()
         dates_by_market: dict[str, set[date]] = {}
         for row in rows:
@@ -305,16 +397,6 @@ class BreadthRebuildService:
                     "stocks_down_25pct_month",
                     "stockbee_month_eligible_count",
                 ),
-                (
-                    "stocks_up_13pct_34days",
-                    "stocks_down_13pct_34days",
-                    "stockbee_34day_eligible_count",
-                ),
-                (
-                    "stocks_up_25pct_quarter",
-                    "stocks_down_25pct_quarter",
-                    "stockbee_quarter_eligible_count",
-                ),
             )
             for up_name, down_name, eligible_name in mutually_exclusive_pairs:
                 if int(row[up_name] or 0) + int(row[down_name] or 0) > int(
@@ -333,12 +415,27 @@ class BreadthRebuildService:
                         f"context_exceeds_eligibility:{count_name}:{key[0]}:{key[1]}"
                     )
 
+        effective_expected = dict(manifest_dates_by_market)
         for market, expected_dates in (expected_dates_by_market or {}).items():
-            missing = set(expected_dates) - dates_by_market.get(market.upper(), set())
+            normalized_market = market.upper()
+            supplied = set(expected_dates)
+            if effective_expected.get(normalized_market) != supplied:
+                errors.append(f"manifest_mismatch:{normalized_market}")
+            effective_expected[normalized_market] = supplied
+        for market, expected_dates in effective_expected.items():
+            actual_dates = dates_by_market.get(market, set())
+            missing = set(expected_dates) - actual_dates
             errors.extend(
-                f"missing_date:{market.upper()}:{value.isoformat()}"
+                f"missing_date:{market}:{value.isoformat()}"
                 for value in sorted(missing)
             )
+            unexpected = actual_dates - set(expected_dates)
+            errors.extend(
+                f"unexpected_date:{market}:{value.isoformat()}"
+                for value in sorted(unexpected)
+            )
+        for market in sorted(set(dates_by_market) - set(effective_expected)):
+            errors.append(f"unexpected_market:{market}")
 
         return {
             "valid": not errors and bool(rows),
@@ -362,9 +459,6 @@ class BreadthRebuildService:
         }
 
     def activate(self) -> dict[str, Any]:
-        report = self.validate()
-        if not report["valid"]:
-            raise RuntimeError("Cannot activate invalid breadth rebuild staging data")
         columns = _copy_columns()
         column_sql = ", ".join(columns)
         self.db.rollback()
@@ -372,6 +466,17 @@ class BreadthRebuildService:
             if self.dialect_name == "postgresql":
                 self.db.execute(
                     text(f"LOCK TABLE {TARGET_TABLE} IN ACCESS EXCLUSIVE MODE")
+                )
+                self.db.execute(
+                    text(
+                        f"LOCK TABLE {STAGING_TABLE}, {MANIFEST_TABLE} "
+                        "IN ACCESS EXCLUSIVE MODE"
+                    )
+                )
+            report = self.validate()
+            if not report["valid"]:
+                raise RuntimeError(
+                    "Cannot activate invalid breadth rebuild staging data"
                 )
             self.db.execute(text(f"DELETE FROM {TARGET_TABLE}"))
             self.db.execute(
@@ -401,4 +506,5 @@ class BreadthRebuildService:
 
     def cleanup(self) -> None:
         self.db.execute(text(f"DROP TABLE IF EXISTS {STAGING_TABLE}"))
+        self.db.execute(text(f"DROP TABLE IF EXISTS {MANIFEST_TABLE}"))
         self.db.commit()

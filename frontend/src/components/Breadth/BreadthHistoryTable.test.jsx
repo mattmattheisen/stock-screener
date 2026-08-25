@@ -1,6 +1,7 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
+import { renderWithProviders } from '../../test/renderWithProviders';
 import BreadthHistoryTable from './BreadthHistoryTable';
 
 
@@ -25,8 +26,19 @@ const row = {
 
 
 describe('BreadthHistoryTable', () => {
+  it('renders a date-only value as the same local calendar date', () => {
+    vi.stubEnv('TZ', 'America/Los_Angeles');
+    try {
+      renderWithProviders(<BreadthHistoryTable rows={[row]} />);
+
+      expect(screen.getByText('08/21/26')).toBeInTheDocument();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('renders grouped primary, secondary, and context headers', () => {
-    render(<BreadthHistoryTable rows={[row]} />);
+    renderWithProviders(<BreadthHistoryTable rows={[row]} />);
 
     expect(screen.getByText('Primary Breadth Indicators')).toBeInTheDocument();
     expect(screen.getByText('Secondary Breadth Indicators')).toBeInTheDocument();
@@ -39,7 +51,7 @@ describe('BreadthHistoryTable', () => {
   });
 
   it('marks paired cells and exposes formula tooltips accessibly', () => {
-    render(<BreadthHistoryTable rows={[row]} />);
+    renderWithProviders(<BreadthHistoryTable rows={[row]} />);
 
     expect(screen.getAllByTestId('breadth-up-cell').length).toBeGreaterThan(0);
     expect(screen.getAllByTestId('breadth-down-cell').length).toBeGreaterThan(0);

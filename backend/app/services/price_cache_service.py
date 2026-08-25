@@ -367,6 +367,7 @@ class PriceCacheService:
                 'High': [p.high for p in prices],
                 'Low': [p.low for p in prices],
                 'Close': [p.close for p in prices],
+                'Adj Close': [p.adj_close for p in prices],
                 'Volume': [p.volume for p in prices],
             }
 
@@ -447,6 +448,7 @@ class PriceCacheService:
                     StockPrice.high,
                     StockPrice.low,
                     StockPrice.close,
+                    StockPrice.adj_close,
                     StockPrice.volume,
                 ).filter(
                     and_(
@@ -476,6 +478,7 @@ class PriceCacheService:
                         'High': [p.high for p in prices],
                         'Low': [p.low for p in prices],
                         'Close': [p.close for p in prices],
+                        'Adj Close': [p.adj_close for p in prices],
                         'Volume': [p.volume for p in prices],
                     }
 

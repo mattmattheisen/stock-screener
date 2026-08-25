@@ -197,7 +197,11 @@ def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch)
             if entity is MarketBreadth:
                 query_counts["market_breadth"] += 1
                 return _FakeQuery([
-                    SimpleNamespace(date=as_of_date, total_stocks_scanned=1)
+                    SimpleNamespace(
+                        date=as_of_date,
+                        total_stocks_scanned=1,
+                        advance_decline_eligible_count=1,
+                    )
                 ])
             if entity is StockUniverse.symbol:
                 return _FakeQuery([("AAA",), ("BBB",)])
@@ -286,6 +290,7 @@ def test_ensure_breadth_history_recomputes_ratio_window_after_historical_repair(
                     SimpleNamespace(
                         date=calc_date,
                         total_stocks_scanned=1,
+                        advance_decline_eligible_count=1,
                         eligibility_signature=_breadth_signature(calc_date),
                     )
                     for calc_date in target_dates
@@ -365,6 +370,7 @@ def test_ensure_breadth_history_skips_validated_existing_rows(monkeypatch):
                     SimpleNamespace(
                         date=as_of_date,
                         total_stocks_scanned=2,
+                        advance_decline_eligible_count=2,
                         eligibility_signature=_breadth_signature(as_of_date),
                     )
                 ])
@@ -414,6 +420,7 @@ def test_historical_breadth_reuses_rows_eligible_for_their_date(monkeypatch, mar
                 SimpleNamespace(
                     date=as_of_date,
                     total_stocks_scanned=7,
+                    advance_decline_eligible_count=7,
                     eligibility_signature=_breadth_signature(as_of_date),
                 )
             ]
@@ -541,11 +548,13 @@ def test_ensure_breadth_history_skips_existing_rows_with_tolerated_historical_ga
                     SimpleNamespace(
                         date=previous_date,
                         total_stocks_scanned=9,
+                        advance_decline_eligible_count=9,
                         eligibility_signature=_breadth_signature(previous_date),
                     ),
                     SimpleNamespace(
                         date=as_of_date,
                         total_stocks_scanned=10,
+                        advance_decline_eligible_count=10,
                         eligibility_signature=_breadth_signature(as_of_date),
                     ),
                 ])
@@ -679,6 +688,7 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
                 SimpleNamespace(
                     date=as_of_date,
                     total_stocks_scanned=1,
+                    advance_decline_eligible_count=1,
                 )
             )
             return {
@@ -694,6 +704,9 @@ def test_ensure_breadth_history_marks_undercovered_backfill_rows_not_completed(
                 "insufficient_history_observations": 9,
                 "scanned_stocks_by_date": {as_of_date.isoformat(): 1},
                 "broad_universe_stocks_by_date": {as_of_date.isoformat(): 1},
+                "advance_decline_eligible_stocks_by_date": {
+                    as_of_date.isoformat(): 8
+                },
             }
 
     monkeypatch.setattr(export_static_site, "SessionLocal", lambda: _FakeDb())
@@ -866,5 +879,5 @@ def test_ensure_breadth_history_accepts_metric_specific_history_gaps(monkeypatch
     )
 
     assert result["status"] == "completed"
-    assert result["scanned_stocks_by_date"] == {"2026-07-31": 8}
+    assert result["scanned_stocks_by_date"] == {"2026-07-31": 1}
     assert "undercovered_dates" not in result

@@ -84,6 +84,7 @@ class PointInTimeUniverseService:
                 .filter(
                     StockUniverse.market == normalized,
                     StockUniverse.active_filter(),
+                    StockUniverse.is_common_stock.is_(True),
                 )
                 .order_by(StockUniverse.symbol.asc())
                 .all()
@@ -97,6 +98,7 @@ class PointInTimeUniverseService:
                     PointInTimeUniverseMember(
                         symbol=row.symbol,
                         currency=row.currency,
+                        is_common_stock=row.is_common_stock,
                     )
                     for row in rows
                 ),
@@ -116,6 +118,7 @@ class PointInTimeUniverseService:
             .filter(
                 StockUniverse.market == normalized,
                 StockUniverse.first_seen_at < cutoff,
+                StockUniverse.is_common_stock.is_(True),
             )
             .order_by(StockUniverse.symbol.asc())
                 .all()
@@ -170,6 +173,7 @@ class PointInTimeUniverseService:
                 PointInTimeUniverseMember(
                     symbol=symbol,
                     currency=rows_by_symbol[symbol].currency,
+                    is_common_stock=rows_by_symbol[symbol].is_common_stock,
                 )
                 for symbol in symbols
             ),

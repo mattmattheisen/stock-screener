@@ -872,15 +872,24 @@ def test_backfill_range_uses_exact_unrounded_canonical_thresholds():
 
 def test_live_and_backfill_use_identical_canonical_counts():
     db = _make_db_session()
-    db.add(
+    db.add_all([
         StockUniverse(
             symbol="AAA",
             market="US",
             currency="USD",
             is_active=True,
             status=UNIVERSE_STATUS_ACTIVE,
-        )
-    )
+            is_common_stock=True,
+        ),
+        StockUniverse(
+            symbol="SPY",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=False,
+        ),
+    ])
     db.commit()
     calculation_date = date(2026, 3, 20)
     prices = _flat_price_df(calculation_date, periods=252)
@@ -901,6 +910,12 @@ def test_live_and_backfill_use_identical_canonical_counts():
     )
 
     assert backfill["processed"] == 1
+    assert live.indicators["broad_universe_count"] == 1
+    assert price_cache.get_many_cached_only_fresh.call_count == 2
+    assert all(
+        call.args[0] == ["AAA"]
+        for call in price_cache.get_many_cached_only_fresh.call_args_list
+    )
     stored = db.query(MarketBreadth).filter(
         MarketBreadth.date == calculation_date,
         MarketBreadth.market == "US",

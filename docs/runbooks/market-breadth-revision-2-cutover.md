@@ -11,6 +11,9 @@ new formulas.
 - Confirm daily OHLCV caches, point-in-time universe history, and historical FX
   observations cover the rebuild period plus at least 252 trading sessions of
   warm-up.
+- Review manually added universe rows. The classification migration marks them
+  non-common by default; explicitly confirm any manual common equities before
+  rebuilding breadth.
 - Choose the first date that should be publicly available after cutover.
 - Run this from `backend` with the production virtual environment activated.
 
@@ -26,8 +29,9 @@ Keep the dump until the post-cutover monitoring window is complete.
 
 ## 2. Build the shadow history
 
-Omit `--market` to build every breadth-enabled market in one staging table.
-Repeat `--market` to rebuild a selected set.
+Omit `--market` for the cutover build so every breadth-enabled market is staged.
+Repeated `--market` options may be used for diagnosis, but a selective build is
+marked partial and cannot validate or activate the full-table replacement.
 
 ```bash
 python -m app.scripts.rebuild_market_breadth build \
@@ -40,8 +44,10 @@ python -m app.scripts.rebuild_market_breadth validate \
 
 Validation must exit zero and report `"valid": true`. Investigate any missing
 date, signature, denominator reconciliation, non-finite value, or revision
-error. Re-running `build` recreates only the staging table; it does not modify
-the live table.
+error. The build stores its exact market/date manifest beside the staging table;
+standalone validation requires the staged rows to match it exactly. Re-running
+`build` recreates only the staging data and manifest; it does not modify the
+live table.
 
 ## 3. Pause writers
 
@@ -69,9 +75,10 @@ python -m app.scripts.rebuild_market_breadth validate
 python -m app.scripts.rebuild_market_breadth activate --confirm-replace
 ```
 
-Activation takes an exclusive PostgreSQL lock, deletes the live breadth rows,
-copies the explicitly named columns from staging, verifies the row count and
-revision, and commits as one transaction. The staging table is retained.
+Activation locks the live table, staging table, and build manifest, revalidates
+the exact coverage under that lock, deletes the live breadth rows, copies the
+explicitly named columns from staging, verifies the row count and revision, and
+commits as one transaction. The staging data and manifest are retained.
 
 ## 5. Rebuild derived outputs
 
@@ -114,6 +121,6 @@ After the monitoring and rollback windows are complete:
 python -m app.scripts.rebuild_market_breadth cleanup
 ```
 
-Cleanup drops only `market_breadth_rebuild`; the live revision-2 table is not
-changed. The staging data is not recoverable after this command except by
-running the shadow build again.
+Cleanup drops only `market_breadth_rebuild` and its build manifest; the live
+revision-2 table is not changed. The staging data is not recoverable after this
+command except by running the shadow build again.

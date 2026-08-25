@@ -21,13 +21,8 @@ def _wilder_average(values: pd.Series, period: int) -> pd.Series:
     if period <= 0 or len(values) < period:
         return result
 
-    first_window = values.iloc[:period]
-    if first_window.isna().any():
-        return result
-
-    previous = float(first_window.mean())
-    result.iloc[period - 1] = previous
-    for position in range(period, len(values)):
+    previous = np.nan
+    for position in range(period - 1, len(values)):
         current = values.iloc[position]
         if pd.isna(current):
             previous = np.nan

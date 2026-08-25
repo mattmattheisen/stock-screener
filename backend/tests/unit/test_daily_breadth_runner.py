@@ -192,6 +192,7 @@ def test_refresh_guarded_rejects_zero_usable_stocks_before_persistence():
         )
 
     assert caught.value.coverage.total_stocks_scanned == 0
+    calculator.store_daily_result.assert_not_called()
     calculator.store_daily_breadth.assert_not_called()
     dependencies.publish_snapshot.assert_not_called()
 
@@ -215,6 +216,7 @@ def test_strict_cache_only_rejects_miss_ratio_above_tolerance():
             _dependencies(calculator),
         )
 
+    calculator.store_daily_result.assert_not_called()
     calculator.store_daily_breadth.assert_not_called()
 
 
@@ -241,6 +243,7 @@ def test_strict_cache_only_rejects_zero_usable_stocks():
             dependencies,
         )
 
+    calculator.store_daily_result.assert_not_called()
     calculator.store_daily_breadth.assert_not_called()
     dependencies.publish_snapshot.assert_not_called()
 
@@ -267,6 +270,7 @@ def test_same_day_auto_requires_complete_warmup_metadata():
             _dependencies(calculator),
         )
 
+    calculator.store_daily_result.assert_not_called()
     calculator.store_daily_breadth.assert_not_called()
 
 

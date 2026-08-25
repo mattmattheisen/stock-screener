@@ -78,7 +78,7 @@ def _snapshot_members(db, point_in_time) -> tuple[BreadthUniverseMember, ...]:
             BreadthUniverseMember(
                 symbol=row.symbol,
                 currency=row.currency,
-                is_common_stock=True,
+                is_common_stock=row.is_common_stock,
             )
             for row in rows
         )

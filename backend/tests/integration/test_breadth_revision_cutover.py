@@ -1,5 +1,10 @@
+from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date
+import os
+from uuid import uuid4
 
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -42,49 +47,197 @@ def _result(day: date) -> BreadthDailyResult:
     )
 
 
+@contextmanager
+def _cutover_engine(tmp_path):
+    database_url = os.environ.get("DATABASE_URL")
+    use_postgres = (
+        os.environ.get("STOCKSCANNER_TEST_ALLOW_POSTGRES") == "1"
+        and database_url
+        and database_url.startswith("postgresql")
+    )
+    if not use_postgres:
+        engine = create_engine(f"sqlite:///{tmp_path / 'cutover.sqlite'}")
+        try:
+            yield engine
+        finally:
+            engine.dispose()
+        return
+
+    schema = f"breadth_cutover_{uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    engine = create_engine(
+        database_url,
+        connect_args={"options": f"-csearch_path={schema}"},
+    )
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin_engine.dispose()
+
+
 def test_revision_cutover_replaces_legacy_rows_and_preserves_unrelated_tables(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'cutover.sqlite'}")
+    with _cutover_engine(tmp_path) as engine:
+        Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+        with engine.begin() as connection:
+            connection.execute(
+                text("CREATE TABLE unrelated (id INTEGER PRIMARY KEY, value TEXT)")
+            )
+            connection.execute(
+                text("INSERT INTO unrelated (id, value) VALUES (1, 'keep')")
+            )
+        Session = sessionmaker(bind=engine)
+        with Session() as db:
+            db.add(
+                MarketBreadth(
+                    market="US",
+                    date=date(2026, 8, 20),
+                    stocks_up_4pct=99,
+                    stocks_down_4pct=1,
+                    stocks_up_25pct_quarter=0,
+                    stocks_down_25pct_quarter=0,
+                    stocks_up_25pct_month=0,
+                    stocks_down_25pct_month=0,
+                    stocks_up_50pct_month=0,
+                    stocks_down_50pct_month=0,
+                    stocks_up_13pct_34days=0,
+                    stocks_down_13pct_34days=0,
+                    total_stocks_scanned=100,
+                )
+            )
+            db.commit()
+            service = BreadthRebuildService(db, required_markets=("US",))
+            service.recreate_staging()
+            service.record_build_manifest(
+                {"US": (date(2026, 8, 21),)},
+                full_market_set=True,
+            )
+            service.stage_results((_result(date(2026, 8, 21)),))
+
+            report = service.validate()
+            assert report["valid"] is True
+            service.activate()
+
+            rows = db.query(MarketBreadth).all()
+            assert [(row.date, row.calculation_revision) for row in rows] == [
+                (date(2026, 8, 21), 2)
+            ]
+            unrelated = db.execute(
+                text("SELECT value FROM unrelated WHERE id = 1")
+            ).scalar()
+            assert unrelated == "keep"
+
+
+def test_validation_allows_overlapping_trailing_range_signals(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'overlap.sqlite'}")
     Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
-    with engine.begin() as connection:
-        connection.execute(
-            text("CREATE TABLE unrelated (id INTEGER PRIMARY KEY, value TEXT)")
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        result = _result(date(2026, 8, 21))
+        result = replace(
+            result,
+            values=replace(
+                result.values,
+                stocks_up_13pct_34days=50,
+                stocks_down_13pct_34days=40,
+                stocks_up_25pct_quarter=50,
+                stocks_down_25pct_quarter=40,
+            ),
         )
-        connection.execute(text("INSERT INTO unrelated (id, value) VALUES (1, 'keep')"))
+        service = BreadthRebuildService(db, required_markets=("US",))
+        service.recreate_staging()
+        service.record_build_manifest(
+            {"US": (date(2026, 8, 21),)},
+            full_market_set=True,
+        )
+        service.stage_results((result,))
+
+        report = service.validate()
+
+        assert report["valid"] is True
+        assert not any(
+            error.startswith("pair_exceeds_eligibility")
+            for error in report["errors"]
+        )
+
+    engine.dispose()
+
+
+def test_validation_rejects_dates_missing_from_persisted_build_manifest(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'missing-date.sqlite'}")
+    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        service = BreadthRebuildService(db, required_markets=("US",))
+        service.recreate_staging()
+        service.record_build_manifest(
+            {"US": (date(2026, 8, 20), date(2026, 8, 21))},
+            full_market_set=True,
+        )
+        service.stage_results((_result(date(2026, 8, 21)),))
+
+        report = service.validate()
+
+        assert report["valid"] is False
+        assert "missing_date:US:2026-08-20" in report["errors"]
+
+    engine.dispose()
+
+
+def test_selective_rebuild_cannot_replace_other_live_markets(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'partial.sqlite'}")
+    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
     Session = sessionmaker(bind=engine)
     with Session() as db:
         db.add(
             MarketBreadth(
-                market="US",
+                market="HK",
                 date=date(2026, 8, 20),
-                stocks_up_4pct=99,
+                stocks_up_4pct=1,
                 stocks_down_4pct=1,
-                stocks_up_25pct_quarter=0,
-                stocks_down_25pct_quarter=0,
-                stocks_up_25pct_month=0,
-                stocks_down_25pct_month=0,
-                stocks_up_50pct_month=0,
-                stocks_down_50pct_month=0,
-                stocks_up_13pct_34days=0,
-                stocks_down_13pct_34days=0,
-                total_stocks_scanned=100,
+                total_stocks_scanned=2,
             )
         )
         db.commit()
-        service = BreadthRebuildService(db)
+        service = BreadthRebuildService(db, required_markets=("US", "HK"))
         service.recreate_staging()
+        service.record_build_manifest(
+            {"US": (date(2026, 8, 21),)},
+            full_market_set=False,
+        )
         service.stage_results((_result(date(2026, 8, 21)),))
 
         report = service.validate()
-        assert report["valid"] is True
-        service.activate()
+        with pytest.raises(RuntimeError, match="invalid breadth rebuild"):
+            service.activate()
 
-        rows = db.query(MarketBreadth).all()
-        assert [(row.date, row.calculation_revision) for row in rows] == [
-            (date(2026, 8, 21), 2)
-        ]
-        unrelated = db.execute(
-            text("SELECT value FROM unrelated WHERE id = 1")
-        ).scalar()
-        assert unrelated == "keep"
+        assert report["valid"] is False
+        assert "partial_market_set" in report["errors"]
+        assert db.query(MarketBreadth).filter(MarketBreadth.market == "HK").count() == 1
+
+    engine.dispose()
+
+
+def test_validation_rejects_forged_full_market_manifest(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'forged-full.sqlite'}")
+    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        service = BreadthRebuildService(db, required_markets=("US", "HK"))
+        service.recreate_staging()
+        service.record_build_manifest(
+            {"US": (date(2026, 8, 21),)},
+            full_market_set=True,
+        )
+        service.stage_results((_result(date(2026, 8, 21)),))
+
+        report = service.validate()
+
+        assert report["valid"] is False
+        assert "missing_manifest_market:HK" in report["errors"]
 
     engine.dispose()

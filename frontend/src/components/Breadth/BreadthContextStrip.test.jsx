@@ -1,6 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { renderWithProviders } from '../../test/renderWithProviders';
 import BreadthContextStrip from './BreadthContextStrip';
 import { breadthMetricDefinitions } from './breadthMetricDefinitions';
 
@@ -24,7 +25,7 @@ const row = {
 
 describe('BreadthContextStrip', () => {
   it('shows context values with their matching eligible denominators', () => {
-    render(<BreadthContextStrip row={row} />);
+    renderWithProviders(<BreadthContextStrip row={row} />);
 
     expect(screen.getByText('60 (60.0%)')).toBeInTheDocument();
     expect(screen.getByText('35 (35.0%)')).toBeInTheDocument();
@@ -36,7 +37,7 @@ describe('BreadthContextStrip', () => {
   });
 
   it('uses an em dash when a metric has no eligible stocks', () => {
-    render(
+    renderWithProviders(
       <BreadthContextStrip
         row={{ ...row, t2108_eligible_count: 0, t2108_pct: null }}
       />,

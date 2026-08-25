@@ -115,10 +115,19 @@ class StaticBreadthHistoryCoordinator:
                 if calculation_date in existing_by_date
                 and (
                     not static_breadth_row_has_accepted_coverage(
-                        existing_by_date[calculation_date].total_stocks_scanned,
-                        eligible_stocks=eligibility.eligible_counts_by_date[
-                            calculation_date
-                        ],
+                        getattr(
+                            existing_by_date[calculation_date],
+                            "advance_decline_eligible_count",
+                            None,
+                        ),
+                        eligible_stocks=int(
+                            getattr(
+                                existing_by_date[calculation_date],
+                                "advance_decline_eligible_count",
+                                0,
+                            )
+                            or 0
+                        ),
                     )
                     or getattr(
                         existing_by_date[calculation_date],
@@ -197,8 +206,25 @@ class StaticBreadthHistoryCoordinator:
                 {
                     date.fromisoformat(raw_date): int(count or 0)
                     for raw_date, count in (
-                        stats.get("broad_universe_stocks_by_date") or {}
+                        stats.get("scanned_stocks_by_date") or {}
                     ).items()
+                }
+            )
+            required_scanned_by_date = {
+                row.date: int(
+                    getattr(row, "advance_decline_eligible_count", 0) or 0
+                )
+                for row in existing_rows
+            }
+            computed_required = (
+                stats.get("advance_decline_eligible_stocks_by_date")
+                or stats.get("scanned_stocks_by_date")
+                or {}
+            )
+            required_scanned_by_date.update(
+                {
+                    date.fromisoformat(raw_date): int(count or 0)
+                    for raw_date, count in computed_required.items()
                 }
             )
             assessment = classify_static_breadth_backfill(
@@ -207,6 +233,7 @@ class StaticBreadthHistoryCoordinator:
                 as_of_date=request.as_of_date,
                 eligible_stocks_by_date=eligibility.eligible_counts_by_date,
                 scanned_by_date=scanned_by_date,
+                required_scanned_by_date=required_scanned_by_date,
             )
             stats.update(assessment.diagnostics())
             stats.update(

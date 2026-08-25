@@ -195,6 +195,53 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     assert stored[1].ratio_5day == 2.25
     assert stored[1].ratio_10day == 2.11
 
+
+def test_backfill_range_excludes_explicit_non_common_instruments():
+    db = _make_db_session()
+    calculation_date = date(2026, 3, 20)
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAA",
+                market="US",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                is_common_stock=True,
+            ),
+            StockUniverse(
+                symbol="SPY",
+                market="US",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                is_common_stock=False,
+            ),
+        ]
+    )
+    db.commit()
+    price_cache = MagicMock()
+    histories = {
+        "AAA": _flat_price_df(calculation_date),
+        "SPY": _flat_price_df(calculation_date),
+    }
+    price_cache.get_many_cached_only_fresh.side_effect = (
+        lambda symbols, period: {symbol: histories[symbol] for symbol in symbols}
+    )
+    service = BreadthCalculatorService(db, price_cache)
+
+    service.backfill_range(
+        calculation_date,
+        calculation_date,
+        trading_dates=[calculation_date],
+    )
+
+    stored = db.query(MarketBreadth).filter(
+        MarketBreadth.date == calculation_date
+    ).one()
+    assert stored.broad_universe_count == 1
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAA"], period="2y"
+    )
+
 def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():
     db = _make_db_session()
     first_date = date(2026, 3, 19)
@@ -298,6 +345,87 @@ def test_backfill_range_validates_historical_symbols_on_their_eligible_date():
         "2026-03-19": 1,
         "2026-03-20": 1,
     }
+
+
+def test_backfill_range_reports_malformed_history_on_every_applicable_date():
+    db = _make_db_session()
+    first_date = date(2026, 3, 19)
+    second_date = date(2026, 3, 20)
+    malformed = _flat_price_df(second_date).drop(columns=["Adj Close"])
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {"AAA": malformed}
+    service = BreadthCalculatorService(db, price_cache)
+    signature = static_breadth_eligibility_signature(("AAA",))
+
+    result = service.backfill_range(
+        first_date,
+        second_date,
+        trading_dates=[first_date, second_date],
+        cache_only=True,
+        eligible_symbols_by_date={
+            first_date: ("AAA",),
+            second_date: ("AAA",),
+        },
+        eligibility_signatures_by_date={
+            first_date: signature,
+            second_date: signature,
+        },
+    )
+
+    assert result["calculation_errors_by_date"] == {
+        "2026-03-19": 1,
+        "2026-03-20": 1,
+    }
+
+
+def test_backfill_range_excludes_failed_dates_from_rolling_ratios():
+    db = _make_db_session()
+    failed_date = date(2026, 3, 19)
+    processed_date = date(2026, 3, 20)
+    for seed_date in pd.bdate_range(end="2026-03-18", periods=9).date:
+        db.add(
+            MarketBreadth(
+                market="US",
+                date=seed_date,
+                stocks_up_4pct=1,
+                stocks_down_4pct=1,
+                total_stocks_scanned=1,
+                broad_universe_count=1,
+                calculation_revision=2,
+            )
+        )
+    db.commit()
+
+    history = _flat_price_df(processed_date)
+    history = history.drop(index=pd.Timestamp(failed_date))
+    history.loc[pd.Timestamp(processed_date), ["Close", "Adj Close"]] = 105.0
+    history.loc[pd.Timestamp(processed_date), "Volume"] = 1_100_000
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {"AAA": history}
+    service = BreadthCalculatorService(db, price_cache)
+    signature = static_breadth_eligibility_signature(("AAA",))
+
+    result = service.backfill_range(
+        failed_date,
+        processed_date,
+        trading_dates=[failed_date, processed_date],
+        cache_only=True,
+        eligible_symbols_by_date={
+            failed_date: ("AAA",),
+            processed_date: ("AAA",),
+        },
+        eligibility_signatures_by_date={
+            failed_date: signature,
+            processed_date: signature,
+        },
+    )
+
+    stored = db.query(MarketBreadth).filter(
+        MarketBreadth.date == processed_date
+    ).one()
+    assert result["error_dates"] == ["2026-03-19"]
+    assert stored.ratio_5day == 1.25
+    assert stored.ratio_10day == 1.11
 
 
 def test_backfill_range_rejects_signature_for_different_eligible_symbols():

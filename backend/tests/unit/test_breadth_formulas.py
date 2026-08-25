@@ -76,6 +76,32 @@ def test_prepare_feature_frame_initializes_and_smooths_wilder_atr():
     assert result.atr14.iloc[14] == pytest.approx(2.0)
 
 
+def test_prepare_feature_frame_restarts_wilder_atr_after_initial_gap():
+    index = pd.bdate_range("2026-07-01", periods=18)
+    prices = pd.DataFrame(
+        {
+            "Open": 100.0,
+            "High": 101.0,
+            "Low": 99.0,
+            "Close": 100.0,
+            "Adj Close": 100.0,
+            "Volume": 100_000,
+        },
+        index=index,
+    )
+    prices.loc[index[0], "High"] = float("nan")
+
+    result = prepare_feature_frame(
+        prices,
+        pd.Series(1.0, index=index),
+        atr_period=14,
+    )
+
+    assert result.atr14.iloc[:14].isna().all()
+    assert result.atr14.iloc[14] == pytest.approx(2.0)
+    assert result.atr14.iloc[15] == pytest.approx(2.0)
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_up", "expected_down"),
     [

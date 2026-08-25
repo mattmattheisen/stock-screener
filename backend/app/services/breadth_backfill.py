@@ -163,6 +163,7 @@ class BreadthBackfillExecutor:
                 .filter(
                     StockUniverse.is_active == True,
                     StockUniverse.market == calculator.market,
+                    StockUniverse.is_common_stock.is_(True),
                 )
                 .all()
             )
@@ -272,14 +273,18 @@ class BreadthBackfillExecutor:
             for calculation_date in ordered_dates
         }
         required_columns = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+        invalid_symbols = {
+            symbol
+            for symbol, history in prices_by_symbol.items()
+            if not required_columns.issubset(history.columns)
+        }
         for calculation_date in ordered_dates:
             for symbol in symbols_by_date[calculation_date]:
                 history = prices_by_symbol.get(symbol)
-                if history is None or history.empty:
-                    outcomes_by_date[calculation_date].record_cache_miss()
-                elif not required_columns.issubset(history.columns):
+                if symbol in invalid_symbols:
                     outcomes_by_date[calculation_date].record_error()
-                    prices_by_symbol.pop(symbol, None)
+                elif history is None or history.empty:
+                    outcomes_by_date[calculation_date].record_cache_miss()
                 elif calculator._has_exact_advance_decline_session(
                     history,
                     calculation_date,
@@ -288,6 +293,16 @@ class BreadthBackfillExecutor:
                 else:
                     outcomes_by_date[calculation_date].record_insufficient()
 
+        prices_by_symbol = {
+            symbol: history
+            for symbol, history in prices_by_symbol.items()
+            if symbol not in invalid_symbols
+        }
+        processed_dates = [
+            calculation_date
+            for calculation_date in ordered_dates
+            if outcomes_by_date[calculation_date].report().scanned > 0
+        ]
         all_members = tuple(
             BreadthUniverseMember(symbol, currency_by_symbol[symbol])
             for symbol in target_symbols
@@ -299,7 +314,7 @@ class BreadthBackfillExecutor:
         canonical_by_date = calculator.engine.calculate(
             BreadthEngineRequest(
                 market=calculator.market,
-                dates=tuple(ordered_dates),
+                dates=tuple(processed_dates),
                 universes_by_date=universes_by_date,
                 prices_by_symbol=prices_by_symbol,
                 fx_by_currency=fx_by_currency,
@@ -307,11 +322,6 @@ class BreadthBackfillExecutor:
             )
         )
 
-        processed_dates = [
-            calculation_date
-            for calculation_date in ordered_dates
-            if outcomes_by_date[calculation_date].report().scanned > 0
-        ]
         error_dates = [
             calculation_date.isoformat()
             for calculation_date in ordered_dates
@@ -343,7 +353,16 @@ class BreadthBackfillExecutor:
                         for value in ordered_dates
                     },
                     "broad_universe_stocks_by_date": {
-                        value.isoformat(): canonical_by_date[value].broad_universe_count
+                        value.isoformat(): len(universes_by_date[value].members)
+                        for value in ordered_dates
+                    },
+                    "advance_decline_eligible_stocks_by_date": {
+                        value.isoformat(): (
+                            canonical_by_date[value]
+                            .eligibility.advance_decline_eligible_count
+                            if value in canonical_by_date
+                            else 0
+                        )
                         for value in ordered_dates
                     },
                     "calculation_errors_by_date": {
