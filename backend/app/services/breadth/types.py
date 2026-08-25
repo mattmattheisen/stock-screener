@@ -19,6 +19,21 @@ class BreadthFormulaPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class BreadthDailyCount:
+    date: date
+    stocks_up_4pct: int
+    stocks_down_4pct: int
+    market: str | None = None
+    calculation_revision: int = 2
+
+
+@dataclass(frozen=True, slots=True)
+class BreadthRatios:
+    ratio_5day: float | None = None
+    ratio_10day: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class BreadthUniverseMember:
     symbol: str
     currency: str
