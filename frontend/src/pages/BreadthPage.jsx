@@ -9,7 +9,7 @@ import {
   Paper,
   Typography,
 } from '@mui/material';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 
 import {
   getBreadthBootstrap,
@@ -216,7 +216,7 @@ function BreadthPage() {
             </Typography>
           </Box>
           {currentBreadth?.date && (
-            <Chip label={format(new Date(currentBreadth.date), 'MMM dd, yyyy')} size="small" />
+            <Chip label={format(parseISO(currentBreadth.date), 'MMM dd, yyyy')} size="small" />
           )}
         </Box>
         <BreadthContextStrip row={currentBreadth} />

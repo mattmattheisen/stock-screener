@@ -134,6 +134,17 @@ beforeEach(() => {
 });
 
 describe('BreadthPage', () => {
+  it('renders the latest date without shifting a date-only value', async () => {
+    vi.stubEnv('TZ', 'America/Los_Angeles');
+    try {
+      renderBreadthPage();
+
+      expect(await screen.findByText('Apr 24, 2026')).toBeInTheDocument();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('defaults breadth requests to the runtime primary market', async () => {
     renderBreadthPage();
 

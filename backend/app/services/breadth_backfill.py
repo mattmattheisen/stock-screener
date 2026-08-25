@@ -191,18 +191,13 @@ class BreadthBackfillExecutor:
             rows_by_symbol = {row.symbol: row for row in stock_rows}
             symbols_by_date = dict(explicit_symbols)
 
+        price_symbols = target_symbols
         skipped_unsupported_symbols: list[str] = []
         if exclude_unsupported_price_symbols:
-            target_symbols, skipped_unsupported_symbols = split_supported_price_symbols(
+            price_symbols, skipped_unsupported_symbols = split_supported_price_symbols(
                 target_symbols
             )
-            supported = set(target_symbols)
-            symbols_by_date = {
-                calculation_date: tuple(
-                    symbol for symbol in symbols if symbol in supported
-                )
-                for calculation_date, symbols in symbols_by_date.items()
-            }
+        unsupported_symbols = set(skipped_unsupported_symbols)
 
         currency_by_symbol = {
             symbol: (
@@ -231,8 +226,9 @@ class BreadthBackfillExecutor:
 
         prices_by_symbol: dict[str, Any] = {}
         price_coverage = BreadthPriceCoverageAccumulator()
-        for offset in range(0, len(target_symbols), 500):
-            batch_symbols = target_symbols[offset : offset + 500]
+        history_period = calculator._history_period_for_dates(tuple(ordered_dates))
+        for offset in range(0, len(price_symbols), 500):
+            batch_symbols = price_symbols[offset : offset + 500]
             if required_as_of_date is not None and explicit_symbols is not None:
                 grouped: dict[date, list[str]] = {}
                 for symbol in batch_symbols:
@@ -245,19 +241,26 @@ class BreadthBackfillExecutor:
                 loaded: dict[str, Any] = {}
                 cache_misses: list[str] = []
                 for symbol_date, symbols in grouped.items():
+                    group_kwargs: dict[str, Any] = {
+                        "required_as_of_date": symbol_date,
+                    }
+                    if history_period != "2y":
+                        group_kwargs["period"] = history_period
                     group_prices, group_misses = calculator._load_price_data_for_batch(
                         batch_symbols=symbols,
                         cache_only=policy.cache_only,
-                        required_as_of_date=symbol_date,
+                        **group_kwargs,
                     )
                     loaded.update(group_prices)
                     cache_misses.extend(group_misses)
             else:
-                kwargs = (
+                kwargs: dict[str, Any] = (
                     {"required_as_of_date": required_as_of_date}
                     if required_as_of_date is not None
                     else {}
                 )
+                if history_period != "2y":
+                    kwargs["period"] = history_period
                 loaded, cache_misses = calculator._load_price_data_for_batch(
                     batch_symbols=batch_symbols,
                     cache_only=policy.cache_only,
@@ -281,7 +284,9 @@ class BreadthBackfillExecutor:
         for calculation_date in ordered_dates:
             for symbol in symbols_by_date[calculation_date]:
                 history = prices_by_symbol.get(symbol)
-                if symbol in invalid_symbols:
+                if symbol in unsupported_symbols:
+                    outcomes_by_date[calculation_date].record_insufficient()
+                elif symbol in invalid_symbols:
                     outcomes_by_date[calculation_date].record_error()
                 elif history is None or history.empty:
                     outcomes_by_date[calculation_date].record_cache_miss()
@@ -303,6 +308,10 @@ class BreadthBackfillExecutor:
             for calculation_date in ordered_dates
             if outcomes_by_date[calculation_date].report().scanned > 0
         ]
+        prices_by_symbol = calculator._prices_for_feature_window(
+            prices_by_symbol,
+            tuple(processed_dates),
+        )
         all_members = tuple(
             BreadthUniverseMember(symbol, currency_by_symbol[symbol])
             for symbol in target_symbols

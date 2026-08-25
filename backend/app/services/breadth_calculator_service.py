@@ -156,6 +156,10 @@ class BreadthCalculatorService:
                 prices_by_symbol[symbol] = history
                 outcomes.record_scanned()
 
+        prices_by_symbol = self._prices_for_feature_window(
+            prices_by_symbol,
+            (calculation_date,),
+        )
         fx_by_currency = self._load_fx_for_prices(members, prices_by_symbol)
         seeds = self._load_ratio_seed_counts(calculation_date, limit=9)
         canonical = self.engine.calculate(
@@ -226,6 +230,44 @@ class BreadthCalculatorService:
                     required_dates,
                 )
             )
+        return result
+
+    @staticmethod
+    def _history_period_for_dates(calculation_dates: tuple[date, ...]) -> str:
+        if not calculation_dates:
+            return "2y"
+        required_calendar_days = (
+            max(calculation_dates) - min(calculation_dates)
+        ).days + 370
+        if required_calendar_days <= 730:
+            return "2y"
+        if required_calendar_days <= 1825:
+            return "5y"
+        return "max"
+
+    @staticmethod
+    def _prices_for_feature_window(
+        prices_by_symbol: Mapping[str, pd.DataFrame],
+        calculation_dates: tuple[date, ...],
+    ) -> dict[str, pd.DataFrame]:
+        """Retain requested sessions plus the exact 251-session warm-up."""
+        if not calculation_dates:
+            return {}
+        first_date = min(calculation_dates)
+        last_date = max(calculation_dates)
+        result: dict[str, pd.DataFrame] = {}
+        for symbol, history in prices_by_symbol.items():
+            ordered = history.sort_index()
+            session_dates = [pd.Timestamp(value).date() for value in ordered.index]
+            in_scope = [
+                position
+                for position, session_date in enumerate(session_dates)
+                if first_date <= session_date <= last_date
+            ]
+            if not in_scope:
+                continue
+            start = max(0, in_scope[0] - 251)
+            result[symbol] = ordered.iloc[start : in_scope[-1] + 1]
         return result
 
     def _load_ratio_seed_counts(
@@ -360,9 +402,10 @@ class BreadthCalculatorService:
         cache_only: bool,
         *,
         required_as_of_date: date | None = None,
+        period: str = "2y",
     ) -> tuple[dict[str, pd.DataFrame | None], list[str]]:
         """Load batch price histories once, with optional cache misses fetched a single time."""
-        cache_kwargs = {"period": "2y"}
+        cache_kwargs = {"period": period}
         if required_as_of_date is not None:
             cache_kwargs["required_as_of_date"] = required_as_of_date
         price_data_by_symbol = self.price_cache.get_many_cached_only_fresh(
@@ -382,15 +425,23 @@ class BreadthCalculatorService:
             price_history = price_data_by_symbol.get(symbol)
             if price_history is None or price_history.empty:
                 cache_miss_symbols.append(symbol)
-                price_data_by_symbol[symbol] = self._calculate_stock_history(symbol)
+                price_data_by_symbol[symbol] = self._calculate_stock_history(
+                    symbol,
+                    period=period,
+                )
 
         return price_data_by_symbol, cache_miss_symbols
 
-    def _calculate_stock_history(self, symbol: str) -> pd.DataFrame | None:
+    def _calculate_stock_history(
+        self,
+        symbol: str,
+        *,
+        period: str = "2y",
+    ) -> pd.DataFrame | None:
         """Fetch a symbol's full historical data once for reuse."""
         return self.price_cache.get_historical_data(
             symbol=symbol,
-            period="2y",
+            period=period,
         )
 
     def find_missing_dates(

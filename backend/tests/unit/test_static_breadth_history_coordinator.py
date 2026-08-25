@@ -201,6 +201,7 @@ def test_ensure_breadth_history_recomputes_incomplete_existing_rows(monkeypatch)
                         date=as_of_date,
                         total_stocks_scanned=1,
                         advance_decline_eligible_count=1,
+                        eligibility_signature=_breadth_signature(as_of_date),
                     )
                 ])
             if entity is StockUniverse.symbol:

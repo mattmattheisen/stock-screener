@@ -55,6 +55,32 @@ def test_prepare_feature_frame_separates_adjusted_signals_from_raw_liquidity():
     assert result.iloc[0].dollar_volume_usd == pytest.approx(16_000_000.0)
 
 
+def test_prepare_feature_frame_normalizes_timezone_aware_daily_sessions():
+    index = pd.bdate_range("2026-07-01", periods=40, tz="America/New_York")
+    prices = pd.DataFrame(
+        {
+            "Open": 100.0,
+            "High": 101.0,
+            "Low": 99.0,
+            "Close": 100.0,
+            "Adj Close": 100.0,
+            "Volume": 1_000_000,
+        },
+        index=index,
+    )
+    fx = pd.Series(1.0, index=index.tz_localize(None))
+
+    features = prepare_feature_frame(prices, fx)
+    signals = signal_flags_at(
+        features,
+        index[-1].date(),
+        BreadthFormulaPolicy(),
+    )
+
+    assert features.index.tz is None
+    assert signals.eligibility.advance_decline is True
+
+
 def test_prepare_feature_frame_initializes_and_smooths_wilder_atr():
     index = pd.bdate_range("2026-07-01", periods=15)
     prices = pd.DataFrame(

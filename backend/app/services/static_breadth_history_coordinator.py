@@ -121,9 +121,8 @@ class StaticBreadthHistoryCoordinator:
                             None,
                         ),
                         eligible_stocks=int(
-                            getattr(
-                                existing_by_date[calculation_date],
-                                "advance_decline_eligible_count",
+                            eligibility.eligible_counts_by_date.get(
+                                calculation_date,
                                 0,
                             )
                             or 0

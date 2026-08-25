@@ -16,6 +16,13 @@ from .types import (
 _REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Adj Close", "Volume")
 
 
+def _normalized_session_index(values: object) -> pd.DatetimeIndex:
+    index = pd.DatetimeIndex(pd.to_datetime(values))
+    if index.tz is not None:
+        index = index.tz_localize(None)
+    return index.normalize()
+
+
 def _wilder_average(values: pd.Series, period: int) -> pd.Series:
     result = pd.Series(np.nan, index=values.index, dtype=float)
     if period <= 0 or len(values) < period:
@@ -47,12 +54,16 @@ def prepare_feature_frame(
     if missing:
         raise ValueError(f"Missing required price columns: {', '.join(missing)}")
 
-    frame = prices.loc[:, _REQUIRED_PRICE_COLUMNS].copy().sort_index()
+    frame = prices.loc[:, _REQUIRED_PRICE_COLUMNS].copy()
+    frame.index = _normalized_session_index(frame.index)
+    frame = frame.sort_index()
     if frame.index.has_duplicates:
         raise ValueError("Price frame index must contain unique sessions")
     frame = frame.apply(pd.to_numeric, errors="coerce")
 
-    fx = pd.to_numeric(fx_to_usd, errors="coerce").reindex(frame.index)
+    fx = pd.to_numeric(fx_to_usd, errors="coerce").copy()
+    fx.index = _normalized_session_index(fx.index)
+    fx = fx.reindex(frame.index)
     raw_close = frame["Close"].where(frame["Close"] > 0)
     adjusted_close = frame["Adj Close"].where(frame["Adj Close"] > 0)
     adjustment_factor = adjusted_close / raw_close

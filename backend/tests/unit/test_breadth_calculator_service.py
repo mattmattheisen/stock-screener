@@ -18,6 +18,9 @@ from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
+from app.services.point_in_time_universe_service import (
+    hash_point_in_time_universe_symbols,
+)
 
 
 def _policy(mode: str, target: date):
@@ -520,6 +523,14 @@ def test_backfill_range_can_exclude_unsupported_yahoo_symbols(monkeypatch):
     assert result["cache_miss_stocks"] == 0
     assert result["skipped_unsupported_symbols"] == 1
     assert result["unsupported_symbols_sample"] == ["0335.T"]
+    stored = db.query(MarketBreadth).filter_by(
+        market="JP",
+        date=trading_date,
+    ).one()
+    assert stored.broad_universe_count == 2
+    assert stored.eligibility_signature == hash_point_in_time_universe_symbols(
+        ("0335.T", "7203.T")
+    )
 
 
 def test_backfill_range_can_require_target_date_cached_prices(monkeypatch):
@@ -548,6 +559,90 @@ def test_backfill_range_can_require_target_date_cached_prices(monkeypatch):
         cache_only=True,
         required_as_of_date=trading_date,
     )
+
+
+def test_backfill_range_requests_history_for_full_interval_and_warmup(monkeypatch):
+    db = _make_db_session()
+    db.add(
+        StockUniverse(
+            symbol="AAA",
+            market="US",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    db.commit()
+    service = BreadthCalculatorService(db, MagicMock())
+    load_prices = MagicMock(return_value=({"AAA": None}, {"AAA"}))
+    monkeypatch.setattr(service, "_load_price_data_for_batch", load_prices)
+    start_date = date(2024, 1, 2)
+    end_date = date(2026, 8, 25)
+
+    service.backfill_range(
+        start_date,
+        end_date,
+        trading_dates=[start_date, end_date],
+        policy=_policy("refresh_guarded", end_date),
+    )
+
+    load_prices.assert_called_once_with(
+        batch_symbols=["AAA"],
+        cache_only=True,
+        period="5y",
+    )
+
+
+def test_daily_breadth_ignores_fx_dates_before_the_feature_window():
+    db = _make_db_session()
+    calculation_date = date(2026, 8, 25)
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            currency="HKD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    db.commit()
+    recent_index = pd.bdate_range(end=calculation_date, periods=253)
+    index = pd.DatetimeIndex([pd.Timestamp("2020-01-02"), *recent_index])
+    prices = pd.DataFrame(
+        {
+            "Open": 100.0,
+            "High": 101.0,
+            "Low": 99.0,
+            "Close": 100.0,
+            "Adj Close": 100.0,
+            "Volume": 1_000_000,
+        },
+        index=index,
+    )
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {"0700.HK": prices}
+    fx_service = MagicMock()
+
+    def historical_rates(currencies, required_dates):
+        assert currencies == ("HKD",)
+        assert date(2020, 1, 2) not in required_dates
+        return {
+            "HKD": pd.Series(
+                0.13,
+                index=pd.DatetimeIndex(sorted(required_dates)),
+            )
+        }
+
+    fx_service.get_historical_usd_rates.side_effect = historical_rates
+    service = BreadthCalculatorService(
+        db,
+        price_cache,
+        market="HK",
+        fx_service=fx_service,
+    )
+
+    result = service.calculate_daily_breadth(calculation_date)
+
+    assert result.indicators["advance_decline_eligible_count"] == 1
 
 
 def test_backfill_range_cache_only_reports_calculation_errors(monkeypatch):
