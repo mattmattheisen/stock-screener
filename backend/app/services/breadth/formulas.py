@@ -23,6 +23,19 @@ def _normalized_session_index(values: object) -> pd.DatetimeIndex:
     return index.normalize()
 
 
+def validate_price_frame(prices: pd.DataFrame) -> None:
+    """Reject structural defects that make per-session features ambiguous."""
+    missing = [column for column in _REQUIRED_PRICE_COLUMNS if column not in prices]
+    if missing:
+        raise ValueError(f"Missing required price columns: {', '.join(missing)}")
+    try:
+        normalized_index = _normalized_session_index(prices.index)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Price frame index must contain valid sessions") from exc
+    if normalized_index.has_duplicates:
+        raise ValueError("Price frame index must contain unique sessions")
+
+
 def _wilder_average(values: pd.Series, period: int) -> pd.Series:
     result = pd.Series(np.nan, index=values.index, dtype=float)
     if period <= 0 or len(values) < period:
@@ -50,15 +63,11 @@ def prepare_feature_frame(
 ) -> pd.DataFrame:
     """Prepare adjusted signal inputs while retaining raw USD liquidity inputs."""
 
-    missing = [column for column in _REQUIRED_PRICE_COLUMNS if column not in prices]
-    if missing:
-        raise ValueError(f"Missing required price columns: {', '.join(missing)}")
+    validate_price_frame(prices)
 
     frame = prices.loc[:, _REQUIRED_PRICE_COLUMNS].copy()
     frame.index = _normalized_session_index(frame.index)
     frame = frame.sort_index()
-    if frame.index.has_duplicates:
-        raise ValueError("Price frame index must contain unique sessions")
     frame = frame.apply(pd.to_numeric, errors="coerce")
 
     fx = pd.to_numeric(fx_to_usd, errors="coerce").copy()

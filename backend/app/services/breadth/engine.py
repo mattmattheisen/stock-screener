@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -12,7 +13,7 @@ from app.services.point_in_time_universe_service import (
     hash_point_in_time_universe_symbols,
 )
 
-from .formulas import prepare_feature_frame, signal_flags_at
+from .formulas import prepare_feature_frame, signal_flags_at, validate_price_frame
 from .ratios import calculate_inclusive_ratios
 from .types import (
     BreadthDailyCount,
@@ -23,6 +24,8 @@ from .types import (
     BreadthUniverseSnapshot,
     SymbolBreadthSignals,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +70,13 @@ class BreadthEngine:
         for symbol, currency in currencies_by_symbol.items():
             prices = request.prices_by_symbol.get(symbol)
             if prices is None or prices.empty:
+                continue
+            try:
+                validate_price_frame(prices)
+            except ValueError as exc:
+                logger.warning(
+                    "Skipping malformed breadth prices for %s: %s", symbol, exc
+                )
                 continue
             fx = request.fx_by_currency.get(currency)
             if fx is None:

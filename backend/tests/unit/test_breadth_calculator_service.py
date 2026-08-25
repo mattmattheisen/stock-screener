@@ -218,6 +218,35 @@ def test_calculate_daily_breadth_counts_fresh_cache_misses():
     assert result.coverage.cache_miss_symbols_sample == ("BBB",)
 
 
+def test_daily_breadth_preserves_month_eligibility_without_prior_close():
+    db = _make_db_session()
+    db.add(
+        StockUniverse(
+            symbol="MONTH",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=True,
+        )
+    )
+    db.commit()
+    calculation_date = date(2026, 3, 20)
+    prices = _flat_price_df(calculation_date)
+    prices.loc[prices.index[-21], ["Close", "Adj Close"]] = 80.0
+    prices.loc[prices.index[-2], "Adj Close"] = None
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {"MONTH": prices}
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.calculate_daily_breadth(calculation_date)
+
+    assert result.coverage.total_stocks_scanned == 1
+    assert result.indicators["advance_decline_eligible_count"] == 0
+    assert result.indicators["stockbee_month_eligible_count"] == 1
+    assert result.indicators["stocks_up_25pct_month"] == 1
+
+
 def test_cache_only_daily_breadth_requires_calculation_session():
     db = MagicMock()
     db.query.return_value.filter.return_value.all.return_value = [
@@ -592,6 +621,36 @@ def test_backfill_range_requests_history_for_full_interval_and_warmup(monkeypatc
     )
 
 
+def test_backfill_range_requests_history_for_old_narrow_interval(monkeypatch):
+    db = _make_db_session()
+    db.add(
+        StockUniverse(
+            symbol="AAA",
+            market="US",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    db.commit()
+    service = BreadthCalculatorService(db, MagicMock())
+    load_prices = MagicMock(return_value=({"AAA": None}, {"AAA"}))
+    monkeypatch.setattr(service, "_load_price_data_for_batch", load_prices)
+    old_date = date(2022, 1, 3)
+
+    service.backfill_range(
+        old_date,
+        old_date,
+        trading_dates=[old_date],
+        policy=_policy("refresh_guarded", old_date),
+    )
+
+    load_prices.assert_called_once_with(
+        batch_symbols=["AAA"],
+        cache_only=True,
+        period="max",
+    )
+
+
 def test_daily_breadth_ignores_fx_dates_before_the_feature_window():
     db = _make_db_session()
     calculation_date = date(2026, 8, 25)
@@ -677,6 +736,39 @@ def test_backfill_range_cache_only_reports_calculation_errors(monkeypatch):
     assert result["cache_miss_stocks"] == 0
     assert result["error_stocks"] == 1
     assert result["insufficient_history_observations"] == 0
+
+
+def test_backfill_range_reports_duplicate_sessions_without_aborting(monkeypatch):
+    db = _make_db_session()
+    db.add_all([
+        StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+        StockUniverse(symbol="BAD", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+    ])
+    db.commit()
+
+    trading_date = date(2026, 3, 20)
+    aaa_df = _make_price_df(trading_date)
+    duplicate = aaa_df.iloc[[-1]].copy()
+    duplicate.index = pd.DatetimeIndex([aaa_df.index[-1] + pd.Timedelta(hours=1)])
+    bad_df = pd.concat([aaa_df, duplicate])
+    service = BreadthCalculatorService(db, MagicMock())
+    monkeypatch.setattr(
+        service,
+        "_load_price_data_for_batch",
+        MagicMock(return_value=({"AAA": aaa_df, "BAD": bad_df}, set())),
+    )
+
+    result = service.backfill_range(
+        trading_date,
+        trading_date,
+        trading_dates=[trading_date],
+        policy=_policy("refresh_guarded", trading_date),
+    )
+
+    assert result["processed"] == 1
+    assert result["error_stocks"] == 1
+    row = db.query(MarketBreadth).filter(MarketBreadth.date == trading_date).one()
+    assert row.advance_decline_eligible_count == 1
 
 
 def test_fill_gaps_delegates_to_single_backfill_range_call(monkeypatch):

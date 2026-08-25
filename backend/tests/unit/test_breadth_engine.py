@@ -2,6 +2,7 @@ from datetime import date
 
 import pandas as pd
 import pytest
+
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
 from app.services.breadth.types import (
     BreadthUniverseMember,
@@ -78,3 +79,37 @@ def test_engine_tracks_metric_specific_eligibility_for_mixed_history():
 
     record = result.to_record_mapping()
     assert record["total_stocks_scanned"] == record["broad_universe_count"] == 2
+
+
+def test_engine_isolates_a_malformed_symbol_frame():
+    index = pd.bdate_range(end="2026-08-21", periods=252)
+    calculation_date = date(2026, 8, 21)
+    malformed_index = index.append(
+        pd.DatetimeIndex([index[-1] + pd.Timedelta(hours=1)])
+    )
+    members = (
+        BreadthUniverseMember("BAD", "USD"),
+        BreadthUniverseMember("GOOD", "USD"),
+    )
+    snapshot = BreadthUniverseSnapshot(
+        calculation_date=calculation_date,
+        members=members,
+        broad_signature=hash_point_in_time_universe_symbols(("BAD", "GOOD")),
+    )
+
+    result = BreadthEngine().calculate(
+        BreadthEngineRequest(
+            market="US",
+            dates=(calculation_date,),
+            universes_by_date={calculation_date: snapshot},
+            prices_by_symbol={
+                "BAD": _prices(malformed_index, [100.0] * len(malformed_index)),
+                "GOOD": _prices(index, [100.0] * 251 + [104.0]),
+            },
+            fx_by_currency={"USD": pd.Series(1.0, index=malformed_index)},
+        )
+    )[calculation_date]
+
+    assert result.broad_universe_count == 2
+    assert result.eligibility.advance_decline_eligible_count == 1
+    assert result.values.advancing_count == 1

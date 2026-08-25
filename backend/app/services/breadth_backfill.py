@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from ..domain.providers.price_symbol_support import split_supported_price_symbols
 from ..models.stock_universe import StockUniverse
 from .breadth.engine import BreadthEngineRequest
+from .breadth.formulas import validate_price_frame
 from .breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
 from .breadth_coverage import (
     BreadthCoverageReport,
@@ -226,7 +227,10 @@ class BreadthBackfillExecutor:
 
         prices_by_symbol: dict[str, Any] = {}
         price_coverage = BreadthPriceCoverageAccumulator()
-        history_period = calculator._history_period_for_dates(tuple(ordered_dates))
+        history_period = calculator._history_period_for_dates(
+            tuple(ordered_dates),
+            cache_anchor_date=datetime.now(UTC).date(),
+        )
         for offset in range(0, len(price_symbols), 500):
             batch_symbols = price_symbols[offset : offset + 500]
             if required_as_of_date is not None and explicit_symbols is not None:
@@ -275,12 +279,12 @@ class BreadthBackfillExecutor:
             calculation_date: BreadthOutcomeCounter()
             for calculation_date in ordered_dates
         }
-        required_columns = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
-        invalid_symbols = {
-            symbol
-            for symbol, history in prices_by_symbol.items()
-            if not required_columns.issubset(history.columns)
-        }
+        invalid_symbols: set[str] = set()
+        for symbol, history in prices_by_symbol.items():
+            try:
+                validate_price_frame(history)
+            except ValueError:
+                invalid_symbols.add(symbol)
         for calculation_date in ordered_dates:
             for symbol in symbols_by_date[calculation_date]:
                 history = prices_by_symbol.get(symbol)
@@ -290,7 +294,7 @@ class BreadthBackfillExecutor:
                     outcomes_by_date[calculation_date].record_error()
                 elif history is None or history.empty:
                     outcomes_by_date[calculation_date].record_cache_miss()
-                elif calculator._has_exact_advance_decline_session(
+                elif calculator._has_exact_session(
                     history,
                     calculation_date,
                 ):

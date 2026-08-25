@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..models.market_breadth import MarketBreadth
 from ..models.stock_universe import StockUniverse
 from .breadth.engine import BreadthEngine, BreadthEngineRequest
+from .breadth.formulas import validate_price_frame
 from .breadth.persistence import BreadthPersistence
 from .breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
@@ -150,7 +151,12 @@ class BreadthCalculatorService:
                 if history is None or history.empty:
                     outcomes.record_cache_miss()
                     continue
-                if not self._has_exact_advance_decline_session(history, calculation_date):
+                try:
+                    validate_price_frame(history)
+                except ValueError:
+                    outcomes.record_error()
+                    continue
+                if not self._has_exact_session(history, calculation_date):
                     outcomes.record_insufficient()
                     continue
                 prices_by_symbol[symbol] = history
@@ -186,23 +192,14 @@ class BreadthCalculatorService:
         )
 
     @staticmethod
-    def _has_exact_advance_decline_session(
+    def _has_exact_session(
         history: pd.DataFrame,
         calculation_date: date,
     ) -> bool:
-        if "Adj Close" not in history.columns:
-            return False
-        ordered = history.sort_index()
-        positions = [
-            position
-            for position, value in enumerate(ordered.index)
-            if pd.Timestamp(value).date() == calculation_date
-        ]
-        if not positions or positions[-1] < 1:
-            return False
-        current = ordered["Adj Close"].iloc[positions[-1]]
-        prior = ordered["Adj Close"].iloc[positions[-1] - 1]
-        return pd.notna(current) and pd.notna(prior)
+        return any(
+            pd.Timestamp(value).date() == calculation_date
+            for value in history.index
+        )
 
     def _load_fx_for_prices(
         self,
@@ -233,12 +230,15 @@ class BreadthCalculatorService:
         return result
 
     @staticmethod
-    def _history_period_for_dates(calculation_dates: tuple[date, ...]) -> str:
+    def _history_period_for_dates(
+        calculation_dates: tuple[date, ...],
+        *,
+        cache_anchor_date: date,
+    ) -> str:
         if not calculation_dates:
             return "2y"
-        required_calendar_days = (
-            max(calculation_dates) - min(calculation_dates)
-        ).days + 370
+        warmup_start = min(calculation_dates) - timedelta(days=370)
+        required_calendar_days = (cache_anchor_date - warmup_start).days
         if required_calendar_days <= 730:
             return "2y"
         if required_calendar_days <= 1825:
