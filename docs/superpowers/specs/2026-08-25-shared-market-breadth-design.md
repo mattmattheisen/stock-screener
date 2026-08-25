@@ -369,6 +369,7 @@ t2108_count
 t2108_pct
 atr_10x_extension_count
 broad_universe_count
+advance_decline_eligible_count
 stockbee_daily_eligible_count
 stockbee_month_eligible_count
 stockbee_34day_eligible_count
@@ -431,7 +432,8 @@ eligible count, and a small source legend.
 
 The current context strip shows:
 
-- advancing and declining counts and broad-universe percentages — Context;
+- advancing and declining counts and percentages of
+  `advance_decline_eligible_count` — Context;
 - new 52-week highs and lows — StockBee;
 - T2108 and its eligible denominator — StockBee;
 - 10x ATR extension count and denominator — Screenshot-derived;
