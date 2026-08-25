@@ -400,8 +400,8 @@ class DataFetchLock:
         return False
 
 
-def serialized_data_fetch(task_name: str):
-    """Decorator for tasks that fetch external data.
+def _serialized_data_fetch(task_name: str):
+    """Wrap a task body with serialized lease acquisition and child cleanup.
 
     Acquires a per-market distributed lock before running. The market is
     pulled from the task's ``market`` kwarg; tasks without it lock on the
@@ -409,11 +409,8 @@ def serialized_data_fetch(task_name: str):
     while HK refresh is in-flight) while preventing intra-market contention.
     Supports re-entrant calls by task_id.
 
-    Example:
-        @celery_app.task(bind=True, name='app.tasks.cache_tasks.smart_refresh_cache')
-        @serialized_data_fetch('smart_refresh_cache')
-        def smart_refresh_cache(self, mode="auto", market=None):
-            ...
+    Celery tasks must use :func:`serialized_data_fetch_task`, which also
+    installs parent-process cleanup for abrupt worker termination.
     """
     def decorator(func):
         @wraps(func)
@@ -541,4 +538,30 @@ def serialized_data_fetch(task_name: str):
                     lock.release(task_id, market=market_value)
 
         return wrapper
+    return decorator
+
+
+def serialized_data_fetch_task(
+    celery_app: Any,
+    task_name: str,
+    *,
+    base: type[Any] | None = None,
+    **task_options: Any,
+):
+    """Register a serialized Celery task with parent-process lease recovery."""
+    from .runtime_activity_failure_hooks import SerializedDataFetchRecoveryTask
+
+    task_base = base or SerializedDataFetchRecoveryTask
+    if not issubclass(task_base, SerializedDataFetchRecoveryTask):
+        raise TypeError(
+            "serialized data-fetch task bases must inherit "
+            "SerializedDataFetchRecoveryTask"
+        )
+    if task_options.pop("bind", True) is not True:
+        raise TypeError("serialized data-fetch tasks must be bound")
+
+    def decorator(func):
+        wrapped = _serialized_data_fetch(task_name)(func)
+        return celery_app.task(bind=True, base=task_base, **task_options)(wrapped)
+
     return decorator

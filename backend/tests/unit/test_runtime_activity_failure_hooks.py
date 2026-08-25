@@ -9,6 +9,7 @@ from celery.worker.request import Request
 
 
 SMART_REFRESH_TASK = "app.tasks.cache_tasks.smart_refresh_cache"
+FAILED_PRICE_RETRY_TASK = "app.tasks.cache_tasks.retry_failed_price_symbols"
 
 
 def _patch_failure_dependencies(monkeypatch, module):
@@ -91,6 +92,44 @@ def test_publish_runtime_activity_failure_keeps_shared_cleanup_scope_for_missing
     )
     harness.coordination.release_external_fetch.assert_called_once_with("shared-task")
     harness.db.close.assert_called_once_with()
+
+
+def test_failed_price_retry_worker_loss_releases_resources_without_publishing_activity(
+    monkeypatch,
+):
+    import app.tasks.cache_tasks as cache_tasks
+    import app.tasks.runtime_activity_failure_hooks as module
+
+    harness = _patch_failure_dependencies(monkeypatch, module)
+    monkeypatch.setattr(
+        Request,
+        "on_failure",
+        lambda self, exc_info, send_failed_event=True, return_ok=False: "super-result",
+    )
+
+    request = object.__new__(cache_tasks.retry_failed_price_symbols.Request)
+    request._task = SimpleNamespace(name=FAILED_PRICE_RETRY_TASK)
+    request.id = "lost-retry-task"
+    request._kwargs = {"market": "US"}
+
+    result = request.on_failure(
+        SimpleNamespace(
+            exception=RuntimeError("Worker exited prematurely: signal 9 (SIGKILL)")
+        )
+    )
+
+    assert result == "super-result"
+    assert harness.failed_activity_calls == []
+    harness.price_cache.complete_warmup_heartbeat.assert_not_called()
+    harness.lock.release.assert_called_once_with("lost-retry-task", market="US")
+    harness.coordination.release_market_workload.assert_called_once_with(
+        "lost-retry-task",
+        market="US",
+    )
+    harness.coordination.release_external_fetch.assert_called_once_with(
+        "lost-retry-task"
+    )
+    harness.db.close.assert_not_called()
 
 
 def test_publish_runtime_activity_failure_ignores_untracked_tasks(monkeypatch):

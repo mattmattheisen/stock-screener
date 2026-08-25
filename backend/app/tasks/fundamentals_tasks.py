@@ -6,7 +6,7 @@ Provides background tasks for:
 - On-demand fundamental refresh
 - Initial cache population
 
-All data-fetching tasks use the @serialized_data_fetch decorator
+All data-fetching tasks use the @serialized_data_fetch_task decorator
 to ensure only one task fetches external data at a time.
 """
 import logging
@@ -35,7 +35,7 @@ from ..services.market_activity_service import (
 )
 from ..services.ticker_validation_service import TickerValidationService
 from ..config import settings
-from .data_fetch_lock import serialized_data_fetch
+from .data_fetch_lock import serialized_data_fetch_task
 from .transient_database import raise_if_transient_database_error
 
 logger = logging.getLogger(__name__)
@@ -198,13 +198,13 @@ def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
     }
 
 
-@celery_app.task(
-    bind=True,
+@serialized_data_fetch_task(
+    celery_app,
+    "refresh_all_fundamentals",
     name='app.tasks.fundamentals_tasks.refresh_all_fundamentals',
     soft_time_limit=7200,
     max_retries=2,
 )
-@serialized_data_fetch('refresh_all_fundamentals')
 def refresh_all_fundamentals(
     self,
     market: str | None = None,
@@ -592,8 +592,11 @@ def refresh_all_fundamentals(
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.fundamentals_tasks.refresh_symbol_fundamentals')
-@serialized_data_fetch('refresh_symbol_fundamentals')
+@serialized_data_fetch_task(
+    celery_app,
+    "refresh_symbol_fundamentals",
+    name="app.tasks.fundamentals_tasks.refresh_symbol_fundamentals",
+)
 def refresh_symbol_fundamentals(self, symbol: str):
     """
     On-demand task to refresh fundamentals for a single stock.
@@ -640,8 +643,11 @@ def refresh_symbol_fundamentals(self, symbol: str):
         }
 
 
-@celery_app.task(bind=True, name='app.tasks.fundamentals_tasks.populate_initial_cache')
-@serialized_data_fetch('populate_initial_cache')
+@serialized_data_fetch_task(
+    celery_app,
+    "populate_initial_cache",
+    name="app.tasks.fundamentals_tasks.populate_initial_cache",
+)
 def populate_initial_cache(self, limit: Optional[int] = None):
     """
     One-time task to populate fundamental cache immediately after deployment.
@@ -870,8 +876,11 @@ def get_cache_stats(symbols: Optional[List[str]] = None):
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.fundamentals_tasks.refresh_all_fundamentals_hybrid')
-@serialized_data_fetch('refresh_all_fundamentals_hybrid')
+@serialized_data_fetch_task(
+    celery_app,
+    "refresh_all_fundamentals_hybrid",
+    name="app.tasks.fundamentals_tasks.refresh_all_fundamentals_hybrid",
+)
 def refresh_all_fundamentals_hybrid(
     self,
     include_finviz: bool = True,
@@ -1246,8 +1255,11 @@ def refresh_fundamentals_yfinance_only(yfinance_batch_size: int = 50):
     )
 
 
-@celery_app.task(bind=True, name='app.tasks.fundamentals_tasks.refresh_symbols_hybrid')
-@serialized_data_fetch('refresh_symbols_hybrid')
+@serialized_data_fetch_task(
+    celery_app,
+    "refresh_symbols_hybrid",
+    name="app.tasks.fundamentals_tasks.refresh_symbols_hybrid",
+)
 def refresh_symbols_hybrid(
     self,
     symbols: List[str],

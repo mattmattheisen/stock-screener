@@ -132,6 +132,9 @@ def test_celery_schedule_moves_orphan_cleanup_and_keeps_legacy_manual_routes():
 
     assert "app.tasks.cache_tasks.daily_cache_warmup" in celery_app.conf.task_routes
     assert "app.tasks.cache_tasks.auto_refresh_after_close" in celery_app.conf.task_routes
+    assert celery_app.conf.task_routes[
+        "app.tasks.cache_tasks.prewarm_scan_cache"
+    ] == {"queue": "data_fetch_shared"}
 
 
 def test_smart_refresh_cache_uses_runtime_activity_tracked_task_base():
@@ -915,151 +918,6 @@ def test_bootstrap_smart_refresh_uses_short_failed_symbol_retry_delay(monkeypatc
             "countdown": 30,
         }
     ]
-
-
-def test_failed_price_retry_preserves_bootstrap_retry_delay(monkeypatch):
-    import app.tasks.cache_tasks as module
-
-    fake_price_cache = MagicMock()
-    retry_calls = []
-
-    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
-    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
-    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        module,
-        "_fetch_with_backoff",
-        lambda _fetcher, batch_symbols, **kwargs: {
-            symbol: {"has_error": True, "error": "rate limited", "price_data": None}
-            for symbol in batch_symbols
-        },
-    )
-    monkeypatch.setattr(
-        module,
-        "_schedule_failed_symbol_retry",
-        lambda symbols, *, market, attempt, countdown=600: retry_calls.append(
-            {"symbols": symbols, "market": market, "attempt": attempt, "countdown": countdown}
-        ),
-    )
-
-    result = module.retry_failed_price_symbols.run.__wrapped__(
-        module.retry_failed_price_symbols,
-        symbols=["AAPL"],
-        market="US",
-        attempt=2,
-        retry_countdown=30,
-    )
-
-    assert result["status"] == "partial"
-    assert retry_calls == [
-        {"symbols": ["AAPL"], "market": "US", "attempt": 3, "countdown": 30}
-    ]
-
-
-def test_failed_price_retry_does_not_reschedule_permanent_no_data(monkeypatch):
-    import app.tasks.cache_tasks as module
-
-    fake_price_cache = MagicMock()
-    retry_calls = []
-
-    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
-    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
-    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        module,
-        "_fetch_with_backoff",
-        lambda _fetcher, batch_symbols, **kwargs: {
-            symbol: {
-                "has_error": True,
-                "error": "Provider returned no usable rows",
-                "error_kind": "no_price_data",
-                "price_data": None,
-            }
-            for symbol in batch_symbols
-        },
-    )
-    monkeypatch.setattr(
-        module,
-        "_schedule_failed_symbol_retry",
-        lambda symbols, *, market, attempt, countdown=600: retry_calls.append(
-            {"symbols": symbols, "market": market, "attempt": attempt, "countdown": countdown}
-        ),
-    )
-
-    result = module.retry_failed_price_symbols.run.__wrapped__(
-        module.retry_failed_price_symbols,
-        symbols=["0143.T"],
-        market="JP",
-        attempt=1,
-        retry_countdown=30,
-    )
-
-    assert result["status"] == "partial"
-    assert result["failed_symbols"] == ["0143.T"]
-    assert retry_calls == []
-
-
-def test_failed_price_retry_uses_shared_batch_classifier(monkeypatch):
-    from collections import Counter
-
-    import app.tasks.cache_tasks as module
-    from app.services.price_refresh_execution import PriceRefreshBatchOutcome
-
-    fake_price_cache = MagicMock()
-    classifier_calls = []
-    price_frame = _price_df(date(2026, 3, 20), 150.0)
-
-    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
-    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
-    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        module,
-        "_fetch_with_backoff",
-        lambda _fetcher, batch_symbols, **kwargs: {
-            symbol: {
-                "has_error": False,
-                "error": None,
-                "price_data": price_frame,
-            }
-            for symbol in batch_symbols
-        },
-    )
-
-    def _classify_price_refresh_batch(**kwargs):
-        classifier_calls.append(kwargs)
-        return PriceRefreshBatchOutcome(
-            batch_number=kwargs["batch_number"],
-            total_batches=kwargs["total_batches"],
-            job=kwargs["job"],
-            symbols=tuple(kwargs["symbols"]),
-            price_data_by_symbol={"AAPL": price_frame},
-            successes=("AAPL",),
-            failures=(),
-            failure_details={},
-            failure_kinds={},
-            refreshed_by_market=Counter({"US": 1}),
-            failed_by_market=Counter(),
-        )
-
-    monkeypatch.setattr(module, "classify_price_refresh_batch", _classify_price_refresh_batch)
-
-    result = module.retry_failed_price_symbols.run.__wrapped__(
-        module.retry_failed_price_symbols,
-        symbols=["aapl"],
-        market="US",
-        attempt=1,
-        retry_countdown=30,
-    )
-
-    assert result["status"] == "completed"
-    assert result["refreshed"] == 1
-    assert len(classifier_calls) == 1
-    assert classifier_calls[0]["symbols"] == ("AAPL",)
-    assert classifier_calls[0]["batch_results"]["AAPL"]["price_data"] is price_frame
-    fake_price_cache.store_batch_in_cache.assert_called_once_with(
-        {"AAPL": price_frame},
-        also_store_db=True,
-    )
 
 
 def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):

@@ -194,7 +194,7 @@ def test_serialized_data_fetch_retries_when_external_fetch_lease_is_busy(
     mock_get_lock,
     mock_get_coordination,
 ):
-    from app.tasks.data_fetch_lock import serialized_data_fetch
+    from app.tasks.data_fetch_lock import _serialized_data_fetch
 
     mock_lock = MagicMock()
     mock_lock.acquire.return_value = (True, False)
@@ -217,7 +217,7 @@ def test_serialized_data_fetch_retries_when_external_fetch_lease_is_busy(
         retry=_retry,
     )
 
-    @serialized_data_fetch("smart_refresh_cache")
+    @_serialized_data_fetch("smart_refresh_cache")
     def my_func(self, market=None):
         return "ok"
 
