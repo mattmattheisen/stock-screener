@@ -5,27 +5,29 @@ Provides access to current and historical breadth data,
 trend analysis, and manual calculation triggers.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from datetime import date, datetime, timedelta
-from typing import List, Optional
+from typing import List
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from ...config import settings
 from ...database import get_db
 from ...domain.markets.catalog import get_market_catalog
 from ...models.market_breadth import MarketBreadth
 from ...schemas.breadth import (
-    BreadthResponse,
-    TrendResponse,
-    TrendDataPoint,
-    CalculationRequest,
-    CalculationResponse,
     BackfillRequest,
     BackfillResponse,
-    BreadthSummary
+    BreadthResponse,
+    BreadthSummary,
+    CalculationRequest,
+    CalculationResponse,
+    TrendDataPoint,
+    TrendResponse,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
+from ...services.breadth.query import breadth_query, latest_breadth
 from ...wiring.bootstrap import get_ui_snapshot_service
 
 logger = logging.getLogger(__name__)
@@ -72,11 +74,7 @@ async def get_current_breadth(
     Returns the latest breadth snapshot from the database.
     """
     normalized_market = _normalize_market_param(market)
-    breadth = db.query(MarketBreadth).filter(
-        MarketBreadth.market == normalized_market,
-    ).order_by(
-        MarketBreadth.date.desc()
-    ).first()
+    breadth = latest_breadth(db, market=normalized_market)
 
     if not breadth:
         raise HTTPException(
@@ -134,16 +132,15 @@ async def get_historical_breadth(
     if (end_date - start_date) > max_range:
         raise HTTPException(
             status_code=400,
-            detail=f"Date range cannot exceed 730 days (2 years)"
+            detail="Date range cannot exceed 730 days (2 years)"
         )
 
     normalized_market = _normalize_market_param(market)
 
     # Query breadth data
-    breadth_records = db.query(MarketBreadth).filter(
+    breadth_records = breadth_query(db, market=normalized_market).filter(
         MarketBreadth.date >= start_date,
         MarketBreadth.date <= end_date,
-        MarketBreadth.market == normalized_market,
     ).order_by(
         MarketBreadth.date.desc()
     ).limit(limit).all()
@@ -203,10 +200,9 @@ async def get_indicator_trend(
     end_date = datetime.now().date()
     start_date = end_date - timedelta(days=days)
 
-    breadth_records = db.query(MarketBreadth).filter(
+    breadth_records = breadth_query(db, market=normalized_market).filter(
         MarketBreadth.date >= start_date,
         MarketBreadth.date <= end_date,
-        MarketBreadth.market == normalized_market,
     ).order_by(
         MarketBreadth.date.asc()
     ).all()
@@ -322,7 +318,7 @@ async def trigger_backfill(
     if (end - start) > max_range:
         raise HTTPException(
             status_code=400,
-            detail=f"Backfill range cannot exceed 2 years (730 days)"
+            detail="Backfill range cannot exceed 2 years (730 days)"
         )
 
     # Estimate number of trading days (roughly 5/7 of calendar days)
@@ -364,9 +360,8 @@ async def get_breadth_summary(
     normalized_market = _normalize_market_param(market)
 
     # Get total record count for the requested market partition.
-    total_records = db.query(func.count(MarketBreadth.id)).filter(
-        MarketBreadth.market == normalized_market,
-    ).scalar() or 0
+    canonical = breadth_query(db, market=normalized_market)
+    total_records = canonical.count()
 
     if total_records == 0:
         return BreadthSummary(
@@ -378,12 +373,8 @@ async def get_breadth_summary(
         )
 
     # Get date range
-    min_date = db.query(func.min(MarketBreadth.date)).filter(
-        MarketBreadth.market == normalized_market,
-    ).scalar()
-    max_date = db.query(func.max(MarketBreadth.date)).filter(
-        MarketBreadth.market == normalized_market,
-    ).scalar()
+    min_date = canonical.with_entities(func.min(MarketBreadth.date)).scalar()
+    max_date = canonical.with_entities(func.max(MarketBreadth.date)).scalar()
 
     return BreadthSummary(
         market=normalized_market,

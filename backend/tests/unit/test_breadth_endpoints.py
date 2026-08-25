@@ -71,6 +71,7 @@ def _breadth_row(market: str, day: date, *, up: int, down: int) -> MarketBreadth
         stocks_down_13pct_34days=down + 3,
         total_stocks_scanned=up + down,
         calculation_duration_seconds=1.25,
+        calculation_revision=2,
     )
 
 
@@ -125,7 +126,38 @@ async def test_current_breadth_filters_by_market(client, session):
     assert payload["stocks_up_4pct"] == 22
     assert payload["stocks_down_4pct"] == 8
     assert payload["broad_universe_count"] is None
-    assert payload["calculation_revision"] is None
+    assert payload["calculation_revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_current_breadth_ignores_newer_legacy_row(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    corrected = _breadth_row("US", date(2026, 8, 20), up=12, down=3)
+    stale = _breadth_row("US", date(2026, 8, 21), up=99, down=1)
+    stale.calculation_revision = None
+    session.add_all([corrected, stale])
+    session.commit()
+
+    response = await client.get("/api/v1/breadth/current", params={"market": "US"})
+
+    assert response.status_code == 200
+    assert response.json()["date"] == "2026-08-20"
+    assert response.json()["stocks_up_4pct"] == 12
+
+
+@pytest.mark.asyncio
+async def test_current_breadth_returns_not_found_when_only_legacy_rows_exist(
+    client, session
+):
+    app.dependency_overrides[get_db] = _override_db(session)
+    stale = _breadth_row("US", date(2026, 8, 21), up=99, down=1)
+    stale.calculation_revision = None
+    session.add(stale)
+    session.commit()
+
+    response = await client.get("/api/v1/breadth/current", params={"market": "US"})
+
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio

@@ -61,6 +61,7 @@ from app.schemas.theme import (
     ThemeRankingItem,
     ThemeRankingsResponse,
 )
+from app.services.breadth.query import breadth_query, latest_breadth
 from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
 from app.services.group_ranking_payloads import group_snapshot_metadata
 from app.services.theme_discovery_service import ThemeDiscoveryService
@@ -449,8 +450,8 @@ class UISnapshotService:
 
     def _resolve_breadth_source_revision(self, db: Session, market: str = "US") -> str:
         normalized_market = self._normalize_breadth_market(market)
-        latest = db.query(func.max(MarketBreadth.date)).filter(
-            MarketBreadth.market == normalized_market,
+        latest = breadth_query(db, market=normalized_market).with_entities(
+            func.max(MarketBreadth.date)
         ).scalar()
         return (
             f"{latest.isoformat()}|breadth-r{CURRENT_BREADTH_CALCULATION_REVISION}"
@@ -646,23 +647,23 @@ class UISnapshotService:
     def _build_breadth_payload(self, market: str = "US") -> dict[str, Any]:
         normalized_market = self._normalize_breadth_market(market)
         with self._session_factory() as db:
-            market_filter = MarketBreadth.market == normalized_market
-            current = db.query(MarketBreadth).filter(market_filter).order_by(MarketBreadth.date.desc()).first()
-            total_records = db.query(func.count(MarketBreadth.id)).filter(market_filter).scalar() or 0
-            min_date = db.query(func.min(MarketBreadth.date)).filter(market_filter).scalar()
-            max_date = db.query(func.max(MarketBreadth.date)).filter(market_filter).scalar()
+            canonical = breadth_query(db, market=normalized_market)
+            current = latest_breadth(db, market=normalized_market)
+            total_records = canonical.count()
+            min_date = canonical.with_entities(func.min(MarketBreadth.date)).scalar()
+            max_date = canonical.with_entities(func.max(MarketBreadth.date)).scalar()
             end_date = datetime.utcnow().date()
             history_start = end_date - timedelta(days=90)
             chart_start = end_date - timedelta(days=31)
             history = (
-                db.query(MarketBreadth)
-                .filter(MarketBreadth.date >= history_start, MarketBreadth.date <= end_date, market_filter)
+                breadth_query(db, market=normalized_market)
+                .filter(MarketBreadth.date >= history_start, MarketBreadth.date <= end_date)
                 .order_by(MarketBreadth.date.desc())
                 .all()
             )
             chart = (
-                db.query(MarketBreadth)
-                .filter(MarketBreadth.date >= chart_start, MarketBreadth.date <= end_date, market_filter)
+                breadth_query(db, market=normalized_market)
+                .filter(MarketBreadth.date >= chart_start, MarketBreadth.date <= end_date)
                 .order_by(MarketBreadth.date.desc())
                 .all()
             )
