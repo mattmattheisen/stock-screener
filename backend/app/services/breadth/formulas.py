@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 
 import numpy as np
@@ -14,6 +15,7 @@ from .types import (
 )
 
 _REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Adj Close", "Volume")
+BREADTH_FEATURE_WARMUP_SESSIONS = 251
 
 
 def _normalized_session_index(values: object) -> pd.DatetimeIndex:
@@ -36,6 +38,31 @@ def validate_price_frame(prices: pd.DataFrame) -> None:
         raise ValueError("Price frame index must contain valid sessions")
     if normalized_index.has_duplicates:
         raise ValueError("Price frame index must contain unique sessions")
+
+
+def prices_for_feature_window(
+    prices_by_symbol: Mapping[str, pd.DataFrame],
+    calculation_dates: tuple[date, ...],
+) -> dict[str, pd.DataFrame]:
+    """Retain requested sessions plus the exact 251-session warm-up."""
+    if not calculation_dates:
+        return {}
+    first_date = min(calculation_dates)
+    last_date = max(calculation_dates)
+    result: dict[str, pd.DataFrame] = {}
+    for symbol, history in prices_by_symbol.items():
+        ordered = history.sort_index()
+        session_dates = [pd.Timestamp(value).date() for value in ordered.index]
+        in_scope = [
+            position
+            for position, session_date in enumerate(session_dates)
+            if first_date <= session_date <= last_date
+        ]
+        if not in_scope:
+            continue
+        start = max(0, in_scope[0] - BREADTH_FEATURE_WARMUP_SESSIONS)
+        result[symbol] = ordered.iloc[start : in_scope[-1] + 1]
+    return result
 
 
 def _wilder_average(values: pd.Series, period: int) -> pd.Series:

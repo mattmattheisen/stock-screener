@@ -13,6 +13,7 @@ from app.services.bounded_history_universe import (
     CurrentActiveFallbackUniverseResolver,
 )
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
+from app.services.breadth.formulas import prices_for_feature_window
 from app.services.breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
     BreadthUniverseMember,
@@ -75,11 +76,14 @@ class StaticBreadthEngineInputFactory:
             )
             for calculation_date in canonical_dates
         }
-        usable_prices = {
-            symbol: history
-            for symbol, history in price_data.items()
-            if history is not None and not history.empty
-        }
+        usable_prices = prices_for_feature_window(
+            {
+                symbol: history
+                for symbol, history in price_data.items()
+                if history is not None and not history.empty
+            },
+            tuple(canonical_dates),
+        )
         dates_by_currency: dict[str, set[date]] = {}
         for symbol, history in usable_prices.items():
             currency = currency_map[str(symbol).upper()]
@@ -189,12 +193,11 @@ class StaticBreadthSectionBuilder:
                 market=market,
                 as_of_date=expected_as_of_date,
             )
-            if universe.symbols:
-                symbols = list(universe.symbols)
-                currencies_by_symbol = {
-                    member.symbol: member.currency
-                    for member in universe.members
-                }
+            symbols = list(universe.symbols)
+            currencies_by_symbol = {
+                member.symbol: member.currency
+                for member in universe.members
+            }
         if not symbols:
             raise StaticSiteSectionUnavailableError(
                 section="breadth",

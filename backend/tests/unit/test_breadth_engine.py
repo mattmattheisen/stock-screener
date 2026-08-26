@@ -2,7 +2,6 @@ from datetime import date
 
 import pandas as pd
 import pytest
-
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
 from app.services.breadth.types import (
     BreadthUniverseMember,
@@ -10,6 +9,9 @@ from app.services.breadth.types import (
 )
 from app.services.point_in_time_universe_service import (
     hash_point_in_time_universe_symbols,
+)
+from app.services.static_breadth_eligibility import (
+    static_breadth_eligibility_signature,
 )
 
 
@@ -79,6 +81,30 @@ def test_engine_tracks_metric_specific_eligibility_for_mixed_history():
 
     record = result.to_record_mapping()
     assert record["total_stocks_scanned"] == record["broad_universe_count"] == 2
+
+
+def test_engine_persists_the_canonical_broad_eligibility_signature():
+    index = pd.bdate_range(end="2026-08-21", periods=2)
+    calculation_date = date(2026, 8, 21)
+    snapshot = BreadthUniverseSnapshot(
+        calculation_date=calculation_date,
+        members=(BreadthUniverseMember("AAA", "USD"),),
+        broad_signature=hash_point_in_time_universe_symbols(("AAA",)),
+    )
+
+    result = BreadthEngine().calculate(
+        BreadthEngineRequest(
+            market="US",
+            dates=(calculation_date,),
+            universes_by_date={calculation_date: snapshot},
+            prices_by_symbol={"AAA": _prices(index, [100.0, 101.0])},
+            fx_by_currency={"USD": pd.Series(1.0, index=index)},
+        )
+    )[calculation_date]
+
+    assert result.eligibility_signature == static_breadth_eligibility_signature(
+        ("AAA",)
+    )
 
 
 def test_stockbee_signature_tracks_liquidity_when_daily_history_is_ineligible():

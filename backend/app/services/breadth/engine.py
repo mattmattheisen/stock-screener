@@ -24,6 +24,7 @@ from .types import (
     BreadthUniverseSnapshot,
     SymbolBreadthSignals,
 )
+from .universe import breadth_eligibility_signature
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,9 @@ class BreadthEngine:
                 values=values,
                 eligibility=eligibility,
                 broad_universe_count=len(snapshot.members),
-                eligibility_signature=snapshot.broad_signature,
+                eligibility_signature=breadth_eligibility_signature(
+                    member.symbol for member in snapshot.members
+                ),
                 stockbee_eligibility_signature=hash_point_in_time_universe_symbols(
                     stockbee_symbols
                 ),

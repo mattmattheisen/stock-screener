@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-import hashlib
 from datetime import date
 from types import MappingProxyType
 
@@ -12,9 +11,12 @@ from sqlalchemy.orm import Session
 
 from ..domain.providers.price_symbol_support import split_supported_price_symbols
 from .bounded_history_universe import CurrentActiveFallbackUniverseResolver
+from .breadth.universe import (
+    BREADTH_ELIGIBILITY_SIGNATURE_VERSION,
+    breadth_eligibility_signature,
+)
 
-
-STATIC_BREADTH_ELIGIBILITY_VERSION = "point-in-time-common-stock-v2"
+STATIC_BREADTH_ELIGIBILITY_VERSION = BREADTH_ELIGIBILITY_SIGNATURE_VERSION
 DEFAULT_EXCLUSION_SAMPLE_LIMIT = 20
 
 
@@ -78,10 +80,8 @@ def _bounded_sample(symbols: set[str], limit: int) -> tuple[str, ...]:
 
 
 def static_breadth_eligibility_signature(symbols: Sequence[str]) -> str:
-    payload = "".join(
-        (f"{STATIC_BREADTH_ELIGIBILITY_VERSION}\n", *(f"{symbol}\n" for symbol in symbols))
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    """Compatibility name for the canonical shared breadth signature."""
+    return breadth_eligibility_signature(symbols)
 
 
 def classify_static_breadth_eligibility(

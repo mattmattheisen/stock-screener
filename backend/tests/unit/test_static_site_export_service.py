@@ -7,13 +7,9 @@ from datetime import date, datetime
 from inspect import Parameter, getsource, signature
 from types import SimpleNamespace
 
+import app.services.static_site_export_service as export_module
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
-
-import app.services.static_site_export_service as export_module
 from app.database import Base
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
@@ -28,11 +24,9 @@ from app.models.industry import IBDGroupRank
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
+from app.services.breadth.universe import breadth_eligibility_signature
 from app.services.group_ranking_history import select_market_run_series
 from app.services.key_market_history import build_key_market_entries
-from app.services.point_in_time_universe_service import (
-    hash_point_in_time_universe_symbols,
-)
 from app.services.static_artifact_combiner import StaticArtifactFormulaError
 from app.services.static_breadth_section_builder import (
     StaticBreadthEngineInputFactory,
@@ -52,6 +46,9 @@ from app.services.static_site_export_service import (
     StaticSiteExportService,
     StaticSiteSectionUnavailableError,
 )
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -101,6 +98,15 @@ def _insert_runs(
         db.add_all(runs)
         if pointer_run_id is not None:
             db.add(FeatureRunPointer(key=pointer_key, run_id=pointer_run_id))
+        db.commit()
+
+
+def _insert_common_stock_universe(session_factory, *, market, symbols):
+    with session_factory() as db:
+        db.add_all(
+            StockUniverse(symbol=symbol, name=symbol, market=market)
+            for symbol in symbols
+        )
         db.commit()
 
 
@@ -1996,6 +2002,11 @@ def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
     service_and_session_factory,
 ):
     _service, session_factory = service_and_session_factory
+    _insert_common_stock_universe(
+        session_factory,
+        market="HK",
+        symbols=("0700.HK",),
+    )
     idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
 
     def history_frame(start_price: float) -> pd.DataFrame:
@@ -2101,8 +2112,8 @@ def test_build_breadth_payload_uses_full_common_stock_universe_not_scan_rows(
 
     current = payload["payload"]["current"]
     assert current["broad_universe_count"] == 2
-    assert current["eligibility_signature"] == (
-        hash_point_in_time_universe_symbols(("AAA", "BBB"))
+    assert current["eligibility_signature"] == breadth_eligibility_signature(
+        ("AAA", "BBB")
     )
     assert (("AAA", "BBB"), "2y") in requested_periods
 
@@ -2111,6 +2122,11 @@ def test_build_breadth_payload_uses_builder_cache_dependencies_without_rebinding
     service_and_session_factory,
 ):
     service, _session_factory = service_and_session_factory
+    _insert_common_stock_universe(
+        _session_factory,
+        market="HK",
+        symbols=("0700.HK",),
+    )
     idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
 
     def history_frame(start_price: float) -> pd.DataFrame:
@@ -2161,6 +2177,11 @@ def test_build_breadth_payload_includes_us_group_attribution(
     service_and_session_factory,
 ):
     _service, session_factory = service_and_session_factory
+    _insert_common_stock_universe(
+        session_factory,
+        market="US",
+        symbols=("AAPL", "BANK", "FLAT", "NOGRP", "PLTR"),
+    )
     idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
 
     def flat_frame(price: float) -> pd.DataFrame:
@@ -2281,6 +2302,11 @@ def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(
 ):
     """History rows can be present yet all-zero — that must still flag unavailable."""
     _service, session_factory = service_and_session_factory
+    _insert_common_stock_universe(
+        session_factory,
+        market="US",
+        symbols=("FLAT1", "FLAT2"),
+    )
     idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
 
     def flat_frame(price: float) -> pd.DataFrame:

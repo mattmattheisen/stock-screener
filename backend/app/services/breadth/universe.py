@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+import hashlib
+from collections.abc import Collection, Iterable, Mapping
 from datetime import date
 
 import numpy as np
@@ -18,6 +19,20 @@ from .types import (
     BreadthUniverseSnapshot,
     SymbolMetricEligibility,
 )
+
+BREADTH_ELIGIBILITY_SIGNATURE_VERSION = "point-in-time-common-stock-v2"
+
+
+def breadth_eligibility_signature(symbols: Iterable[str]) -> str:
+    """Hash canonical broad-universe membership under the current policy."""
+    canonical_symbols = tuple(sorted(set(symbols)))
+    payload = "".join(
+        (
+            f"{BREADTH_ELIGIBILITY_SIGNATURE_VERSION}\n",
+            *(f"{symbol}\n" for symbol in canonical_symbols),
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class MissingHistoricalFXError(RuntimeError):

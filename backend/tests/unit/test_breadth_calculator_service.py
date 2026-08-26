@@ -4,23 +4,20 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import app.services.breadth_backfill as breadth_backfill_module
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-import app.services.breadth_backfill as breadth_backfill_module
 from app.database import Base
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from app.services.breadth.types import BreadthIndicatorValues
+from app.services.breadth.universe import breadth_eligibility_signature
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
-from app.services.point_in_time_universe_service import (
-    hash_point_in_time_universe_symbols,
-)
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 def _policy(mode: str, target: date):
@@ -585,7 +582,7 @@ def test_backfill_range_can_exclude_unsupported_yahoo_symbols(monkeypatch):
         date=trading_date,
     ).one()
     assert stored.broad_universe_count == 2
-    assert stored.eligibility_signature == hash_point_in_time_universe_symbols(
+    assert stored.eligibility_signature == breadth_eligibility_signature(
         ("0335.T", "7203.T")
     )
 

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..models.market_breadth import MarketBreadth
 from ..models.stock_universe import StockUniverse
 from .breadth.engine import BreadthEngine, BreadthEngineRequest
-from .breadth.formulas import validate_price_frame
+from .breadth.formulas import prices_for_feature_window, validate_price_frame
 from .breadth.persistence import BreadthPersistence
 from .breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
@@ -259,25 +259,7 @@ class BreadthCalculatorService:
         prices_by_symbol: Mapping[str, pd.DataFrame],
         calculation_dates: tuple[date, ...],
     ) -> dict[str, pd.DataFrame]:
-        """Retain requested sessions plus the exact 251-session warm-up."""
-        if not calculation_dates:
-            return {}
-        first_date = min(calculation_dates)
-        last_date = max(calculation_dates)
-        result: dict[str, pd.DataFrame] = {}
-        for symbol, history in prices_by_symbol.items():
-            ordered = history.sort_index()
-            session_dates = [pd.Timestamp(value).date() for value in ordered.index]
-            in_scope = [
-                position
-                for position, session_date in enumerate(session_dates)
-                if first_date <= session_date <= last_date
-            ]
-            if not in_scope:
-                continue
-            start = max(0, in_scope[0] - 251)
-            result[symbol] = ordered.iloc[start : in_scope[-1] + 1]
-        return result
+        return prices_for_feature_window(prices_by_symbol, calculation_dates)
 
     def _load_ratio_seed_counts(
         self,
