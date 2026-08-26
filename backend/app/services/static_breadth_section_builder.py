@@ -301,7 +301,6 @@ class StaticBreadthSectionBuilder:
         group_attribution = self._build_group_attribution(
             market=market,
             serialized_rows=serialized_rows,
-            price_data=price_data,
             ordered_dates=ordered_dates,
             engine_inputs=engine_inputs,
         )
@@ -339,7 +338,6 @@ class StaticBreadthSectionBuilder:
         *,
         market: str,
         serialized_rows: list[dict[str, Any]],
-        price_data: dict[str, pd.DataFrame | None],
         ordered_dates: list[date],
         engine_inputs: StaticBreadthEngineInputs,
     ) -> dict[str, Any]:
@@ -371,6 +369,7 @@ class StaticBreadthSectionBuilder:
             for row in serialized_rows
             if row.get("symbol")
         }
+        price_data = engine_inputs.request.prices_by_symbol
         symbols_meta = [
             metadata_by_symbol.get(symbol, {"symbol": symbol})
             for symbol in price_data

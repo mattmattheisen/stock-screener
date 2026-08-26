@@ -2182,7 +2182,9 @@ def test_build_breadth_payload_includes_us_group_attribution(
         market="US",
         symbols=("AAPL", "BANK", "FLAT", "NOGRP", "PLTR"),
     )
-    idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
+    # Mirror a normal two-year cache with rows older than the canonical
+    # calculation window and its feature warm-up.
+    idx = pd.date_range(end="2026-04-24", periods=400, freq="D")
 
     def flat_frame(price: float) -> pd.DataFrame:
         closes = [price] * len(idx)
