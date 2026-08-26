@@ -292,6 +292,7 @@ class BreadthBackfillExecutor:
             calculation_date: BreadthOutcomeCounter()
             for calculation_date in ordered_dates
         }
+        incomplete_target_session_dates: set[date] = set()
         invalid_symbols: set[str] = set()
         for symbol, history in prices_by_symbol.items():
             try:
@@ -314,6 +315,7 @@ class BreadthBackfillExecutor:
                     outcomes_by_date[calculation_date].record_scanned()
                 else:
                     outcomes_by_date[calculation_date].record_insufficient()
+                    incomplete_target_session_dates.add(calculation_date)
 
         prices_by_symbol = {
             symbol: history
@@ -334,6 +336,7 @@ class BreadthBackfillExecutor:
                     or (
                         reports_by_date[calculation_date].cache_misses == 0
                         and reports_by_date[calculation_date].errors == 0
+                        and calculation_date not in incomplete_target_session_dates
                     )
                 )
             )

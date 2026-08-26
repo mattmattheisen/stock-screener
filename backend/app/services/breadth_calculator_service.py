@@ -406,6 +406,8 @@ class BreadthCalculatorService:
         cache_kwargs = {"period": period}
         if required_as_of_date is not None:
             cache_kwargs["required_as_of_date"] = required_as_of_date
+        if cache_only:
+            cache_kwargs["minimum_rows"] = 1
         price_data_by_symbol = self.price_cache.get_many_cached_only_fresh(
             batch_symbols,
             **cache_kwargs,

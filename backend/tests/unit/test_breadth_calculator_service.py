@@ -232,6 +232,7 @@ def test_calculate_daily_breadth_uses_bulk_cached_prices():
         ["AAA", "BBB"],
         period="2y",
         required_as_of_date=date(2026, 3, 20),
+        minimum_rows=1,
     )
     price_cache.get_historical_data.assert_not_called()
 
@@ -392,7 +393,52 @@ def test_cache_only_daily_breadth_requires_calculation_session():
         ["AAA"],
         period="2y",
         required_as_of_date=calculation_date,
+        minimum_rows=1,
     )
+
+
+def test_cache_only_daily_breadth_admits_short_history_for_formula_eligibility():
+    db = _make_db_session()
+    calculation_date = date(2026, 3, 20)
+    db.add(
+        StockUniverse(
+            symbol="NEW",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=True,
+        )
+    )
+    db.commit()
+    short_history = _flat_price_df(calculation_date, periods=2)
+
+    class ShortHistoryCache:
+        def get_many_cached_only_fresh(
+            self,
+            symbols,
+            period="2y",
+            *,
+            required_as_of_date=None,
+            minimum_rows=50,
+        ):
+            assert symbols == ["NEW"]
+            assert period == "2y"
+            assert required_as_of_date == calculation_date
+            return {
+                "NEW": short_history if minimum_rows <= len(short_history) else None
+            }
+
+    service = BreadthCalculatorService(db, ShortHistoryCache())
+
+    result = service.calculate_daily_breadth(
+        calculation_date,
+        policy=_policy("refresh_guarded", calculation_date),
+    )
+
+    assert result.coverage.total_stocks_scanned == 1
+    assert result.indicators["advance_decline_eligible_count"] == 1
+    assert result.indicators["stockbee_daily_eligible_count"] == 0
 
 
 def test_calculate_daily_breadth_preserves_historical_fetch_fallback():
@@ -419,7 +465,10 @@ def test_calculate_daily_breadth_preserves_historical_fetch_fallback():
     assert metrics["total_stocks_scanned"] == 2
     assert metrics["cache_miss_stocks"] == 1
     assert metrics["skipped_stocks"] == 0
-    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAA", "BBB"],
+        period="2y",
+    )
     price_cache.get_many_cached_only.assert_not_called()
     price_cache.get_historical_data.assert_called_once_with(symbol="BBB", period="2y")
 
@@ -557,7 +606,11 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback():
     assert result["total_dates"] == 1
     assert result["processed"] == 1
     assert result["errors"] == 0
-    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAA", "BBB"],
+        period="2y",
+        minimum_rows=1,
+    )
     price_cache.get_historical_data.assert_not_called()
 
 

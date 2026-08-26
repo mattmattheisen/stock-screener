@@ -295,15 +295,24 @@ class PriceCacheService:
         period: str = "2y",
         *,
         required_as_of_date: date | None = None,
+        minimum_rows: int = 50,
     ) -> Dict[str, Optional[pd.DataFrame]]:
         """
         Get fresh-enough cached price data for multiple symbols without Yahoo fetches.
 
         Symbols with stale or missing database rows return None so callers can
         distinguish safe cached-only reads from symbols that still lack current
-        technical input data.
+        technical input data. ``minimum_rows`` lets formula-specific consumers
+        admit shorter but structurally valid histories.
         """
-        results = self._get_many_from_database(symbols, period)
+        if minimum_rows == 50:
+            results = self._get_many_from_database(symbols, period)
+        else:
+            results = self._get_many_from_database(
+                symbols,
+                period,
+                minimum_rows=minimum_rows,
+            )
         fresh_results: Dict[str, Optional[pd.DataFrame]] = {}
 
         for symbol, (data, last_date) in results.items():
@@ -396,7 +405,9 @@ class PriceCacheService:
     def _get_many_from_database(
         self,
         symbols: list[str],
-        period: str
+        period: str,
+        *,
+        minimum_rows: int = 50,
     ) -> Dict[str, tuple[Optional[pd.DataFrame], Optional[date]]]:
         """
         Bulk fetch from database for multiple symbols.
@@ -407,12 +418,15 @@ class PriceCacheService:
         Args:
             symbols: List of stock symbols to fetch
             period: Time period ("1y", "2y", "5y", "max")
+            minimum_rows: Fewest structurally valid rows required per symbol
 
         Returns:
             Dict mapping symbol to (DataFrame, last_date) or (None, None)
         """
         if not symbols:
             return {}
+
+        minimum_rows = max(1, int(minimum_rows))
 
         db = self._session_factory()
         results = {}
@@ -468,7 +482,7 @@ class PriceCacheService:
                 for symbol in chunk_symbols:
                     prices = symbol_prices.get(symbol, [])
 
-                    if not prices or len(prices) < 50:
+                    if not prices or len(prices) < minimum_rows:
                         results[symbol] = (None, None)
                         continue
 
@@ -485,7 +499,7 @@ class PriceCacheService:
                     df = pd.DataFrame(data)
                     df['Date'] = pd.to_datetime(df['Date'])
                     df.set_index('Date', inplace=True)
-                    df = normalize_price_frame(df, min_rows=50)
+                    df = normalize_price_frame(df, min_rows=minimum_rows)
                     if df is None:
                         results[symbol] = (None, None)
                         continue

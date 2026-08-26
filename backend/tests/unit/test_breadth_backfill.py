@@ -11,8 +11,13 @@ from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from app.services.breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
 from app.services.breadth.universe import breadth_eligibility_signature
-from app.services.breadth_backfill import BreadthBackfillPlan
+from app.services.breadth_backfill import BreadthBackfillExecutor, BreadthBackfillPlan
 from app.services.breadth_calculator_service import BreadthCalculatorService
+from app.services.derived_data_execution_policy import (
+    DerivedDataExecutionMode,
+    DerivedDataExecutionPolicy,
+    DerivedDataTargetKind,
+)
 from app.services.static_breadth_eligibility import (
     static_breadth_eligibility_signature,
 )
@@ -417,8 +422,9 @@ def test_backfill_range_validates_historical_symbols_on_their_eligible_date():
         "HISTORICAL": historical_date,
     }
 
-    def cached_prices(symbols, period, *, required_as_of_date):
+    def cached_prices(symbols, period, *, required_as_of_date, minimum_rows):
         assert period == "2y"
+        assert minimum_rows == 1
         return {
             symbol: (
                 _flat_price_df(eligible_date_by_symbol[symbol])
@@ -537,6 +543,48 @@ def test_backfill_range_excludes_failed_dates_from_rolling_ratios():
     assert result["error_dates"] == ["2026-03-19"]
     assert stored.ratio_5day == 1.25
     assert stored.ratio_10day == 1.11
+
+
+def test_strict_backfill_rejects_date_with_supported_missing_target_session():
+    db = _make_db_session()
+    missing_date = date(2026, 3, 19)
+    complete_date = date(2026, 3, 20)
+    complete_history = _flat_price_df(complete_date)
+    incomplete_history = complete_history.drop(index=pd.Timestamp(missing_date))
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "COMPLETE": complete_history,
+        "INCOMPLETE": incomplete_history,
+    }
+    service = BreadthCalculatorService(db, price_cache)
+    symbols = ("COMPLETE", "INCOMPLETE", "WARRANT-W")
+    signature = static_breadth_eligibility_signature(symbols)
+    plan = BreadthBackfillPlan.from_legacy(
+        dates=(missing_date, complete_date),
+        eligible_symbols_by_date={
+            missing_date: symbols,
+            complete_date: symbols,
+        },
+        eligibility_signatures_by_date={
+            missing_date: signature,
+            complete_date: signature,
+        },
+    )
+
+    result = BreadthBackfillExecutor(service).execute(
+        plan,
+        policy=DerivedDataExecutionPolicy(
+            mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
+            target_kind=DerivedDataTargetKind.HISTORICAL,
+        ),
+        exclude_unsupported_price_symbols=True,
+        required_as_of_date=complete_date,
+        require_complete_cache_coverage=True,
+    ).to_legacy_dict()
+
+    assert result["processed"] == 1
+    assert result["error_dates"] == [missing_date.isoformat()]
+    assert [row.date for row in db.query(MarketBreadth).all()] == [complete_date]
 
 
 def test_backfill_range_rejects_signature_for_different_eligible_symbols():

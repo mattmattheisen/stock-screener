@@ -196,9 +196,16 @@ def test_rebuild_reads_delisted_history_at_its_last_membership_date():
 
     price_cache = MagicMock()
 
-    def cached_histories(symbols, period, *, required_as_of_date=None):
+    def cached_histories(
+        symbols,
+        period,
+        *,
+        required_as_of_date=None,
+        minimum_rows,
+    ):
         assert symbols == ["DELISTED"]
         assert period == "2y"
+        assert minimum_rows == 1
         return {
             "DELISTED": (
                 prices if required_as_of_date == calculation_date else None
@@ -230,4 +237,5 @@ def test_rebuild_reads_delisted_history_at_its_last_membership_date():
         ["DELISTED"],
         period="2y",
         required_as_of_date=calculation_date,
+        minimum_rows=1,
     )
