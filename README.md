@@ -32,17 +32,17 @@ See the **[Static Site Guide](docs/STATIC_SITE.md)** for exactly what works in s
 ![Market Health and Exposure](docs/screenshots/health-exposure.jpg)
 *Market Health and Exposure*
 
-![Market Breadth overview with health bars and SPY overlay](docs/screenshots/breadth-chart.jpg)
-*Market Breadth overview — advance/decline and new-high/new-low health bars above the SPY overlay*
-
-![Market Breadth recent-history heatmap](docs/screenshots/breadth-history.jpg)
-*Recent History — primary, secondary, and context indicators fit in one desktop view, with stronger green/red cells marking more significant readings*
-
 ![Scan results with composite scores, RS sparklines, multi-screener ratings, and classification columns](docs/screenshots/scan-results.png)
 *Scan results table*
 
 ![Relative Rotation Graph — sector rotation with direction-arrowed weekly tails](docs/screenshots/rrg-rotation.png)
 *RRG: sector rotation with direction-arrowed weekly tails; full 197-group scope available from the same view*
+
+*Market Breadth combines advance/decline and new-high/new-low health bars with an SPY overlay and a color-coded history table for primary, secondary, and context indicators.*
+
+![Market Breadth overview with health bars and SPY overlay](docs/screenshots/breadth-chart.jpg)
+
+![Market Breadth recent-history heatmap](docs/screenshots/breadth-history.jpg)
 
 **Typical flow:** sign in → bootstrap markets → review the Daily dashboard → run a Scan → drill into a stock → monitor Operations → validate outcomes on Backtest. For the full page-by-page tour, see the **[Live App Guide](docs/LIVE_APP_GUIDE.md)**.
 
