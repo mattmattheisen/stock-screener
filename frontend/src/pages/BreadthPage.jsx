@@ -242,7 +242,7 @@ function BreadthPage() {
               Recent History
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Primary and secondary are screenshot groupings; each tooltip names the formula source.
+              Primary tracks daily movers and ratios; secondary tracks trend windows; context adds T2108, ATR extension, and universe size.
             </Typography>
           </Box>
           <BreadthHistoryTable rows={historicalBreadth} />

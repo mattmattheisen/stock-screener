@@ -134,6 +134,14 @@ beforeEach(() => {
 });
 
 describe('BreadthPage', () => {
+  it('explains the purpose of each recent-history indicator group', async () => {
+    renderBreadthPage();
+
+    expect(await screen.findByText(
+      'Primary tracks daily movers and ratios; secondary tracks trend windows; context adds T2108, ATR extension, and universe size.',
+    )).toBeInTheDocument();
+  });
+
   it('renders the latest date without shifting a date-only value', async () => {
     vi.stubEnv('TZ', 'America/Los_Angeles');
     try {

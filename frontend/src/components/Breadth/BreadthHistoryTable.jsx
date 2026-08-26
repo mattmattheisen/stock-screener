@@ -43,15 +43,88 @@ const metricCellSx = (metric, tone) => ({
   color: '#fff',
   backgroundColor: BREADTH_VISUAL_COLORS[tone],
   borderColor: 'rgba(255, 255, 255, 0.06)',
+  borderLeft: groupStartMetrics.has(metric)
+    ? `3px solid ${metricGroupColors[metric]}`
+    : undefined,
+  px: 0.5,
   whiteSpace: 'nowrap',
   transition: 'background-color 120ms ease',
 });
 
+const metricHeaderLines = {
+  stocks_up_4pct: ['Stocks Up', '4%+ Today'],
+  stocks_down_4pct: ['Stocks Down', '4%+ Today'],
+  ratio_5day: ['5 Day', 'Ratio'],
+  ratio_10day: ['10 Day', 'Ratio'],
+  stocks_up_25pct_quarter: ['Up 25%+', 'Quarter'],
+  stocks_down_25pct_quarter: ['Down 25%+', 'Quarter'],
+  stocks_up_25pct_month: ['Up 25%+', 'Month'],
+  stocks_down_25pct_month: ['Down 25%+', 'Month'],
+  stocks_up_50pct_month: ['Up 50%+', 'Month'],
+  stocks_down_50pct_month: ['Down 50%+', 'Month'],
+  stocks_up_13pct_34days: ['Up 13%+', '34 Days'],
+  stocks_down_13pct_34days: ['Down 13%+', '34 Days'],
+  atr_10x_extension_count: ['10x ATR', 'Extension'],
+  t2108_pct: ['T2108', '> 40D SMA'],
+  broad_universe_count: ['Broad Universe'],
+};
+
+const GROUPS = [
+  {
+    key: 'primary',
+    label: 'Primary Breadth Indicators',
+    description: 'Daily movers & ratios',
+    metrics: primaryBreadthMetrics,
+    color: '#9a6700',
+  },
+  {
+    key: 'secondary',
+    label: 'Secondary Breadth Indicators',
+    description: 'Trend windows',
+    metrics: secondaryBreadthMetrics,
+    color: '#176b43',
+  },
+  {
+    key: 'context',
+    label: 'Context',
+    description: 'Market context',
+    metrics: tableContextMetrics,
+    color: '#315f9b',
+  },
+];
+
+const groupStartMetrics = new Set(GROUPS.map((group) => group.metrics[0]));
+const metricGroupColors = Object.fromEntries(
+  GROUPS.map((group) => [group.metrics[0], group.color]),
+);
+
 function MetricHeader({ metric }) {
+  const lines = metricHeaderLines[metric] ?? [breadthMetricDefinitions[metric].label];
+  const isGroupStart = groupStartMetrics.has(metric);
   return (
-    <TableCell align="right" sx={{ whiteSpace: 'nowrap', fontSize: 11 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
-        {breadthMetricDefinitions[metric].label}
+    <TableCell
+      align="center"
+      data-testid={`breadth-header-${metric}`}
+      aria-label={breadthMetricDefinitions[metric].label}
+      sx={{
+        position: 'relative',
+        height: 54,
+        px: 0.25,
+        py: 0.5,
+        borderLeft: isGroupStart ? `3px solid ${metricGroupColors[metric]}` : undefined,
+        fontSize: 10,
+        lineHeight: 1.15,
+        whiteSpace: 'normal',
+      }}
+    >
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+        <Box component="span">
+          {lines.map((line) => (
+            <Box component="span" key={line} sx={{ display: 'block' }}>
+              {line}
+            </Box>
+          ))}
+        </Box>
         <BreadthMetricTooltip metric={metric} compact />
       </Box>
     </TableCell>
@@ -74,24 +147,61 @@ function BreadthHistoryTable({ rows = [], maxRows = 90 }) {
       data-testid="breadth-history-scroll"
       sx={{ overflowX: 'auto', maxHeight: 'calc(100vh - 360px)' }}
     >
-      <Table stickyHeader size="small" sx={{ minWidth: 1660 }}>
+      <Table
+        stickyHeader
+        size="small"
+        data-testid="breadth-history-table"
+        sx={{ width: '100%', minWidth: 980, tableLayout: 'fixed' }}
+      >
+        <colgroup>
+          <Box component="col" sx={{ width: 76 }} />
+          {metrics.map((metric) => (
+            <Box
+              component="col"
+              key={metric}
+              sx={{
+                width: tableContextMetrics.includes(metric) ? 72 : 62,
+              }}
+            />
+          ))}
+        </colgroup>
         <TableHead>
           <TableRow>
             <TableCell
               rowSpan={2}
-              sx={{ position: 'sticky', left: 0, zIndex: 5, fontWeight: 700 }}
+              sx={{
+                position: 'sticky',
+                left: 0,
+                zIndex: 5,
+                px: 0.75,
+                fontWeight: 700,
+                borderRight: `3px solid ${GROUPS[0].color}`,
+              }}
             >
               Date
             </TableCell>
-            <TableCell align="center" colSpan={primaryBreadthMetrics.length}>
-              Primary Breadth Indicators
-            </TableCell>
-            <TableCell align="center" colSpan={secondaryBreadthMetrics.length}>
-              Secondary Breadth Indicators
-            </TableCell>
-            <TableCell align="center" colSpan={tableContextMetrics.length}>
-              Context
-            </TableCell>
+            {GROUPS.map((group) => (
+              <TableCell
+                key={group.key}
+                align="center"
+                colSpan={group.metrics.length}
+                data-testid={`breadth-group-${group.key}`}
+                sx={{
+                  bgcolor: group.color,
+                  color: '#fff',
+                  borderLeft: `3px solid ${group.color}`,
+                  borderColor: 'rgba(255, 255, 255, 0.2)',
+                  py: 0.6,
+                }}
+              >
+                <Box sx={{ fontSize: 11, fontWeight: 800, lineHeight: 1.2 }}>
+                  {group.label}
+                </Box>
+                <Box sx={{ fontSize: 9, fontWeight: 600, opacity: 0.78, lineHeight: 1.2 }}>
+                  {group.description}
+                </Box>
+              </TableCell>
+            ))}
           </TableRow>
           <TableRow>
             {metrics.map((metric) => <MetricHeader key={metric} metric={metric} />)}
@@ -109,6 +219,8 @@ function BreadthHistoryTable({ rows = [], maxRows = 90 }) {
                   color: '#fff',
                   fontFamily: 'monospace',
                   fontWeight: 600,
+                  px: 0.75,
+                  borderRight: `3px solid ${GROUPS[0].color}`,
                   whiteSpace: 'nowrap',
                 }}
               >

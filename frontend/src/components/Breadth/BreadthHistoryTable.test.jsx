@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
@@ -48,6 +48,33 @@ describe('BreadthHistoryTable', () => {
     expect(screen.getByText('Broad Universe')).toBeInTheDocument();
     expect(screen.getByText('2.00')).toBeInTheDocument();
     expect(screen.getByText('57.89%')).toBeInTheDocument();
+  });
+
+  it('describes each indicator family in a distinct group band', () => {
+    renderWithProviders(<BreadthHistoryTable rows={[row]} />);
+
+    expect(within(screen.getByTestId('breadth-group-primary')).getByText(
+      'Daily movers & ratios',
+    )).toBeInTheDocument();
+    expect(within(screen.getByTestId('breadth-group-secondary')).getByText(
+      'Trend windows',
+    )).toBeInTheDocument();
+    expect(within(screen.getByTestId('breadth-group-context')).getByText(
+      'Market context',
+    )).toBeInTheDocument();
+  });
+
+  it('renders compact multiline metric headings in a desktop-fit table', () => {
+    renderWithProviders(<BreadthHistoryTable rows={[row]} />);
+
+    const upHeader = screen.getByTestId('breadth-header-stocks_up_4pct');
+    expect(within(upHeader).getByText('Stocks Up')).toBeInTheDocument();
+    expect(within(upHeader).getByText('4%+ Today')).toBeInTheDocument();
+    expect(upHeader).toHaveStyle({ whiteSpace: 'normal' });
+    expect(screen.getByTestId('breadth-history-table')).toHaveStyle({
+      tableLayout: 'fixed',
+      width: '100%',
+    });
   });
 
   it('marks paired cells and exposes formula tooltips accessibly', () => {
