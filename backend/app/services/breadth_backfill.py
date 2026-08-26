@@ -246,7 +246,7 @@ class BreadthBackfillExecutor:
         )
         for offset in range(0, len(price_symbols), 500):
             batch_symbols = price_symbols[offset : offset + 500]
-            if required_as_of_date is not None and explicit_symbols is not None:
+            if explicit_symbols is None or required_as_of_date is not None:
                 grouped: dict[date, list[str]] = {}
                 for symbol in batch_symbols:
                     symbol_date = max(

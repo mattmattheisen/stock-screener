@@ -240,6 +240,65 @@ def test_backfill_without_explicit_universes_resolves_membership_per_date(
     }
     assert stored == {first_date: 1, second_date: 2}
 
+
+def test_implicit_backfill_loads_members_at_final_requested_membership_date(
+    monkeypatch,
+):
+    db = _make_db_session()
+    first_date = date(2026, 3, 19)
+    second_date = date(2026, 3, 20)
+
+    def point_in_time_snapshots(_db, market, dates):
+        assert market == "US"
+        assert tuple(dates) == (first_date, second_date)
+        return {
+            first_date: BreadthUniverseSnapshot(
+                calculation_date=first_date,
+                members=(BreadthUniverseMember("DELISTED", "USD"),),
+                broad_signature="first",
+            ),
+            second_date: BreadthUniverseSnapshot(
+                calculation_date=second_date,
+                members=(BreadthUniverseMember("CURRENT", "USD"),),
+                broad_signature="second",
+            ),
+        }
+
+    monkeypatch.setattr(
+        breadth_backfill_module,
+        "build_breadth_universe_snapshots",
+        point_in_time_snapshots,
+        raising=False,
+    )
+    expected_date_by_symbol = {
+        "DELISTED": first_date,
+        "CURRENT": second_date,
+    }
+
+    def cached_prices(symbols, period, *, required_as_of_date=None):
+        assert period == "2y"
+        return {
+            symbol: (
+                _flat_price_df(expected_date_by_symbol[symbol])
+                if required_as_of_date == expected_date_by_symbol[symbol]
+                else None
+            )
+            for symbol in symbols
+        }
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.side_effect = cached_prices
+    price_cache.get_historical_data.return_value = None
+
+    result = BreadthCalculatorService(db, price_cache).backfill_range(
+        first_date,
+        second_date,
+        trading_dates=[first_date, second_date],
+    )
+
+    assert result["processed"] == 2
+    assert result["error_dates"] == []
+
 def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratios(monkeypatch):
     db = _make_db_session()
     db.add_all([
@@ -293,7 +352,11 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
         "errors": 0,
         "error_dates": [],
     }
-    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAA", "BBB"],
+        period="2y",
+        required_as_of_date=trading_dates[-1],
+    )
     price_cache.get_many_cached_only.assert_not_called()
     price_cache.get_historical_data.assert_called_once_with(symbol="BBB", period="2y")
 
@@ -340,7 +403,11 @@ def test_backfill_range_excludes_explicit_non_common_instruments():
         "SPY": _flat_price_df(calculation_date),
     }
     price_cache.get_many_cached_only_fresh.side_effect = (
-        lambda symbols, period: {symbol: histories[symbol] for symbol in symbols}
+        lambda symbols, period, *, required_as_of_date: {
+            symbol: histories[symbol]
+            for symbol in symbols
+            if required_as_of_date == calculation_date
+        }
     )
     service = BreadthCalculatorService(db, price_cache)
 
@@ -355,7 +422,9 @@ def test_backfill_range_excludes_explicit_non_common_instruments():
     ).one()
     assert stored.broad_universe_count == 1
     price_cache.get_many_cached_only_fresh.assert_called_once_with(
-        ["AAA"], period="2y"
+        ["AAA"],
+        period="2y",
+        required_as_of_date=calculation_date,
     )
 
 def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():

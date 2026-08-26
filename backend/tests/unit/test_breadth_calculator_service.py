@@ -609,6 +609,7 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback():
     price_cache.get_many_cached_only_fresh.assert_called_once_with(
         ["AAA", "BBB"],
         period="2y",
+        required_as_of_date=trading_date,
         minimum_rows=1,
     )
     price_cache.get_historical_data.assert_not_called()
@@ -724,6 +725,7 @@ def test_backfill_range_can_exclude_unsupported_yahoo_symbols(monkeypatch):
     load_prices.assert_called_once_with(
         batch_symbols=["7203.T"],
         cache_only=True,
+        required_as_of_date=trading_date,
     )
     assert result["processed"] == 1
     assert result["target_symbols"] == 1
@@ -795,6 +797,7 @@ def test_backfill_range_requests_history_for_full_interval_and_warmup(monkeypatc
     load_prices.assert_called_once_with(
         batch_symbols=["AAA"],
         cache_only=True,
+        required_as_of_date=end_date,
         period="5y",
     )
 
@@ -831,6 +834,38 @@ def test_history_period_uses_the_251st_prior_market_session(monkeypatch):
     ) == "5y"
 
 
+def test_historical_daily_breadth_loads_full_52_week_warmup():
+    db = _make_db_session()
+    calculation_date = date(2022, 1, 3)
+    db.add(
+        StockUniverse(
+            symbol="HISTORICAL",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=True,
+        )
+    )
+    db.commit()
+    full_history = _flat_price_df(calculation_date, periods=252)
+
+    class DateAwareCache:
+        def get_many_cached_only_fresh(self, symbols, period="2y"):
+            assert symbols == ["HISTORICAL"]
+            return {
+                "HISTORICAL": (
+                    full_history if period == "max" else full_history.tail(1)
+                )
+            }
+
+    result = BreadthCalculatorService(db, DateAwareCache()).calculate_daily_breadth(
+        calculation_date
+    )
+
+    assert result.indicators["high_low_52week_eligible_count"] == 1
+
+
 def test_backfill_range_requests_history_for_old_narrow_interval(monkeypatch):
     db = _make_db_session()
     db.add(
@@ -857,6 +892,7 @@ def test_backfill_range_requests_history_for_old_narrow_interval(monkeypatch):
     load_prices.assert_called_once_with(
         batch_symbols=["AAA"],
         cache_only=True,
+        required_as_of_date=old_date,
         period="max",
     )
 
@@ -1116,7 +1152,11 @@ def test_fill_gaps_refreshes_stale_cached_prices_before_counting():
         "errors": 0,
         "error_dates": [],
     }
-    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA"], period="2y")
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["AAA"],
+        period="2y",
+        required_as_of_date=trading_date,
+    )
     price_cache.get_historical_data.assert_called_once_with(symbol="AAA", period="2y")
     row = db.query(MarketBreadth).filter(MarketBreadth.date == trading_date).one()
     assert row.stocks_up_4pct == 1

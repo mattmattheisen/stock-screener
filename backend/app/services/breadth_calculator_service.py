@@ -8,7 +8,7 @@ monthly/quarterly performance indicators.
 import logging
 import math
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -117,6 +117,14 @@ class BreadthCalculatorService:
         )[calculation_date]
         members = snapshot.members
         symbols = [member.symbol for member in members]
+        history_period = (
+            self._history_period_for_dates(
+                (calculation_date,),
+                cache_anchor_date=datetime.now(UTC).date(),
+            )
+            if symbols
+            else "2y"
+        )
 
         prices_by_symbol: dict[str, pd.DataFrame] = {}
         price_coverage = BreadthPriceCoverageAccumulator()
@@ -127,6 +135,7 @@ class BreadthCalculatorService:
                 batch_symbols=batch_symbols,
                 cache_only=policy.cache_only,
                 required_as_of_date=(calculation_date if policy.cache_only else None),
+                period=history_period,
             )
             price_coverage.record_batch(batch_symbols, cache_misses)
             for symbol in batch_symbols:
