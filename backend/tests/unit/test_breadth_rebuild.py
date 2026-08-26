@@ -1,13 +1,25 @@
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import app.services.breadth.rebuild as rebuild_module
+import pandas as pd
+from app.database import Base
+from app.models.market_breadth import MarketBreadth
+from app.models.stock_universe import StockUniverse
 from app.scripts.rebuild_market_breadth import (
     EXIT_CONFIRMATION_REQUIRED,
     EXIT_VALIDATION_REQUIRED,
     main,
 )
 from app.services.breadth.rebuild import BreadthRebuildService
+from app.services.point_in_time_universe_service import (
+    PointInTimeUniverse,
+    PointInTimeUniverseMember,
+    hash_point_in_time_universe_symbols,
+)
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 
 class _FakeRebuildService:
@@ -79,3 +91,68 @@ def test_build_dispatches_market_and_date_range():
     assert service.calls[0][0] == "build"
     assert service.calls[0][1]["markets"] == ("US",)
     assert service.calls[0][1]["start_date"] == date(2026, 1, 1)
+
+
+def test_rebuild_does_not_stage_a_date_with_partial_supported_cache_coverage():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[MarketBreadth.__table__, StockUniverse.__table__],
+    )
+    db = sessionmaker(bind=engine)()
+    calculation_date = date(2026, 8, 21)
+    index = pd.bdate_range(end=calculation_date, periods=2)
+    prices = pd.DataFrame(
+        {
+            "Open": 100.0,
+            "High": 101.0,
+            "Low": 99.0,
+            "Close": 100.0,
+            "Adj Close": 100.0,
+            "Volume": 1_000_000,
+        },
+        index=index,
+    )
+
+    class _UniverseService:
+        def resolve(self, _db, *, market, as_of_date):
+            symbols = ("AAA", "MISSING")
+            return PointInTimeUniverse(
+                market=market,
+                as_of_date=as_of_date,
+                symbols=symbols,
+                universe_hash=hash_point_in_time_universe_symbols(symbols),
+                members=tuple(
+                    PointInTimeUniverseMember(symbol=symbol, currency="USD")
+                    for symbol in symbols
+                ),
+            )
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": prices,
+        "MISSING": None,
+    }
+    calendar = SimpleNamespace(
+        is_trading_day=lambda _market, day: day == calculation_date,
+    )
+    service = BreadthRebuildService(
+        db,
+        price_cache=price_cache,
+        universe_service=_UniverseService(),
+        calendar_service=calendar,
+        required_markets=("US",),
+    )
+
+    result = service.build(
+        markets=("US",),
+        start_date=calculation_date,
+        end_date=calculation_date,
+    )
+
+    staged_count = db.execute(
+        text("SELECT COUNT(*) FROM market_breadth_rebuild")
+    ).scalar_one()
+    assert result["processed"] == 0
+    assert result["markets"]["US"]["error_dates"] == ["2026-08-21"]
+    assert staged_count == 0

@@ -255,6 +255,7 @@ class BreadthRebuildService:
                 ),
                 exclude_unsupported_price_symbols=True,
                 required_as_of_date=None,
+                require_complete_cache_coverage=True,
             ).to_legacy_dict()
         return {
             "markets": reports,

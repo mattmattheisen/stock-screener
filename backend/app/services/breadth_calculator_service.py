@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 from ..models.market_breadth import MarketBreadth
 from ..models.stock_universe import StockUniverse
 from .breadth.engine import BreadthEngine, BreadthEngineRequest
-from .breadth.formulas import prices_for_feature_window, validate_price_frame
+from .breadth.formulas import (
+    BREADTH_FEATURE_WARMUP_SESSIONS,
+    prices_for_feature_window,
+    validate_price_frame,
+)
 from .breadth.persistence import BreadthPersistence
 from .breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
@@ -238,15 +242,40 @@ class BreadthCalculatorService:
             )
         return result
 
-    @staticmethod
     def _history_period_for_dates(
+        self,
         calculation_dates: tuple[date, ...],
         *,
         cache_anchor_date: date,
     ) -> str:
         if not calculation_dates:
             return "2y"
-        warmup_start = min(calculation_dates) - timedelta(days=370)
+        from ..wiring.bootstrap import get_market_calendar_service
+
+        calendar = get_market_calendar_service()
+        first_calculation_date = min(calculation_dates)
+        anchor_date = first_calculation_date
+        if not calendar.is_trading_day(self.market, anchor_date):
+            sessions: list[date] = []
+            for search_days in (30, 90, 370):
+                sessions = calendar.trading_days(
+                    self.market,
+                    anchor_date - timedelta(days=search_days),
+                    anchor_date,
+                )
+                if sessions:
+                    break
+            if not sessions:
+                raise ValueError(
+                    f"No {self.market} trading session available on or before "
+                    f"{anchor_date.isoformat()}"
+                )
+            anchor_date = sessions[-1]
+        warmup_start = calendar.session_anchors(
+            self.market,
+            anchor_date,
+            offsets=(BREADTH_FEATURE_WARMUP_SESSIONS,),
+        )[BREADTH_FEATURE_WARMUP_SESSIONS]
         required_calendar_days = (cache_anchor_date - warmup_start).days
         if required_calendar_days <= 730:
             return "2y"

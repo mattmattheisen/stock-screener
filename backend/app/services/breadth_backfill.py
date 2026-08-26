@@ -14,6 +14,7 @@ from ..models.stock_universe import StockUniverse
 from .breadth.engine import BreadthEngineRequest
 from .breadth.formulas import validate_price_frame
 from .breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
+from .breadth.universe import build_breadth_universe_snapshots
 from .breadth_coverage import (
     BreadthCoverageReport,
     BreadthOutcomeCounter,
@@ -22,7 +23,6 @@ from .breadth_coverage import (
 )
 from .derived_data_execution_policy import DerivedDataExecutionPolicy
 from .fx_service import default_currency_for_market
-from .point_in_time_universe_service import hash_point_in_time_universe_symbols
 from .static_breadth_eligibility import static_breadth_eligibility_signature
 
 if TYPE_CHECKING:
@@ -130,12 +130,14 @@ class BreadthBackfillExecutor:
         policy: DerivedDataExecutionPolicy,
         exclude_unsupported_price_symbols: bool = False,
         required_as_of_date: date | None = None,
+        require_complete_cache_coverage: bool = False,
     ) -> BreadthBackfillResult:
         return self._execute_canonical(
             plan,
             policy=policy,
             exclude_unsupported_price_symbols=exclude_unsupported_price_symbols,
             required_as_of_date=required_as_of_date,
+            require_complete_cache_coverage=require_complete_cache_coverage,
         )
 
     def _execute_canonical(
@@ -145,6 +147,7 @@ class BreadthBackfillExecutor:
         policy: DerivedDataExecutionPolicy,
         exclude_unsupported_price_symbols: bool,
         required_as_of_date: date | None,
+        require_complete_cache_coverage: bool,
     ) -> BreadthBackfillResult:
         calculator = self._calculator
         ordered_dates = list(plan.dates)
@@ -159,20 +162,31 @@ class BreadthBackfillExecutor:
         )
 
         if explicit_symbols is None:
-            stock_rows = (
-                calculator.db.query(StockUniverse)
-                .filter(
-                    StockUniverse.is_active == True,
-                    StockUniverse.market == calculator.market,
-                    StockUniverse.is_common_stock.is_(True),
+            universes_by_date = dict(
+                build_breadth_universe_snapshots(
+                    calculator.db,
+                    calculator.market,
+                    ordered_dates,
                 )
-                .all()
             )
-            rows_by_symbol = {row.symbol: row for row in stock_rows}
-            target_symbols = sorted(rows_by_symbol)
             symbols_by_date = {
-                calculation_date: tuple(target_symbols)
+                calculation_date: tuple(
+                    member.symbol
+                    for member in universes_by_date[calculation_date].members
+                )
                 for calculation_date in ordered_dates
+            }
+            target_symbols = sorted(
+                {
+                    symbol
+                    for symbols in symbols_by_date.values()
+                    for symbol in symbols
+                }
+            )
+            currency_by_symbol = {
+                member.symbol: member.currency
+                for snapshot in universes_by_date.values()
+                for member in snapshot.members
             }
         else:
             target_symbols = sorted(
@@ -191,6 +205,26 @@ class BreadthBackfillExecutor:
             )
             rows_by_symbol = {row.symbol: row for row in stock_rows}
             symbols_by_date = dict(explicit_symbols)
+            currency_by_symbol = {
+                symbol: (
+                    getattr(rows_by_symbol.get(symbol), "currency", None)
+                    or default_currency_for_market(calculator.market)
+                )
+                for symbol in target_symbols
+            }
+            universes_by_date: dict[date, BreadthUniverseSnapshot] = {}
+            for calculation_date in ordered_dates:
+                symbols = tuple(sorted(symbols_by_date[calculation_date]))
+                supplied = plan.universe_for(calculation_date)
+                assert supplied is not None
+                universes_by_date[calculation_date] = BreadthUniverseSnapshot(
+                    calculation_date=calculation_date,
+                    members=tuple(
+                        BreadthUniverseMember(symbol, currency_by_symbol[symbol])
+                        for symbol in symbols
+                    ),
+                    broad_signature=supplied.eligibility_signature,
+                )
 
         price_symbols = target_symbols
         skipped_unsupported_symbols: list[str] = []
@@ -200,36 +234,15 @@ class BreadthBackfillExecutor:
             )
         unsupported_symbols = set(skipped_unsupported_symbols)
 
-        currency_by_symbol = {
-            symbol: (
-                getattr(rows_by_symbol.get(symbol), "currency", None)
-                or default_currency_for_market(calculator.market)
-            )
-            for symbol in target_symbols
-        }
-        universes_by_date: dict[date, BreadthUniverseSnapshot] = {}
-        for calculation_date in ordered_dates:
-            symbols = tuple(sorted(symbols_by_date[calculation_date]))
-            supplied = plan.universe_for(calculation_date)
-            signature = (
-                supplied.eligibility_signature
-                if supplied is not None
-                else hash_point_in_time_universe_symbols(symbols)
-            )
-            universes_by_date[calculation_date] = BreadthUniverseSnapshot(
-                calculation_date=calculation_date,
-                members=tuple(
-                    BreadthUniverseMember(symbol, currency_by_symbol[symbol])
-                    for symbol in symbols
-                ),
-                broad_signature=signature,
-            )
-
         prices_by_symbol: dict[str, Any] = {}
         price_coverage = BreadthPriceCoverageAccumulator()
-        history_period = calculator._history_period_for_dates(
-            tuple(ordered_dates),
-            cache_anchor_date=datetime.now(UTC).date(),
+        history_period = (
+            calculator._history_period_for_dates(
+                tuple(ordered_dates),
+                cache_anchor_date=datetime.now(UTC).date(),
+            )
+            if price_symbols
+            else "2y"
         )
         for offset in range(0, len(price_symbols), 500):
             batch_symbols = price_symbols[offset : offset + 500]
@@ -307,10 +320,23 @@ class BreadthBackfillExecutor:
             for symbol, history in prices_by_symbol.items()
             if symbol not in invalid_symbols
         }
+        reports_by_date = {
+            calculation_date: outcome.report()
+            for calculation_date, outcome in outcomes_by_date.items()
+        }
         processed_dates = [
             calculation_date
             for calculation_date in ordered_dates
-            if outcomes_by_date[calculation_date].report().scanned > 0
+            if (
+                reports_by_date[calculation_date].scanned > 0
+                and (
+                    not require_complete_cache_coverage
+                    or (
+                        reports_by_date[calculation_date].cache_misses == 0
+                        and reports_by_date[calculation_date].errors == 0
+                    )
+                )
+            )
         ]
         prices_by_symbol = calculator._prices_for_feature_window(
             prices_by_symbol,

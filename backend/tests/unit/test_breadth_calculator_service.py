@@ -10,7 +10,11 @@ import pytest
 from app.database import Base
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
-from app.services.breadth.types import BreadthIndicatorValues
+from app.services.breadth.types import (
+    BreadthIndicatorValues,
+    BreadthUniverseMember,
+    BreadthUniverseSnapshot,
+)
 from app.services.breadth.universe import breadth_eligibility_signature
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.derived_data_execution_policy import (
@@ -65,6 +69,44 @@ def _make_db_session():
     Base.metadata.create_all(engine, tables=[StockUniverse.__table__, MarketBreadth.__table__])
     testing_session_local = sessionmaker(bind=engine)
     return testing_session_local()
+
+
+@pytest.fixture(autouse=True)
+def _use_current_rows_as_default_backfill_universe(monkeypatch):
+    """Keep calculator tests independent of lifecycle-event reconstruction."""
+
+    def snapshots(db, market, dates):
+        rows = (
+            db.query(StockUniverse)
+            .filter(
+                StockUniverse.market == market,
+                StockUniverse.is_active == True,
+                StockUniverse.is_common_stock.is_(True),
+            )
+            .order_by(StockUniverse.symbol.asc())
+            .all()
+        )
+        members = tuple(
+            BreadthUniverseMember(row.symbol, row.currency)
+            for row in rows
+        )
+        signature = breadth_eligibility_signature(
+            member.symbol for member in members
+        )
+        return {
+            calculation_date: BreadthUniverseSnapshot(
+                calculation_date=calculation_date,
+                members=members,
+                broad_signature=signature,
+            )
+            for calculation_date in dates
+        }
+
+    monkeypatch.setattr(
+        breadth_backfill_module,
+        "build_breadth_universe_snapshots",
+        snapshots,
+    )
 
 
 def _add_breadth_row(
@@ -644,6 +686,38 @@ def test_backfill_range_requests_history_for_full_interval_and_warmup(monkeypatc
         cache_only=True,
         period="5y",
     )
+
+
+def test_history_period_uses_the_251st_prior_market_session(monkeypatch):
+    calculation_date = date(2025, 9, 1)
+    cache_anchor = date(2026, 8, 25)
+
+    class _Calendar:
+        def is_trading_day(self, market, day):
+            assert (market, day) == ("US", calculation_date)
+            return True
+
+        def session_anchors(self, market, as_of_date, *, offsets):
+            assert (market, as_of_date, offsets) == (
+                "US",
+                calculation_date,
+                (251,),
+            )
+            return {0: calculation_date, 251: date(2024, 8, 20)}
+
+    import app.wiring.bootstrap as bootstrap_module
+
+    monkeypatch.setattr(
+        bootstrap_module,
+        "get_market_calendar_service",
+        lambda: _Calendar(),
+    )
+    service = BreadthCalculatorService(_make_db_session(), MagicMock())
+
+    assert service._history_period_for_dates(
+        (calculation_date,),
+        cache_anchor_date=cache_anchor,
+    ) == "5y"
 
 
 def test_backfill_range_requests_history_for_old_narrow_interval(monkeypatch):
