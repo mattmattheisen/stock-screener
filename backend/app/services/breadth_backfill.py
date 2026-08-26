@@ -360,7 +360,7 @@ class BreadthBackfillExecutor:
                 universes_by_date=universes_by_date,
                 prices_by_symbol=prices_by_symbol,
                 fx_by_currency=fx_by_currency,
-                seed_counts=calculator._load_ratio_context_counts(ordered_dates),
+                seed_counts=calculator._load_ratio_context_counts(processed_dates),
             )
         )
 

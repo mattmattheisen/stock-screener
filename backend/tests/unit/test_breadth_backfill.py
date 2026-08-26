@@ -495,7 +495,7 @@ def test_backfill_range_reports_malformed_history_on_every_applicable_date():
     }
 
 
-def test_backfill_range_excludes_failed_dates_from_rolling_ratios():
+def test_backfill_range_preserves_existing_failed_date_in_ratio_context():
     db = _make_db_session()
     failed_date = date(2026, 3, 19)
     processed_date = date(2026, 3, 20)
@@ -511,6 +511,17 @@ def test_backfill_range_excludes_failed_dates_from_rolling_ratios():
                 calculation_revision=2,
             )
         )
+    db.add(
+        MarketBreadth(
+            market="US",
+            date=failed_date,
+            stocks_up_4pct=0,
+            stocks_down_4pct=10,
+            total_stocks_scanned=10,
+            broad_universe_count=10,
+            calculation_revision=2,
+        )
+    )
     db.commit()
 
     history = _flat_price_df(processed_date)
@@ -541,8 +552,8 @@ def test_backfill_range_excludes_failed_dates_from_rolling_ratios():
         MarketBreadth.date == processed_date
     ).one()
     assert result["error_dates"] == ["2026-03-19"]
-    assert stored.ratio_5day == 1.25
-    assert stored.ratio_10day == 1.11
+    assert stored.ratio_5day == 0.31
+    assert stored.ratio_10day == 0.5
 
 
 def test_strict_backfill_rejects_date_with_supported_missing_target_session():
