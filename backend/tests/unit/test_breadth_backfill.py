@@ -54,15 +54,15 @@ def _use_current_rows_as_default_backfill_universe(monkeypatch):
     """Keep legacy unit tests focused on calculation rather than lifecycle data."""
 
     def snapshots(db, market, dates):
-        rows = (
+        rows = sorted(
             db.query(StockUniverse)
             .filter(
                 StockUniverse.market == market,
                 StockUniverse.is_active == True,
                 StockUniverse.is_common_stock.is_(True),
             )
-            .order_by(StockUniverse.symbol.asc())
-            .all()
+            .all(),
+            key=lambda row: row.symbol,
         )
         members = tuple(
             BreadthUniverseMember(row.symbol, row.currency)

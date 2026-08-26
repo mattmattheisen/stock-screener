@@ -19,6 +19,7 @@ from app.services.breadth.types import (
     BreadthUniverseMember,
     BreadthUniverseSnapshot,
 )
+from app.services.breadth.universe import build_breadth_universe_snapshots
 from app.services.breadth_attribution_service import BreadthAttributionService
 from app.services.fx_service import default_currency_for_market, get_fx_service
 from app.services.point_in_time_universe_service import (
@@ -53,6 +54,7 @@ class StaticBreadthEngineInputFactory:
         canonical_dates: list[date],
         price_data: Mapping[str, pd.DataFrame | None],
         currencies_by_symbol: Mapping[str, str] | None = None,
+        universes_by_date: Mapping[date, BreadthUniverseSnapshot] | None = None,
     ) -> StaticBreadthEngineInputs:
         normalized_market = market.upper()
         default_currency = default_currency_for_market(normalized_market)
@@ -63,19 +65,31 @@ class StaticBreadthEngineInputFactory:
             ).upper()
             for symbol in symbols
         }
-        members = tuple(
-            BreadthUniverseMember(symbol=symbol, currency=currency_map[symbol])
-            for symbol in symbols
-        )
-        signature = hash_point_in_time_universe_symbols(symbols)
-        universes = {
-            calculation_date: BreadthUniverseSnapshot(
-                calculation_date=calculation_date,
-                members=members,
-                broad_signature=signature,
+        if universes_by_date is None:
+            members = tuple(
+                BreadthUniverseMember(symbol=symbol, currency=currency_map[symbol])
+                for symbol in symbols
             )
-            for calculation_date in canonical_dates
-        }
+            signature = hash_point_in_time_universe_symbols(symbols)
+            universes = {
+                calculation_date: BreadthUniverseSnapshot(
+                    calculation_date=calculation_date,
+                    members=members,
+                    broad_signature=signature,
+                )
+                for calculation_date in canonical_dates
+            }
+        else:
+            missing_dates = set(canonical_dates) - set(universes_by_date)
+            if missing_dates:
+                missing = ", ".join(
+                    value.isoformat() for value in sorted(missing_dates)
+                )
+                raise ValueError(f"Static breadth universes missing for: {missing}")
+            universes = {
+                calculation_date: universes_by_date[calculation_date]
+                for calculation_date in canonical_dates
+            }
         usable_prices = prices_for_feature_window(
             {
                 symbol: history
@@ -186,6 +200,7 @@ class StaticBreadthSectionBuilder:
             if row.get("symbol")
         ]
         currencies_by_symbol: dict[str, str] = {}
+        universes_by_date: dict[date, BreadthUniverseSnapshot] | None = None
         symbols = scan_symbols
         if db is not None:
             universe = self._universe_resolver.resolve(
@@ -229,12 +244,34 @@ class StaticBreadthSectionBuilder:
             )
 
         canonical_dates = canonical_dates[-max(STATIC_BREADTH_HISTORY_LOOKBACK_DAYS + 15, 120):]
+        if db is not None:
+            universes_by_date = dict(
+                build_breadth_universe_snapshots(
+                    db,
+                    market,
+                    canonical_dates,
+                    universe_service=self._universe_resolver,
+                )
+            )
+            symbols = sorted(
+                {
+                    member.symbol
+                    for universe in universes_by_date.values()
+                    for member in universe.members
+                }
+            )
+            currencies_by_symbol = {
+                member.symbol: member.currency
+                for universe in universes_by_date.values()
+                for member in universe.members
+            }
         price_data = self._get_cached_price_histories(symbols, period="2y")
         engine_inputs = self._engine_input_factory.build(
             market=market,
             canonical_dates=canonical_dates,
             price_data=price_data,
             currencies_by_symbol=currencies_by_symbol,
+            universes_by_date=universes_by_date,
         )
         metrics_by_date = self._compute_breadth_metrics_by_date(
             canonical_dates,
@@ -345,6 +382,15 @@ class StaticBreadthSectionBuilder:
             target_dates=attribution_dates,
             currencies_by_symbol=engine_inputs.currencies_by_symbol,
             fx_by_currency=engine_inputs.request.fx_by_currency,
+            symbols_by_date={
+                calculation_date: frozenset(
+                    member.symbol
+                    for member in universe.members
+                )
+                for calculation_date, universe in (
+                    engine_inputs.request.universes_by_date.items()
+                )
+            },
         )
         has_any_mover = any(
             (day.get("stocks_up_4pct", 0) + day.get("stocks_down_4pct", 0)) > 0

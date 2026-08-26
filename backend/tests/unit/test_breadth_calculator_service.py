@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import app.services.breadth_backfill as breadth_backfill_module
+import app.services.breadth_calculator_service as breadth_calculator_module
 import pandas as pd
 import pytest
 from app.database import Base
@@ -20,6 +21,7 @@ from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.derived_data_execution_policy import (
     resolve_derived_data_execution_policy,
 )
+from app.services.fx_service import default_currency_for_market
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -76,18 +78,21 @@ def _use_current_rows_as_default_backfill_universe(monkeypatch):
     """Keep calculator tests independent of lifecycle-event reconstruction."""
 
     def snapshots(db, market, dates):
-        rows = (
+        rows = sorted(
             db.query(StockUniverse)
             .filter(
                 StockUniverse.market == market,
                 StockUniverse.is_active == True,
                 StockUniverse.is_common_stock.is_(True),
             )
-            .order_by(StockUniverse.symbol.asc())
-            .all()
+            .all(),
+            key=lambda row: row.symbol,
         )
         members = tuple(
-            BreadthUniverseMember(row.symbol, row.currency)
+            BreadthUniverseMember(
+                row.symbol,
+                getattr(row, "currency", None) or default_currency_for_market(market),
+            )
             for row in rows
         )
         signature = breadth_eligibility_signature(
@@ -104,6 +109,11 @@ def _use_current_rows_as_default_backfill_universe(monkeypatch):
 
     monkeypatch.setattr(
         breadth_backfill_module,
+        "build_breadth_universe_snapshots",
+        snapshots,
+    )
+    monkeypatch.setattr(
+        breadth_calculator_module,
         "build_breadth_universe_snapshots",
         snapshots,
     )
@@ -255,6 +265,54 @@ def test_calculate_daily_breadth_counts_fresh_cache_misses():
     assert metrics["cache_coverage_ratio"] == 0.5
     assert metrics["cache_miss_symbols_sample"] == ["BBB"]
     assert result.coverage.cache_miss_symbols_sample == ("BBB",)
+
+
+def test_historical_daily_breadth_uses_the_requested_dates_universe(monkeypatch):
+    db = _make_db_session()
+    db.add(
+        StockUniverse(
+            symbol="RECENT",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    db.commit()
+    calculation_date = date(2026, 3, 20)
+
+    def point_in_time_snapshots(_db, market, dates):
+        assert (market, tuple(dates)) == ("US", (calculation_date,))
+        return {
+            calculation_date: BreadthUniverseSnapshot(
+                calculation_date=calculation_date,
+                members=(BreadthUniverseMember("HISTORICAL", "USD"),),
+                broad_signature="historical",
+            )
+        }
+
+    monkeypatch.setattr(
+        "app.services.breadth_calculator_service.build_breadth_universe_snapshots",
+        point_in_time_snapshots,
+        raising=False,
+    )
+    prices = _flat_price_df(calculation_date)
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "HISTORICAL": prices,
+    }
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.calculate_daily_breadth(calculation_date)
+
+    assert result.indicators["broad_universe_count"] == 1
+    assert result.indicators["eligibility_signature"] == breadth_eligibility_signature(
+        ("HISTORICAL",)
+    )
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["HISTORICAL"],
+        period="2y",
+    )
 
 
 def test_daily_breadth_preserves_month_eligibility_without_prior_close():

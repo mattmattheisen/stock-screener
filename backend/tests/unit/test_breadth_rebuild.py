@@ -156,3 +156,78 @@ def test_rebuild_does_not_stage_a_date_with_partial_supported_cache_coverage():
     assert result["processed"] == 0
     assert result["markets"]["US"]["error_dates"] == ["2026-08-21"]
     assert staged_count == 0
+
+
+def test_rebuild_reads_delisted_history_at_its_last_membership_date():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[MarketBreadth.__table__, StockUniverse.__table__],
+    )
+    db = sessionmaker(bind=engine)()
+    calculation_date = date(2026, 8, 21)
+    prices = pd.DataFrame(
+        {
+            "Open": 100.0,
+            "High": 101.0,
+            "Low": 99.0,
+            "Close": 100.0,
+            "Adj Close": 100.0,
+            "Volume": 1_000_000,
+        },
+        index=pd.bdate_range(end=calculation_date, periods=2),
+    )
+
+    class _UniverseService:
+        def resolve(self, _db, *, market, as_of_date):
+            symbols = ("DELISTED",)
+            return PointInTimeUniverse(
+                market=market,
+                as_of_date=as_of_date,
+                symbols=symbols,
+                universe_hash=hash_point_in_time_universe_symbols(symbols),
+                members=(
+                    PointInTimeUniverseMember(
+                        symbol="DELISTED",
+                        currency="USD",
+                    ),
+                ),
+            )
+
+    price_cache = MagicMock()
+
+    def cached_histories(symbols, period, *, required_as_of_date=None):
+        assert symbols == ["DELISTED"]
+        assert period == "2y"
+        return {
+            "DELISTED": (
+                prices if required_as_of_date == calculation_date else None
+            )
+        }
+
+    price_cache.get_many_cached_only_fresh.side_effect = cached_histories
+    service = BreadthRebuildService(
+        db,
+        price_cache=price_cache,
+        universe_service=_UniverseService(),
+        calendar_service=SimpleNamespace(
+            is_trading_day=lambda _market, day: day == calculation_date,
+        ),
+        required_markets=("US",),
+    )
+
+    result = service.build(
+        markets=("US",),
+        start_date=calculation_date,
+        end_date=calculation_date,
+    )
+
+    assert result["processed"] == 1
+    assert db.execute(
+        text("SELECT COUNT(*) FROM market_breadth_rebuild")
+    ).scalar_one() == 1
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(
+        ["DELISTED"],
+        period="2y",
+        required_as_of_date=calculation_date,
+    )

@@ -6,7 +6,6 @@ from datetime import date
 
 import pandas as pd
 import pytest
-
 from app.services.breadth_attribution_service import (
     NO_GROUP_LABEL,
     BreadthAttributionService,
@@ -199,6 +198,24 @@ def test_compute_returns_history_oldest_to_newest():
     assert [day["date"] for day in result] == [value.isoformat() for value in dates]
     assert result[0]["stocks_up_4pct"] == 1
     assert result[1]["stocks_down_4pct"] == 1
+
+
+def test_compute_filters_movers_by_each_dates_universe():
+    history = _frame([100.0, 105.0, 110.25])
+    dates = [pd.Timestamp(value).date() for value in history.index[-2:]]
+
+    result = BreadthAttributionService().compute(
+        symbols_meta=[{"symbol": "NEW", "ibd_industry_group": "Software"}],
+        price_data={"NEW": history},
+        target_dates=dates,
+        symbols_by_date={
+            dates[0]: frozenset(),
+            dates[1]: frozenset({"NEW"}),
+        },
+    )
+
+    assert result[0]["stocks_up_4pct"] == 0
+    assert result[1]["stocks_up_4pct"] == 1
 
 
 def test_compute_skips_dates_with_missing_price_data():

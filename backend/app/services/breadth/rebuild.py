@@ -254,7 +254,7 @@ class BreadthRebuildService:
                     target_kind=DerivedDataTargetKind.HISTORICAL,
                 ),
                 exclude_unsupported_price_symbols=True,
-                required_as_of_date=None,
+                required_as_of_date=dates[-1],
                 require_complete_cache_coverage=True,
             ).to_legacy_dict()
         return {

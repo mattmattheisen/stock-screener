@@ -35,6 +35,7 @@ class BreadthAttributionService:
         target_dates: Iterable[date],
         currencies_by_symbol: Mapping[str, str] | None = None,
         fx_by_currency: Mapping[str, pd.Series] | None = None,
+        symbols_by_date: Mapping[date, Iterable[str]] | None = None,
         policy: BreadthFormulaPolicy | None = None,
     ) -> list[dict[str, Any]]:
         """Return attribution rows ordered oldest → newest.
@@ -81,6 +82,16 @@ class BreadthAttributionService:
 
         formula_policy = policy or BreadthFormulaPolicy()
         per_date: dict[date, dict[str, dict[str, Any]]] = {d: {} for d in ordered_dates}
+        normalized_symbols_by_date = (
+            {
+                calculation_date: frozenset(
+                    str(symbol).upper() for symbol in symbols
+                )
+                for calculation_date, symbols in symbols_by_date.items()
+            }
+            if symbols_by_date is not None
+            else None
+        )
 
         for symbol, meta in meta_by_symbol.items():
             history = price_data.get(symbol)
@@ -130,6 +141,11 @@ class BreadthAttributionService:
             name = meta.get("company_name") or meta.get("name")
 
             for d in ordered_dates:
+                if (
+                    normalized_symbols_by_date is not None
+                    and symbol not in normalized_symbols_by_date.get(d, frozenset())
+                ):
+                    continue
                 flags = signal_flags_at(features, d, formula_policy)
                 direction = (
                     "up"

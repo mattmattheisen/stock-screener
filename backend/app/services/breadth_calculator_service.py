@@ -14,7 +14,6 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ..models.market_breadth import MarketBreadth
-from ..models.stock_universe import StockUniverse
 from .breadth.engine import BreadthEngine, BreadthEngineRequest
 from .breadth.formulas import (
     BREADTH_FEATURE_WARMUP_SESSIONS,
@@ -29,8 +28,8 @@ from .breadth.types import (
     BreadthEligibilityCounts,
     BreadthIndicatorValues,
     BreadthUniverseMember,
-    BreadthUniverseSnapshot,
 )
+from .breadth.universe import build_breadth_universe_snapshots
 from .breadth_backfill import BreadthBackfillExecutor, BreadthBackfillPlan
 from .breadth_coverage import (
     BreadthCalculationResult,
@@ -43,8 +42,7 @@ from .derived_data_execution_policy import (
     DerivedDataExecutionPolicy,
     DerivedDataTargetKind,
 )
-from .fx_service import default_currency_for_market, get_fx_service
-from .point_in_time_universe_service import hash_point_in_time_universe_symbols
+from .fx_service import get_fx_service
 from .price_cache_service import PriceCacheService
 
 logger = logging.getLogger(__name__)
@@ -112,33 +110,13 @@ class BreadthCalculatorService:
             calculation_date = get_eastern_now().date()
 
         logger.info("Calculating breadth indicators for %s", calculation_date)
-        active_stocks = sorted(
-            self.db.query(StockUniverse)
-            .filter(
-                StockUniverse.is_active == True,
-                StockUniverse.market == self.market,
-                StockUniverse.is_common_stock.is_(True),
-            )
-            .all(),
-            key=lambda stock: stock.symbol,
-        )
-        members = tuple(
-            BreadthUniverseMember(
-                symbol=stock.symbol,
-                currency=(
-                    getattr(stock, "currency", None)
-                    or default_currency_for_market(self.market)
-                ),
-                is_common_stock=getattr(stock, "is_common_stock", True),
-            )
-            for stock in active_stocks
-        )
+        snapshot = build_breadth_universe_snapshots(
+            self.db,
+            self.market,
+            (calculation_date,),
+        )[calculation_date]
+        members = snapshot.members
         symbols = [member.symbol for member in members]
-        snapshot = BreadthUniverseSnapshot(
-            calculation_date=calculation_date,
-            members=members,
-            broad_signature=hash_point_in_time_universe_symbols(tuple(symbols)),
-        )
 
         prices_by_symbol: dict[str, pd.DataFrame] = {}
         price_coverage = BreadthPriceCoverageAccumulator()
