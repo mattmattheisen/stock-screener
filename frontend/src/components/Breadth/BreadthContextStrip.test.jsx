@@ -67,6 +67,25 @@ describe('BreadthContextStrip', () => {
     expect(screen.getByTestId('breadth-context-t2108_pct')).toHaveTextContent('—');
   });
 
+  it('shows valid zero high and low counts when eligible stocks exist', () => {
+    renderWithProviders(
+      <BreadthContextStrip
+        row={{
+          ...row,
+          new_high_52week_count: 0,
+          new_low_52week_count: 0,
+          high_low_52week_eligible_count: 80,
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId('breadth-health-high-low')).toHaveAttribute(
+      'aria-label',
+      'New High 0.0%, New Low 0.0%',
+    );
+    expect(screen.getAllByText('0 (0.0%)')).toHaveLength(2);
+  });
+
   it('labels StockBee and screenshot-derived formulas explicitly', () => {
     expect(breadthMetricDefinitions.t2108_pct.formulaOrigin).toBe('StockBee');
     expect(breadthMetricDefinitions.atr_10x_extension_count.formulaOrigin).toBe(

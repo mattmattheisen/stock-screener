@@ -2079,11 +2079,15 @@ def test_build_breadth_payload_uses_full_common_stock_universe_not_scan_rows(
         )
         db.commit()
 
+    requested_periods = []
+
+    def cached_histories(symbols, *, period):
+        requested_periods.append((tuple(symbols), period))
+        return {symbol: history for symbol in symbols}
+
     service = StaticSiteExportService(
         session_factory,
-        price_cache=_FakePriceCache(
-            lambda symbols, *, period: {symbol: history for symbol in symbols}
-        ),
+        price_cache=_FakePriceCache(cached_histories),
         fundamentals_cache=object(),
         benchmark_cache=_FakeBenchmarkCache(),
     )
@@ -2100,6 +2104,7 @@ def test_build_breadth_payload_uses_full_common_stock_universe_not_scan_rows(
     assert current["eligibility_signature"] == (
         hash_point_in_time_universe_symbols(("AAA", "BBB"))
     )
+    assert (("AAA", "BBB"), "2y") in requested_periods
 
 
 def test_build_breadth_payload_uses_builder_cache_dependencies_without_rebinding(

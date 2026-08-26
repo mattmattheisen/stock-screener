@@ -226,7 +226,7 @@ class StaticBreadthSectionBuilder:
             )
 
         canonical_dates = canonical_dates[-max(STATIC_BREADTH_HISTORY_LOOKBACK_DAYS + 15, 120):]
-        price_data = self._get_cached_price_histories(symbols, period="1y")
+        price_data = self._get_cached_price_histories(symbols, period="2y")
         engine_inputs = self._engine_input_factory.build(
             market=market,
             canonical_dates=canonical_dates,

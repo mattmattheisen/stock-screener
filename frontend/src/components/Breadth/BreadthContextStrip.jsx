@@ -40,14 +40,14 @@ function HealthBar({
   left,
   right,
   neutral,
+  isAvailable,
   eligibleLabel,
   colors,
 }) {
-  const available = left.denominator > 0;
   const leftPercent = percent(left.count, left.denominator);
   const rightPercent = percent(right.count, right.denominator);
   const neutralPercent = neutral ? percent(neutral.count, neutral.denominator) : 0;
-  const ariaLabel = available
+  const ariaLabel = isAvailable
     ? [
       `${left.label} ${leftPercent.toFixed(1)}%`,
       `${right.label} ${rightPercent.toFixed(1)}%`,
@@ -81,13 +81,13 @@ function HealthBar({
               </Box>
               <Typography
                 sx={{
-                  color: available ? colors[index] : 'text.secondary',
+                  color: isAvailable ? colors[index] : 'text.secondary',
                   fontFamily: 'monospace',
                   fontSize: 12,
                   fontWeight: 700,
                 }}
               >
-                {available ? `${item.count} (${itemPercent.toFixed(1)}%)` : '—'}
+                {isAvailable ? `${item.count} (${itemPercent.toFixed(1)}%)` : '—'}
               </Typography>
             </Box>
           );
@@ -179,6 +179,7 @@ function BreadthContextStrip({ row }) {
             denominator: advanceDeclineEligible,
             segment: 'unchanged',
           }}
+          isAvailable={advanceDeclineEligible > 0}
           eligibleLabel={`${advanceDeclineEligible || '—'} advance/decline eligible stocks`}
           colors={[
             BREADTH_VISUAL_COLORS['up-strong'],
@@ -201,6 +202,7 @@ function BreadthContextStrip({ row }) {
             denominator: highLowEvents,
             segment: 'low',
           }}
+          isAvailable={highLowEligible > 0}
           eligibleLabel={`${highLowEligible || '—'} high/low eligible stocks`}
           colors={[BREADTH_VISUAL_COLORS.newHigh, BREADTH_VISUAL_COLORS.newLow]}
         />

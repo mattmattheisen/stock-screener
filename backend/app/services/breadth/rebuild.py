@@ -310,6 +310,11 @@ class BreadthRebuildService:
             f"unexpected_manifest_market:{market}"
             for market in sorted(manifest_markets - self._required_markets)
         )
+        errors.extend(
+            f"empty_manifest_market:{market}"
+            for market in sorted(self._required_markets & manifest_markets)
+            if not manifest_dates_by_market[market]
+        )
         seen: set[tuple[str, date]] = set()
         dates_by_market: dict[str, set[date]] = {}
         for row in rows:

@@ -80,6 +80,20 @@ describe('BreadthHistoryTable', () => {
     expect(screen.getAllByText('—')).toHaveLength(4);
   });
 
+  it('keeps valid rolling ratios visible when current-session eligibility is zero', () => {
+    renderWithProviders(
+      <BreadthHistoryTable
+        rows={[{
+          ...row,
+          stockbee_daily_eligible_count: 0,
+        }]}
+      />,
+    );
+
+    expect(screen.getByTestId('breadth-cell-ratio_5day')).toHaveTextContent('2.00');
+    expect(screen.getByTestId('breadth-cell-ratio_10day')).toHaveTextContent('1.50');
+  });
+
   it('uses neutral, soft, and strong heat levels for directional count metrics', () => {
     const rows = Array.from({ length: 10 }, (_, index) => ({
       ...row,

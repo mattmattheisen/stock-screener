@@ -241,3 +241,26 @@ def test_validation_rejects_forged_full_market_manifest(tmp_path):
         assert "missing_manifest_market:HK" in report["errors"]
 
     engine.dispose()
+
+
+def test_validation_rejects_empty_required_market_partition(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'empty-market.sqlite'}")
+    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        service = BreadthRebuildService(db, required_markets=("US", "HK"))
+        service.recreate_staging()
+        service.record_build_manifest(
+            {"US": (date(2026, 8, 21),), "HK": ()},
+            full_market_set=True,
+        )
+        service.stage_results((_result(date(2026, 8, 21)),))
+
+        report = service.validate()
+
+        assert report["valid"] is False
+        assert "empty_manifest_market:HK" in report["errors"]
+        with pytest.raises(RuntimeError, match="invalid breadth rebuild"):
+            service.activate()
+
+    engine.dispose()

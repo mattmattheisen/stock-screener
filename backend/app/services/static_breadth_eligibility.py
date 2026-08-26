@@ -92,7 +92,7 @@ def classify_static_breadth_eligibility(
     universe_resolver: CurrentActiveFallbackUniverseResolver | None = None,
     exclusion_sample_limit: int = DEFAULT_EXCLUSION_SAMPLE_LIMIT,
 ) -> StaticBreadthEligibility:
-    """Resolve the supported point-in-time broad universe for each date.
+    """Resolve the point-in-time broad universe for each date.
 
     Price/history sufficiency deliberately does not filter this boundary. The
     shared engine applies the distinct data requirements for every metric.
@@ -104,7 +104,6 @@ def classify_static_breadth_eligibility(
     resolver = universe_resolver or CurrentActiveFallbackUniverseResolver()
 
     candidates_by_date: dict[date, tuple[str, ...]] = {}
-    supported_by_date: dict[date, tuple[str, ...]] = {}
     policy_by_date: dict[date, str] = {}
     unsupported: set[str] = set()
     for calculation_date in ordered_dates:
@@ -114,15 +113,14 @@ def classify_static_breadth_eligibility(
             as_of_date=calculation_date,
         )
         candidates = tuple(sorted(set(universe.symbols)))
-        supported, unsupported_for_date = split_supported_price_symbols(candidates)
+        _supported, unsupported_for_date = split_supported_price_symbols(candidates)
         candidates_by_date[calculation_date] = candidates
-        supported_by_date[calculation_date] = tuple(supported)
         unsupported.update(unsupported_for_date)
         policy_by_date[calculation_date] = (
             resolver.policy_for(normalized_market, calculation_date) or "unrecorded"
         )
 
-    eligible_by_date = dict(supported_by_date)
+    eligible_by_date = dict(candidates_by_date)
 
     eligible_counts = {
         calculation_date: len(symbols)

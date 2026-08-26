@@ -27,12 +27,12 @@ import {
 const formatValue = (row, metric) => {
   const value = row?.[metric];
   if (value == null) return '—';
-  const eligibleField = breadthMetricDefinitions[metric]?.eligibleField;
-  const eligibleValue = eligibleField ? row?.[eligibleField] : null;
-  if (eligibleValue != null && Number(eligibleValue) <= 0) return '—';
   if (metric === 'ratio_5day' || metric === 'ratio_10day') {
     return Number(value).toFixed(2);
   }
+  const eligibleField = breadthMetricDefinitions[metric]?.eligibleField;
+  const eligibleValue = eligibleField ? row?.[eligibleField] : null;
+  if (eligibleValue != null && Number(eligibleValue) <= 0) return '—';
   if (metric === 't2108_pct') return `${Number(value).toFixed(2)}%`;
   return value;
 };
