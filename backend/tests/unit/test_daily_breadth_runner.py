@@ -65,7 +65,7 @@ def _calculation(
             "stocks_down_13pct_34days": 2,
             "total_stocks_scanned": candidates,
             "broad_universe_count": candidates,
-            "calculation_revision": 2,
+            "calculation_revision": 3,
         }
     daily_result = BreadthDailyResult(
         market="US",

@@ -167,7 +167,7 @@ def _seed_watchlist_stewardship_data(session):
             ratio_5day=0.8,
             ratio_10day=0.7,
             total_stocks_scanned=4200,
-            calculation_revision=2,
+            calculation_revision=3,
         )
     )
     session.add_all([

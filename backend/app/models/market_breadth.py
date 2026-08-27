@@ -43,7 +43,7 @@ class MarketBreadth(Base):
     stocks_up_13pct_34days = Column(Integer, default=0, nullable=False)
     stocks_down_13pct_34days = Column(Integer, default=0, nullable=False)
 
-    # Broad-universe context metrics (revision 2)
+    # Broad-universe context metrics
     advancing_count = Column(Integer, nullable=True)
     declining_count = Column(Integer, nullable=True)
     unchanged_count = Column(Integer, nullable=True)
@@ -53,7 +53,7 @@ class MarketBreadth(Base):
     t2108_pct = Column(Float, nullable=True)
     atr_10x_extension_count = Column(Integer, nullable=True)
 
-    # Explicit metric-family denominators (revision 2)
+    # Explicit metric-family denominators
     broad_universe_count = Column(Integer, nullable=True)
     advance_decline_eligible_count = Column(Integer, nullable=True)
     stockbee_daily_eligible_count = Column(Integer, nullable=True)
@@ -65,7 +65,7 @@ class MarketBreadth(Base):
     atr_extension_eligible_count = Column(Integer, nullable=True)
 
     # Metadata
-    # Deprecated compatibility alias; revision-2 writers set this equal to
+    # Deprecated compatibility alias; current writers set this equal to
     # broad_universe_count.
     total_stocks_scanned = Column(Integer, default=0, nullable=False)
     eligibility_signature = Column(String(64), nullable=True)

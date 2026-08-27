@@ -1,4 +1,4 @@
-"""Shadow rebuild, validation, and atomic cutover for breadth revision 2."""
+"""Shadow rebuild, validation, and atomic cutover for the current breadth revision."""
 
 from __future__ import annotations
 
@@ -170,7 +170,10 @@ class BreadthRebuildService:
         inserted = 0
         for result in results:
             if result.calculation_revision != CURRENT_BREADTH_CALCULATION_REVISION:
-                raise ValueError("Staging accepts only canonical revision-2 results")
+                raise ValueError(
+                    "Staging accepts only results from the current canonical "
+                    f"breadth revision ({CURRENT_BREADTH_CALCULATION_REVISION})"
+                )
             values = result.to_record_mapping()
             values["calculation_duration_seconds"] = (
                 duration_seconds_by_date.get(result.calculation_date)
