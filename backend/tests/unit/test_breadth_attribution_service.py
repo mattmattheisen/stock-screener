@@ -49,6 +49,10 @@ def _last_date(frame: pd.DataFrame) -> date:
     return pd.Timestamp(frame.index[-1]).date()
 
 
+def _usd_currencies(price_data: dict[str, pd.DataFrame | None]) -> dict[str, str]:
+    return {symbol: "USD" for symbol in price_data}
+
+
 def test_compute_returns_empty_when_no_symbols():
     service = BreadthAttributionService()
     result = service.compute(
@@ -75,6 +79,7 @@ def test_compute_attributes_up_mover_to_ibd_group():
         symbols_meta=symbols_meta,
         price_data=price_data,
         target_dates=[_last_date(price_data["PLTR"])],
+        currencies_by_symbol=_usd_currencies(price_data),
     )
 
     assert len(result) == 1
@@ -102,6 +107,7 @@ def test_compute_attributes_down_mover():
         symbols_meta=[{"symbol": "XYZ", "ibd_industry_group": "Banks-Money Center"}],
         price_data=price_data,
         target_dates=[_last_date(price_data["XYZ"])],
+        currencies_by_symbol=_usd_currencies(price_data),
     )
 
     day = result[0]
@@ -128,6 +134,7 @@ def test_compute_buckets_missing_group_into_no_group():
         symbols_meta=symbols_meta,
         price_data=price_data,
         target_dates=[_last_date(price_data["AAA"])],
+        currencies_by_symbol=_usd_currencies(price_data),
     )
 
     day = result[0]
@@ -147,6 +154,7 @@ def test_compute_skips_movers_below_threshold():
         symbols_meta=[{"symbol": "FLAT", "ibd_industry_group": "Retail"}],
         price_data=price_data,
         target_dates=[_last_date(price_data["FLAT"])],
+        currencies_by_symbol=_usd_currencies(price_data),
     )
     assert result[0]["groups"] == []
     assert result[0]["stocks_up_4pct"] == 0
@@ -177,6 +185,7 @@ def test_compute_sorts_groups_by_total_activity_then_net():
         symbols_meta=meta,
         price_data=price_data,
         target_dates=[_last_date(price_data["A1"])],
+        currencies_by_symbol=_usd_currencies(price_data),
     )
     groups = [g["group"] for g in result[0]["groups"]]
     # Bravo first (highest activity=3), then Charlie (activity=2), then Alpha.
@@ -194,6 +203,7 @@ def test_compute_returns_history_oldest_to_newest():
         symbols_meta=[{"symbol": "X", "ibd_industry_group": "G"}],
         price_data=price_data,
         target_dates=dates,
+        currencies_by_symbol=_usd_currencies(price_data),
     )
     assert [day["date"] for day in result] == [value.isoformat() for value in dates]
     assert result[0]["stocks_up_4pct"] == 1
@@ -208,6 +218,7 @@ def test_compute_filters_movers_by_each_dates_universe():
         symbols_meta=[{"symbol": "NEW", "ibd_industry_group": "Software"}],
         price_data={"NEW": history},
         target_dates=dates,
+        currencies_by_symbol={"NEW": "USD"},
         symbols_by_date={
             dates[0]: frozenset(),
             dates[1]: frozenset({"NEW"}),
@@ -226,6 +237,7 @@ def test_compute_skips_dates_with_missing_price_data():
         symbols_meta=[{"symbol": "X", "ibd_industry_group": "G"}],
         price_data=price_data,
         target_dates=[present, date(2026, 5, 10)],
+        currencies_by_symbol=_usd_currencies(price_data),
     )
     # 2026-05-10 has no price → no group entry for that day.
     by_date = {row["date"]: row for row in result}
@@ -256,6 +268,7 @@ def test_compute_isolates_malformed_symbol_history():
         ],
         price_data={"VALID": valid, "BAD": malformed},
         target_dates=[target],
+        currencies_by_symbol={"VALID": "USD", "BAD": "USD"},
     )
 
     assert result[0]["stocks_up_4pct"] == 1
@@ -278,6 +291,7 @@ def test_compute_uses_adjusted_return_and_stockbee_volume_filters():
         ],
         price_data={"ELIGIBLE": eligible, "FLATVOL": flat_volume},
         target_dates=[target],
+        currencies_by_symbol={"ELIGIBLE": "USD", "FLATVOL": "USD"},
     )
 
     assert result[0]["stocks_up_4pct"] == 1
@@ -295,6 +309,24 @@ def test_compute_currency_mismatch_is_stockbee_ineligible_without_fx() -> None:
         target_dates=[target],
         market="CA",
         currencies_by_symbol={"CROSS": "USD"},
+    )
+
+    assert result[0]["stocks_up_4pct"] == 0
+    assert result[0]["stocks_down_4pct"] == 0
+    assert result[0]["groups"] == []
+
+
+def test_compute_unknown_currency_is_stockbee_ineligible() -> None:
+    """Break caught: inferring a market-currency match from missing metadata."""
+    history = _frame([100.0, 105.0])
+    target = _last_date(history)
+
+    result = BreadthAttributionService().compute(
+        symbols_meta=[{"symbol": "UNKNOWN", "ibd_industry_group": "Software"}],
+        price_data={"UNKNOWN": history},
+        target_dates=[target],
+        market="US",
+        currencies_by_symbol={},
     )
 
     assert result[0]["stocks_up_4pct"] == 0

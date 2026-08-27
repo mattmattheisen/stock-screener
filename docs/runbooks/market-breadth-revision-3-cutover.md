@@ -7,7 +7,13 @@ This runbook replaces all revision-2 breadth history with the revision-3 dataset
 - Deploy code that sets `CURRENT_BREADTH_CALCULATION_REVISION = 3`.
 - Confirm local OHLCV caches and point-in-time common-stock universe history cover the rebuild period plus 252 trading sessions of warm-up.
 - Confirm the policy registry covers US, CA, DE, HK, IN, JP, KR, TW, and CN.
-- Choose the first date that should remain publicly available after cutover.
+- Choose the inclusive calendar bounds that should remain publicly available after cutover and export them for the commands below:
+
+  ```bash
+  export FIRST_DATE=YYYY-MM-DD
+  export END_DATE=YYYY-MM-DD
+  ```
+
 - Run commands from `backend` with the production virtual environment active.
 
 Revision-aware API reads hide revision-2 rows as soon as revision-3 code is deployed. Breadth may therefore be temporarily unavailable until activation completes; this is intentional and safer than serving mixed methodologies.
@@ -23,17 +29,42 @@ pg_dump --format=custom --table=market_breadth "$BREADTH_DATABASE_URL" \
 
 Retain a copy of the current static market artifacts and the database dump through the monitoring and rollback windows.
 
-## 2. Build and validate the complete shadow dataset
+## 2. Pause breadth-dependent writers
+
+Stop Celery beat and prevent these tasks or workflows from starting. Wait for active instances to finish:
+
+- daily breadth calculation and gap fill;
+- breadth backfill and revision rebuild;
+- market exposure calculation/backfill;
+- daily market pipelines and runtime bootstrap;
+- static breadth/export publication.
+
+Keep these writers paused until activation and all dependent rebuilds are complete. This prevents a concurrent live or staging write from invalidating the dataset after validation.
+
+## 3. Build and validate the complete shadow dataset
 
 Omit `--market` so the build stages every breadth-enabled market. A selective build is diagnostic only and cannot activate the full-table replacement.
 
 ```bash
 python -m app.scripts.rebuild_market_breadth build \
-  --start-date 2024-01-01 \
-  --end-date 2026-08-28
+  --start-date "$FIRST_DATE" \
+  --end-date "$END_DATE"
 
 python -m app.scripts.rebuild_market_breadth validate \
   > breadth-revision-3-validation.json
+
+jq -e --arg first "$FIRST_DATE" --arg end "$END_DATE" '
+  .valid == true
+  and .errors == []
+  and .calculation_revision == 3
+  and ([.markets[] |
+    .row_count > 0
+    and .start_date >= $first
+    and .end_date <= $end
+  ] | all)
+' breadth-revision-3-validation.json
+
+jq '.markets' breadth-revision-3-validation.json
 ```
 
 Validation must exit zero and report:
@@ -45,19 +76,9 @@ Validation must exit zero and report:
 - exact market/date manifest coverage;
 - reconciled denominators, ratios, and eligibility signatures.
 
-Re-running `build` recreates only the staging dataset and manifest. It does not modify `market_breadth`.
+Before activation, inspect the printed per-market coverage. Each `start_date` must be the first canonical trading session on or after `FIRST_DATE`, each `end_date` must be the last canonical trading session on or before `END_DATE`, and every `row_count` must be nonzero. Market holidays mean these dates do not necessarily equal the raw calendar bounds. The valid report's exact manifest check confirms there are no missing or unexpected sessions between those endpoints.
 
-## 3. Pause breadth-dependent writers
-
-Stop Celery beat and prevent these tasks or workflows from starting. Wait for active instances to finish:
-
-- daily breadth calculation and gap fill;
-- breadth backfill and revision rebuild;
-- market exposure calculation/backfill;
-- daily market pipelines and runtime bootstrap;
-- static breadth/export publication.
-
-Do not activate while any process can write breadth or its dependent outputs.
+Re-running `build` recreates only the staging dataset and manifest. It does not modify `market_breadth`; keep writers paused while rebuilding and revalidating.
 
 ## 4. Activate atomically
 

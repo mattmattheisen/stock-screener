@@ -99,9 +99,8 @@ class BreadthAttributionService:
             history = price_data.get(symbol)
             if history is None or getattr(history, "empty", True):
                 continue
-            currency = str(
-                (currencies_by_symbol or {}).get(symbol) or market_policy.currency
-            ).upper()
+            raw_currency = (currencies_by_symbol or {}).get(symbol)
+            currency = str(raw_currency).upper() if raw_currency else None
             try:
                 features = prepare_feature_frame(
                     history,
@@ -129,7 +128,9 @@ class BreadthAttributionService:
                     d,
                     formula_policy,
                     market_policy,
-                    stockbee_currency_matches=(currency == market_policy.currency),
+                    stockbee_currency_matches=(
+                        currency is not None and currency == market_policy.currency
+                    ),
                 )
                 direction = (
                     "up"

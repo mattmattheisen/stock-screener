@@ -1969,6 +1969,25 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
     assert home["top_groups"] == []
 
 
+def test_build_breadth_payload_rejects_market_without_breadth_capability(
+    service_and_session_factory,
+):
+    """Break caught: unsupported markets reaching the breadth policy factory."""
+    service, session_factory = service_and_session_factory
+
+    with session_factory() as db, pytest.raises(
+        StaticSiteSectionUnavailableError,
+        match="Market AU does not support breadth",
+    ):
+        service._build_breadth_payload(  # noqa: SLF001 - regression coverage
+            db=db,
+            generated_at="2026-08-21T22:00:00Z",
+            expected_as_of_date=date(2026, 8, 21),
+            market="AU",
+            serialized_rows=[{"symbol": "BHP.AX"}],
+        )
+
+
 def test_build_breadth_payload_requires_target_date(service_and_session_factory, monkeypatch):
     service, _session_factory = service_and_session_factory
 

@@ -518,6 +518,14 @@ class StaticSiteExportService:
         return self._chart_exporter.export(**kwargs)
 
     def _build_breadth_payload(self, **kwargs) -> dict[str, Any]:
+        market = str(kwargs.get("market") or STATIC_DEFAULT_MARKET).upper()
+        market_profile = _MARKET_CATALOG.get(market)
+        if not market_profile.capabilities.breadth:
+            raise StaticSiteSectionUnavailableError(
+                section="breadth",
+                reason=f"Market {market} does not support breadth.",
+            )
+        kwargs["market"] = market
         if kwargs.get("serialized_rows") is not None and kwargs.get("db") is None:
             with self._session_factory() as db:
                 return self._breadth_builder.build(db=db, **kwargs)
