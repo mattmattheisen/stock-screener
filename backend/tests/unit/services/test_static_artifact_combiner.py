@@ -27,6 +27,8 @@ def write_market_artifact(
     formula: str,
     scan_formula: str | None = None,
     chunk_formula: str | None = None,
+    breadth_revision: int | None = None,
+    breadth_source_revision: str | None = None,
 ) -> Path:
     # actions/upload-artifact uploads the contents of the selected market
     # directory, so download-artifact restores manifest.market.json directly
@@ -62,7 +64,7 @@ def write_market_artifact(
         "rs_formula_version": formula,
         "features": {
             "scan": True,
-            "breadth": False,
+            "breadth": breadth_revision is not None,
             "groups": False,
             "charts": False,
         },
@@ -83,6 +85,28 @@ def write_market_artifact(
         ),
         encoding="utf-8",
     )
+    if breadth_revision is not None:
+        (market_dir / "breadth.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                    "available": True,
+                    "source_revision": (
+                        breadth_source_revision
+                        or f"2026-04-10|breadth-r{breadth_revision}"
+                    ),
+                    "payload": {
+                        "current": {
+                            "market": market,
+                            "date": "2026-04-10",
+                            "calculation_revision": breadth_revision,
+                        }
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     return root
 
 
@@ -367,3 +391,78 @@ def test_combiner_requires_every_market_named_by_formula_map(tmp_path):
             clean=True,
         )
     assert exc_info.value.markets == ("HK",)
+
+
+def test_combiner_accepts_current_breadth_revision_three(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+        breadth_revision=3,
+    )
+
+    result = combiner().combine(
+        artifacts_dir=current,
+        fallback_artifacts_dir=None,
+        output_dir=tmp_path / "out",
+        required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+        clean=True,
+    )
+
+    assert result.manifest["markets"]["US"]["features"]["breadth"] is True
+
+
+def test_combiner_rejects_current_breadth_revision_two(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+        breadth_revision=2,
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="breadth revision"):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=None,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )
+
+
+def test_combiner_filters_revision_two_breadth_fallback_without_rs_policy(tmp_path):
+    fallback = write_market_artifact(
+        tmp_path / "fallback",
+        market="HK",
+        formula=LEGACY_RS_FORMULA_VERSION,
+        breadth_revision=2,
+    )
+
+    with pytest.raises(NoPublishedStaticMarketArtifact, match="HK"):
+        combiner().combine(
+            artifacts_dir=tmp_path / "empty-current",
+            fallback_artifacts_dir=fallback,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"HK": BALANCED_RS_FORMULA_VERSION},
+            fallback_required_formula_by_market={},
+            clean=True,
+        )
+
+
+def test_combiner_rejects_revision_three_with_revision_two_source_marker(tmp_path):
+    current = write_market_artifact(
+        tmp_path / "current",
+        market="US",
+        formula=BALANCED_RS_FORMULA_VERSION,
+        breadth_revision=3,
+        breadth_source_revision="2026-04-10|breadth-r2",
+    )
+
+    with pytest.raises(StaticArtifactFormulaError, match="breadth revision"):
+        combiner().combine(
+            artifacts_dir=current,
+            fallback_artifacts_dir=None,
+            output_dir=tmp_path / "out",
+            required_formula_by_market={"US": BALANCED_RS_FORMULA_VERSION},
+            clean=True,
+        )

@@ -505,7 +505,7 @@ def test_market_breadth_snapshot_serializes_revision_2_context_and_denominators(
         atr_extension_eligible_count=92,
         eligibility_signature="broad",
         stockbee_eligibility_signature="stockbee",
-        calculation_revision=2,
+        calculation_revision=3,
     )
 
     payload = market_breadth_to_dict(row)
@@ -514,7 +514,7 @@ def test_market_breadth_snapshot_serializes_revision_2_context_and_denominators(
     assert payload["broad_universe_count"] == 110
     assert payload["stockbee_daily_eligible_count"] == 95
     assert payload["stockbee_eligibility_signature"] == "stockbee"
-    assert payload["calculation_revision"] == 2
+    assert payload["calculation_revision"] == 3
 
 
 def test_breadth_source_revision_includes_calculation_revision():
@@ -538,13 +538,13 @@ def test_breadth_source_revision_includes_calculation_revision():
                 stocks_up_13pct_34days=0,
                 stocks_down_13pct_34days=0,
                 total_stocks_scanned=1,
-                calculation_revision=2,
+                calculation_revision=3,
             )
         )
         db.commit()
         revision = service._resolve_breadth_source_revision(db, "US")  # noqa: SLF001
 
-    assert revision == "2026-08-21|breadth-r2"
+    assert revision == "2026-08-21|breadth-r3"
 
 
 def test_publish_groups_bootstrap_serializes_rankings_when_available():

@@ -62,7 +62,10 @@ class BreadthResponse(BaseModel):
     )
     eligibility_signature: Optional[str] = Field(None, description="Broad-universe signature")
     stockbee_eligibility_signature: Optional[str] = Field(None, description="StockBee liquidity-universe signature")
-    calculation_revision: Optional[int] = Field(None, description="Internal stale-data guard; current value is 2")
+    calculation_revision: Optional[int] = Field(
+        None,
+        description="Internal stale-data guard; current value is 3",
+    )
     calculation_duration_seconds: Optional[float] = Field(None, description="Time taken to calculate")
 
     class Config:
