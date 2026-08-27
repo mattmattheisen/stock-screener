@@ -1379,7 +1379,7 @@ def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-04-04",
-        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": True},
         "pages": {"home": {"path": "markets/us/home.json"}, "scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
         "freshness": {"scan_run_id": 11},
@@ -1454,7 +1454,7 @@ def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_pat
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-04-05",
-        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
@@ -1462,7 +1462,7 @@ def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_pat
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-04-04",
-        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
@@ -1531,7 +1531,7 @@ def test_combine_market_artifacts_uses_newer_fallback_for_rewound_current_market
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-07-31",
-        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
@@ -1539,7 +1539,7 @@ def test_combine_market_artifacts_uses_newer_fallback_for_rewound_current_market
         "market": "US",
         "display_name": "United States",
         "as_of_date": "2026-08-03",
-        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
@@ -1600,7 +1600,7 @@ def test_combine_market_artifacts_keeps_current_override_when_newer_fallback_use
         "display_name": "United States",
         "as_of_date": "2026-08-03",
         "rs_formula_version": LEGACY_RS_FORMULA_VERSION,
-        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
@@ -1609,7 +1609,7 @@ def test_combine_market_artifacts_keeps_current_override_when_newer_fallback_use
         "display_name": "United States",
         "as_of_date": "2026-08-04",
         "rs_formula_version": BALANCED_RS_FORMULA_VERSION,
-        "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": True},
         "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
         "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
     }
