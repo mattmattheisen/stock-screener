@@ -104,7 +104,7 @@ function breadthRow(market = 'HK') {
     atr_10x_extension_count: 3,
     atr_extension_eligible_count: 28,
     broad_universe_count: 32,
-    calculation_revision: 2,
+    calculation_revision: 3,
     calculation_duration_seconds: 1.25,
   };
 }
