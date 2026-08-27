@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from datetime import date
 
-from .types import BreadthDailyCount, BreadthRatios
+from .types import (
+    CURRENT_BREADTH_CALCULATION_REVISION,
+    BreadthDailyCount,
+    BreadthRatios,
+)
 
 
 class IncompatibleBreadthSeedError(ValueError):
@@ -46,7 +50,7 @@ def calculate_inclusive_ratios(
     seed_counts: Iterable[BreadthDailyCount] = (),
     *,
     market: str | None = None,
-    calculation_revision: int = 2,
+    calculation_revision: int = CURRENT_BREADTH_CALCULATION_REVISION,
 ) -> dict[date, BreadthRatios]:
     current = tuple(sorted(counts, key=lambda item: item.date))
     seeds = tuple(sorted(seed_counts, key=lambda item: item.date))

@@ -2,6 +2,7 @@ from datetime import date
 
 import pandas as pd
 import pytest
+from app.services.breadth.market_policy import get_breadth_market_policy
 from app.services.breadth.types import BreadthFormulaPolicy, BreadthUniverseMember
 from app.services.breadth.universe import (
     MissingHistoricalFXError,
@@ -112,9 +113,9 @@ def test_metric_eligibility_is_independent_and_stockbee_requires_common_stock():
                 "daily_return": 0.01,
                 "volume": 100_000.0,
                 "prior_volume": 90_000.0,
-                "adtv20_usd": 250_000.0,
+                "adtv20_local": 250_000.0,
                 "adjusted_close_20": float("nan"),
-                "raw_close_usd_20": float("nan"),
+                "raw_close_local_20": float("nan"),
                 "month_return": float("nan"),
                 "low_34": float("nan"),
                 "high_34": float("nan"),
@@ -136,12 +137,14 @@ def test_metric_eligibility_is_independent_and_stockbee_requires_common_stock():
         BreadthUniverseMember("IPO", "USD", True),
         features,
         BreadthFormulaPolicy(),
+        get_breadth_market_policy("US"),
         calculation_date=calculation_date.date(),
     )
     excluded = classify_metric_eligibility(
         BreadthUniverseMember("ETF", "USD", False),
         features,
         BreadthFormulaPolicy(),
+        get_breadth_market_policy("US"),
         calculation_date=calculation_date.date(),
     )
 
@@ -181,9 +184,9 @@ def test_stockbee_signature_contains_only_liquid_broad_members():
                 "daily_return": 0.01,
                 "volume": 100_000.0,
                 "prior_volume": 90_000.0,
-                "adtv20_usd": 250_000.0,
+                "adtv20_local": 250_000.0,
                 "adjusted_close_20": float("nan"),
-                "raw_close_usd_20": float("nan"),
+                "raw_close_local_20": float("nan"),
                 "month_return": float("nan"),
                 "low_34": float("nan"),
                 "high_34": float("nan"),
@@ -201,7 +204,7 @@ def test_stockbee_signature_contains_only_liquid_broad_members():
         index=[pd.Timestamp(calculation_date)],
     )
     illiquid_features = liquid_features.copy()
-    illiquid_features.loc[:, "adtv20_usd"] = 249_999.0
+    illiquid_features.loc[:, "adtv20_local"] = 249_999.0
 
     signature = stockbee_eligibility_signature(
         snapshot,
@@ -210,6 +213,7 @@ def test_stockbee_signature_contains_only_liquid_broad_members():
             illiquid.symbol: illiquid_features,
         },
         BreadthFormulaPolicy(),
+        get_breadth_market_policy("US"),
     )
 
     assert signature == hash_point_in_time_universe_symbols(("COMMON",))
