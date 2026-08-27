@@ -143,7 +143,7 @@ def _add_breadth_row(
         stocks_down_13pct_34days=0,
         total_stocks_scanned=total,
         broad_universe_count=total,
-        calculation_revision=2,
+        calculation_revision=3,
     ))
 
 
@@ -897,7 +897,7 @@ def test_backfill_range_requests_history_for_old_narrow_interval(monkeypatch):
     )
 
 
-def test_daily_breadth_ignores_fx_dates_before_the_feature_window():
+def test_daily_breadth_does_not_load_historical_fx(monkeypatch):
     db = _make_db_session()
     calculation_date = date(2026, 8, 25)
     db.add(
@@ -925,24 +925,16 @@ def test_daily_breadth_ignores_fx_dates_before_the_feature_window():
     )
     price_cache = MagicMock()
     price_cache.get_many_cached_only_fresh.return_value = {"0700.HK": prices}
-    fx_service = MagicMock()
-
-    def historical_rates(currencies, required_dates):
-        assert currencies == ("HKD",)
-        assert date(2020, 1, 2) not in required_dates
-        return {
-            "HKD": pd.Series(
-                0.13,
-                index=pd.DatetimeIndex(sorted(required_dates)),
-            )
-        }
-
-    fx_service.get_historical_usd_rates.side_effect = historical_rates
+    monkeypatch.setattr(
+        breadth_calculator_module,
+        "get_fx_service",
+        MagicMock(side_effect=AssertionError("breadth must not request FX")),
+        raising=False,
+    )
     service = BreadthCalculatorService(
         db,
         price_cache,
         market="HK",
-        fx_service=fx_service,
     )
 
     result = service.calculate_daily_breadth(calculation_date)
@@ -1359,4 +1351,4 @@ def test_live_and_backfill_use_identical_canonical_counts():
     ).one()
     for field in BreadthIndicatorValues.__dataclass_fields__:
         assert getattr(stored, field) == live.indicators[field]
-    assert stored.calculation_revision == live.indicators["calculation_revision"] == 2
+    assert stored.calculation_revision == live.indicators["calculation_revision"] == 3

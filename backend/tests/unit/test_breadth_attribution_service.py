@@ -283,3 +283,20 @@ def test_compute_uses_adjusted_return_and_stockbee_volume_filters():
     assert result[0]["stocks_up_4pct"] == 1
     assert result[0]["groups"][0]["up_stocks"][0]["symbol"] == "ELIGIBLE"
     assert result[0]["groups"][0]["up_stocks"][0]["pct_change"] == pytest.approx(5.0)
+
+
+def test_compute_currency_mismatch_is_stockbee_ineligible_without_fx() -> None:
+    history = _frame([100.0, 105.0])
+    target = _last_date(history)
+
+    result = BreadthAttributionService().compute(
+        symbols_meta=[{"symbol": "CROSS", "ibd_industry_group": "Software"}],
+        price_data={"CROSS": history},
+        target_dates=[target],
+        market="CA",
+        currencies_by_symbol={"CROSS": "USD"},
+    )
+
+    assert result[0]["stocks_up_4pct"] == 0
+    assert result[0]["stocks_down_4pct"] == 0
+    assert result[0]["groups"] == []

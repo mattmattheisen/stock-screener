@@ -20,6 +20,7 @@ from .breadth.formulas import (
     prices_for_feature_window,
     validate_price_frame,
 )
+from .breadth.market_policy import get_breadth_market_policy
 from .breadth.persistence import BreadthPersistence
 from .breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
@@ -27,7 +28,6 @@ from .breadth.types import (
     BreadthDailyResult,
     BreadthEligibilityCounts,
     BreadthIndicatorValues,
-    BreadthUniverseMember,
 )
 from .breadth.universe import build_breadth_universe_snapshots
 from .breadth_backfill import BreadthBackfillExecutor, BreadthBackfillPlan
@@ -42,7 +42,6 @@ from .derived_data_execution_policy import (
     DerivedDataExecutionPolicy,
     DerivedDataTargetKind,
 )
-from .fx_service import get_fx_service
 from .price_cache_service import PriceCacheService
 
 logger = logging.getLogger(__name__)
@@ -72,7 +71,6 @@ class BreadthCalculatorService:
         market: str | None = None,
         *,
         engine: BreadthEngine | None = None,
-        fx_service=None,
     ):
         """
         Initialize breadth calculator service.
@@ -83,8 +81,8 @@ class BreadthCalculatorService:
         self.db = db
         self.price_cache = price_cache
         self.market = (market or "US").upper()
+        self.market_policy = get_breadth_market_policy(self.market)
         self.engine = engine or BreadthEngine()
-        self.fx_service = fx_service or get_fx_service()
         self.persistence = BreadthPersistence(db)
 
     def calculate_daily_breadth(
@@ -158,7 +156,6 @@ class BreadthCalculatorService:
             prices_by_symbol,
             (calculation_date,),
         )
-        fx_by_currency = self._load_fx_for_prices(members, prices_by_symbol)
         seeds = self._load_ratio_seed_counts(calculation_date, limit=9)
         canonical = self.engine.calculate(
             BreadthEngineRequest(
@@ -166,7 +163,7 @@ class BreadthCalculatorService:
                 dates=(calculation_date,),
                 universes_by_date={calculation_date: snapshot},
                 prices_by_symbol=prices_by_symbol,
-                fx_by_currency=fx_by_currency,
+                market_policy=self.market_policy,
                 seed_counts=seeds,
             )
         )[calculation_date]
@@ -200,34 +197,6 @@ class BreadthCalculatorService:
         except (TypeError, ValueError):
             return False
         return math.isfinite(value) and value > 0
-
-    def _load_fx_for_prices(
-        self,
-        members: tuple[BreadthUniverseMember, ...],
-        prices_by_symbol: Mapping[str, pd.DataFrame],
-    ) -> Mapping[str, pd.Series]:
-        currency_by_symbol = {member.symbol: member.currency.upper() for member in members}
-        dates_by_currency: dict[str, set[date]] = {}
-        for symbol, history in prices_by_symbol.items():
-            currency = currency_by_symbol[symbol]
-            dates_by_currency.setdefault(currency, set()).update(
-                pd.Timestamp(value).date() for value in history.index
-            )
-        result: dict[str, pd.Series] = {}
-        for currency, required_dates in dates_by_currency.items():
-            if currency == "USD":
-                result[currency] = pd.Series(
-                    1.0,
-                    index=pd.DatetimeIndex(sorted(required_dates)),
-                )
-                continue
-            result.update(
-                self.fx_service.get_historical_usd_rates(
-                    (currency,),
-                    required_dates,
-                )
-            )
-        return result
 
     def _history_period_for_dates(
         self,

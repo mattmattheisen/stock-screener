@@ -132,13 +132,6 @@ class _FakeBenchmarkCache:
         return self._symbol
 
 
-class _FakeHistoricalFx:
-    def get_historical_usd_rates(self, currencies, dates, *, max_age_days=7):
-        del max_age_days
-        index = pd.DatetimeIndex(sorted(dates))
-        return {currency: pd.Series(0.13, index=index) for currency in currencies}
-
-
 def _service_with_static_caches(
     session_factory,
     *,
@@ -2036,9 +2029,7 @@ def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
         ),
         fundamentals_cache=object(),
         benchmark_cache=_FakeBenchmarkCache("^HSI"),
-        breadth_engine_input_factory=StaticBreadthEngineInputFactory(
-            fx_service=_FakeHistoricalFx()
-        ),
+        breadth_engine_input_factory=StaticBreadthEngineInputFactory(),
     )
 
     payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
@@ -2158,9 +2149,7 @@ def test_build_breadth_payload_uses_builder_cache_dependencies_without_rebinding
             get_benchmark_candidates=lambda market: ("^HSI",),
             get_benchmark_symbol=lambda market: "^HSI",
         ),
-        engine_input_factory=StaticBreadthEngineInputFactory(
-            fx_service=_FakeHistoricalFx()
-        ),
+        engine_input_factory=StaticBreadthEngineInputFactory(),
     )
 
     payload = service._build_breadth_payload(  # noqa: SLF001 - regression coverage

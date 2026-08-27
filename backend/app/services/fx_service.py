@@ -384,7 +384,7 @@ class FXService:
         max_age_days: int = 7,
     ) -> Mapping[str, pd.Series]:
         """Resolve reproducible backward-only FX rates without live fallbacks."""
-        from .breadth.universe import resolve_historical_fx_series
+        from .historical_fx import resolve_historical_fx_series
 
         requested = tuple(sorted(set(dates)))
         normalized_currencies = tuple(

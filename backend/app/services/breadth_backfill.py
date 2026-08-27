@@ -22,7 +22,6 @@ from .breadth_coverage import (
     BreadthPriceCoverageAccumulator,
 )
 from .derived_data_execution_policy import DerivedDataExecutionPolicy
-from .fx_service import default_currency_for_market
 from .static_breadth_eligibility import static_breadth_eligibility_signature
 
 if TYPE_CHECKING:
@@ -208,7 +207,7 @@ class BreadthBackfillExecutor:
             currency_by_symbol = {
                 symbol: (
                     getattr(rows_by_symbol.get(symbol), "currency", None)
-                    or default_currency_for_market(calculator.market)
+                    or calculator.market_policy.currency
                 )
                 for symbol in target_symbols
             }
@@ -345,21 +344,13 @@ class BreadthBackfillExecutor:
             prices_by_symbol,
             tuple(processed_dates),
         )
-        all_members = tuple(
-            BreadthUniverseMember(symbol, currency_by_symbol[symbol])
-            for symbol in target_symbols
-        )
-        fx_by_currency = calculator._load_fx_for_prices(
-            all_members,
-            prices_by_symbol,
-        )
         canonical_by_date = calculator.engine.calculate(
             BreadthEngineRequest(
                 market=calculator.market,
                 dates=tuple(processed_dates),
                 universes_by_date=universes_by_date,
                 prices_by_symbol=prices_by_symbol,
-                fx_by_currency=fx_by_currency,
+                market_policy=calculator.market_policy,
                 seed_counts=calculator._load_ratio_context_counts(processed_dates),
             )
         )

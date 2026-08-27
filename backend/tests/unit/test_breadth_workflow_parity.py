@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pandas as pd
 
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
+from app.services.breadth.market_policy import get_breadth_market_policy
 from app.services.breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
 from app.services.breadth_attribution_service import BreadthAttributionService
 from app.services.point_in_time_universe_service import (
@@ -47,7 +48,7 @@ def test_static_and_attribution_daily_counts_match_canonical_engine():
             dates=(calculation_date,),
             universes_by_date={calculation_date: snapshot},
             prices_by_symbol=prices,
-            fx_by_currency={"USD": pd.Series(1.0, index=prices["UP"].index)},
+            market_policy=get_breadth_market_policy("US"),
         )
     )[calculation_date]
 
@@ -68,6 +69,8 @@ def test_static_and_attribution_daily_counts_match_canonical_engine():
         ],
         price_data=prices,
         target_dates=[calculation_date],
+        market="US",
+        currencies_by_symbol={"UP": "USD", "DOWN": "USD"},
     )[0]
 
     expected = (
