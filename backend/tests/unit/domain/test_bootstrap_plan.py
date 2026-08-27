@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.domain.bootstrap.plan import (
     BootstrapOperation,
     BootstrapQueueKind,
@@ -82,6 +84,18 @@ def test_au_bootstrap_plan_refreshes_universe_before_prices_and_fundamentals() -
         == BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE
     )
     assert au_plan.stages[0].kwargs["market"] == "AU"
+
+
+@pytest.mark.parametrize("market", ("AU", "SG", "MY"))
+def test_breadth_disabled_bootstrap_omits_breadth_and_exposure(
+    market: str,
+) -> None:
+    plan = build_bootstrap_plan(primary_market=market, enabled_markets=(market,))
+    stage_keys = [stage.key for stage in plan.market_plans[0].stages]
+
+    assert "breadth" not in stage_keys
+    assert "exposure" not in stage_keys
+    assert "snapshot" in stage_keys
 
 
 def test_bootstrap_plan_deduplicates_primary_and_enabled_markets_in_order() -> None:
