@@ -10,6 +10,7 @@ import pandas as pd
 
 from .types import (
     BreadthFormulaPolicy,
+    BreadthMarketPolicy,
     SymbolBreadthSignals,
     SymbolMetricEligibility,
 )
@@ -86,11 +87,10 @@ def _wilder_average(values: pd.Series, period: int) -> pd.Series:
 
 def prepare_feature_frame(
     prices: pd.DataFrame,
-    fx_to_usd: pd.Series,
     *,
     atr_period: int = 14,
 ) -> pd.DataFrame:
-    """Prepare adjusted signal inputs while retaining raw USD liquidity inputs."""
+    """Prepare adjusted signals and raw local-market liquidity inputs."""
 
     validate_price_frame(prices)
 
@@ -99,9 +99,6 @@ def prepare_feature_frame(
     frame = frame.sort_index()
     frame = frame.apply(pd.to_numeric, errors="coerce")
 
-    fx = pd.to_numeric(fx_to_usd, errors="coerce").copy()
-    fx.index = _normalized_session_index(fx.index)
-    fx = fx.reindex(frame.index)
     raw_close = frame["Close"].where(frame["Close"] > 0)
     adjusted_close = frame["Adj Close"].where(frame["Adj Close"] > 0)
     adjustment_factor = adjusted_close / raw_close
@@ -116,18 +113,17 @@ def prepare_feature_frame(
     result["adjusted_low"] = frame["Low"] * adjustment_factor
     result["adjusted_close"] = adjusted_close
     result["volume"] = frame["Volume"].where(frame["Volume"] >= 0)
-    result["fx_to_usd"] = fx.where(fx > 0)
-    result["raw_close_usd"] = raw_close * result["fx_to_usd"]
-    result["dollar_volume_usd"] = result["raw_close_usd"] * result["volume"]
-    result["adtv20_usd"] = (
-        result["dollar_volume_usd"].rolling(20, min_periods=20).mean()
+    result["raw_close_local"] = raw_close
+    result["traded_value_local"] = result["raw_close_local"] * result["volume"]
+    result["adtv20_local"] = (
+        result["traded_value_local"].rolling(20, min_periods=20).mean()
     )
 
     result["prior_adjusted_close"] = adjusted_close.shift(1)
     result["prior_volume"] = result["volume"].shift(1)
     result["daily_return"] = adjusted_close / result["prior_adjusted_close"] - 1.0
     result["adjusted_close_20"] = adjusted_close.shift(20)
-    result["raw_close_usd_20"] = result["raw_close_usd"].shift(20)
+    result["raw_close_local_20"] = result["raw_close_local"].shift(20)
     result["month_return"] = adjusted_close / result["adjusted_close_20"] - 1.0
 
     result["low_34"] = adjusted_close.rolling(34, min_periods=34).min()
@@ -190,18 +186,26 @@ def signal_flags_at(
     feature_frame: pd.DataFrame,
     calculation_date: date,
     policy: BreadthFormulaPolicy,
+    market_policy: BreadthMarketPolicy,
+    *,
+    stockbee_currency_matches: bool = True,
 ) -> SymbolBreadthSignals:
     row = _row_at(feature_frame, calculation_date)
     if row is None:
         return SymbolBreadthSignals(eligibility=SymbolMetricEligibility())
 
     advance_decline = _finite(row.adjusted_close, row.prior_adjusted_close)
-    liquid = _finite(row.adtv20_usd) and float(row.adtv20_usd) >= policy.min_adtv_usd
+    liquid = (
+        stockbee_currency_matches
+        and _finite(row.adtv20_local)
+        and float(row.adtv20_local) >= market_policy.min_adtv_local
+    )
     daily = advance_decline and liquid and _finite(row.volume, row.prior_volume)
     month = (
         liquid
-        and _finite(row.adjusted_close, row.adjusted_close_20, row.raw_close_usd_20)
-        and float(row.raw_close_usd_20) >= policy.min_month_reference_price_usd
+        and _finite(row.adjusted_close, row.adjusted_close_20, row.raw_close_local_20)
+        and float(row.raw_close_local_20)
+        >= market_policy.min_month_reference_price_local
     )
     day_34 = liquid and _finite(row.adjusted_close, row.low_34, row.high_34)
     quarter = liquid and _finite(row.adjusted_close, row.low_65, row.high_65)
@@ -230,7 +234,7 @@ def signal_flags_at(
 
     daily_volume_filter = (
         daily
-        and float(row.volume) >= policy.min_daily_volume
+        and float(row.volume) >= market_policy.min_daily_volume
         and float(row.volume) > float(row.prior_volume)
     )
     daily_return = float(row.daily_return) if _finite(row.daily_return) else np.nan

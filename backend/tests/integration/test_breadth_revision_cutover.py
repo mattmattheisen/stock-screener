@@ -107,6 +107,7 @@ def test_revision_cutover_replaces_legacy_rows_and_preserves_unrelated_tables(tm
                     stocks_up_13pct_34days=0,
                     stocks_down_13pct_34days=0,
                     total_stocks_scanned=100,
+                    calculation_revision=2,
                 )
             )
             db.commit()
@@ -120,11 +121,20 @@ def test_revision_cutover_replaces_legacy_rows_and_preserves_unrelated_tables(tm
 
             report = service.validate()
             assert report["valid"] is True
-            service.activate()
+            assert report["calculation_revision"] == 3
+            assert report["formula_contract"] == {
+                "signals": "adjusted_ohlc",
+                "liquidity": "raw_close_local_x_volume_adtv20",
+                "market_policy": "fixed_market_calibrated_thresholds",
+                "currency_mismatch": "stockbee_ineligible_context_preserved",
+                "ratios": "today_inclusive",
+            }
+            activation = service.activate()
+            assert activation == {"activated": 1, "calculation_revision": 3}
 
             rows = db.query(MarketBreadth).all()
             assert [(row.date, row.calculation_revision) for row in rows] == [
-                (date(2026, 8, 21), 2)
+                (date(2026, 8, 21), 3)
             ]
             unrelated = db.execute(
                 text("SELECT value FROM unrelated WHERE id = 1")

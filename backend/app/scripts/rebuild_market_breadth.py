@@ -1,4 +1,4 @@
-"""Operator CLI for the revision-2 market breadth shadow rebuild."""
+"""Operator CLI for the current market breadth shadow rebuild."""
 
 from __future__ import annotations
 

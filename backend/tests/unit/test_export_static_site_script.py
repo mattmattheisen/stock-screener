@@ -1651,6 +1651,87 @@ def test_run_daily_refresh_computes_market_exposure_before_snapshot(monkeypatch)
     }
 
 
+def test_run_daily_refresh_skips_unsupported_breadth_and_builds_snapshot(
+    monkeypatch,
+):
+    calls: list[str] = []
+
+    @contextmanager
+    def fake_session():
+        yield object()
+
+    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_trading_date",
+        lambda _market: date(2026, 6, 25),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date, market=None: calls.append(
+            f"price:{market}:{as_of_date.isoformat()}"
+        )
+        or {"task": "price_refresh"},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_breadth_history",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unsupported market must not calculate breadth")
+        ),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_compute_static_market_exposure",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unsupported market must not calculate exposure")
+        ),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(
+            run=lambda **kwargs: calls.append(
+                f"snapshot:{kwargs['market']}:{kwargs['as_of_date_str']}"
+            )
+            or {"status": "published", "run_id": 77}
+        ),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    _stub_ready_group_rank_history(monkeypatch)
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    results, warnings = export_script._run_daily_refresh(
+        market="SG",
+        skip_universe_refresh=True,
+        skip_fundamentals_refresh=True,
+    )
+
+    assert warnings == []
+    assert calls == ["price:SG:2026-06-25", "snapshot:SG:2026-06-25"]
+    assert results["breadth_history"]["SG"] == {
+        "status": "skipped",
+        "reason": "market_breadth_unsupported",
+        "market": "SG",
+        "as_of_date": "2026-06-25",
+    }
+    assert results["market_exposure"]["SG"] == {
+        "status": "skipped",
+        "reason": "market_breadth_unsupported",
+        "market": "SG",
+        "date": "2026-06-25",
+    }
+    assert results["feature_snapshots"]["SG"] == {
+        "status": "published",
+        "run_id": 77,
+    }
+
+
 def test_run_daily_refresh_skips_snapshot_when_market_exposure_errors(monkeypatch):
     calls: list[str] = []
 

@@ -10,6 +10,7 @@ from celery import chain
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.domain.markets.catalog import get_market_catalog
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
@@ -238,7 +239,7 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
 
     market_code = _normalize_pipeline_market(market)
     as_of_date = trading_date.isoformat()
-    return [
+    signatures = [
         smart_refresh_cache.si(mode="delta", market=market_code).set(
             queue=data_fetch_queue_for_market(market_code)
         ),
@@ -254,24 +255,27 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
             market=market_code,
             calculation_date=as_of_date,
         ).set(queue=market_jobs_queue_for_market(market_code)),
-        calculate_daily_breadth_with_gapfill.si(
+    ]
+    if get_market_catalog().get(market_code).capabilities.breadth:
+        signatures.extend([
+            calculate_daily_breadth_with_gapfill.si(
             market=market_code,
             calculation_date=as_of_date,
             execution_policy="refresh_guarded",
-        ).set(
-            queue=market_jobs_queue_for_market(market_code)
-        ),
-        guard_breadth_result.s(market=market_code).set(
-            queue=market_jobs_queue_for_market(market_code)
-        ),
-        # Exposure blends breadth + index OHLCV; runs after the breadth guard.
-        # .si() — it re-reads breadth from the DB, ignoring the guard's result.
-        calculate_market_exposure.si(market=market_code, calculation_date=as_of_date).set(
-            queue=market_jobs_queue_for_market(market_code)
-        ),
-        guard_exposure_result.s(market=market_code).set(
-            queue=market_jobs_queue_for_market(market_code)
-        ),
+            ).set(queue=market_jobs_queue_for_market(market_code)),
+            guard_breadth_result.s(market=market_code).set(
+                queue=market_jobs_queue_for_market(market_code)
+            ),
+            # Exposure blends breadth + index OHLCV and runs after its guard.
+            calculate_market_exposure.si(
+                market=market_code,
+                calculation_date=as_of_date,
+            ).set(queue=market_jobs_queue_for_market(market_code)),
+            guard_exposure_result.s(market=market_code).set(
+                queue=market_jobs_queue_for_market(market_code)
+            ),
+        ])
+    signatures.extend([
         calculate_daily_group_rankings_with_gapfill.si(
             market=market_code,
             calculation_date=as_of_date,
@@ -292,7 +296,8 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
         guard_snapshot_result.s(market=market_code).set(
             queue=market_jobs_queue_for_market(market_code)
         ),
-    ]
+    ])
+    return signatures
 
 
 def _market_pipeline_active(market: str) -> dict | None:

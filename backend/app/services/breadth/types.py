@@ -6,18 +6,23 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
 
-CURRENT_BREADTH_CALCULATION_REVISION = 2
+CURRENT_BREADTH_CALCULATION_REVISION = 3
+
+
+@dataclass(frozen=True, slots=True)
+class BreadthMarketPolicy:
+    market: str
+    currency: str
+    min_adtv_local: float
+    min_daily_volume: int
+    min_month_reference_price_local: float
 
 
 @dataclass(frozen=True, slots=True)
 class BreadthFormulaPolicy:
     calculation_revision: int = CURRENT_BREADTH_CALCULATION_REVISION
-    min_adtv_usd: float = 250_000.0
-    min_daily_volume: int = 100_000
-    min_month_reference_price_usd: float = 5.0
     atr_period: int = 14
     atr_extension_threshold: float = 10.0
-    fx_max_age_days: int = 7
 
 
 @dataclass(frozen=True, slots=True)

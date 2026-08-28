@@ -324,7 +324,7 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
             stocks_down_13pct_34days=0,
             total_stocks_scanned=2,
             broad_universe_count=2,
-            calculation_revision=2,
+            calculation_revision=3,
         ))
     db.commit()
 
@@ -577,7 +577,7 @@ def test_backfill_range_preserves_existing_failed_date_in_ratio_context():
                 stocks_down_4pct=1,
                 total_stocks_scanned=1,
                 broad_universe_count=1,
-                calculation_revision=2,
+                calculation_revision=3,
             )
         )
     db.add(
@@ -588,7 +588,7 @@ def test_backfill_range_preserves_existing_failed_date_in_ratio_context():
             stocks_down_4pct=10,
             total_stocks_scanned=10,
             broad_universe_count=10,
-            calculation_revision=2,
+            calculation_revision=3,
         )
     )
     db.commit()

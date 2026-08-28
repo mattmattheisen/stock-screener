@@ -14,6 +14,7 @@ from app.services.bounded_history_universe import (
 )
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
 from app.services.breadth.formulas import prices_for_feature_window
+from app.services.breadth.market_policy import get_breadth_market_policy
 from app.services.breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
     BreadthUniverseMember,
@@ -21,7 +22,6 @@ from app.services.breadth.types import (
 )
 from app.services.breadth.universe import build_breadth_universe_snapshots
 from app.services.breadth_attribution_service import BreadthAttributionService
-from app.services.fx_service import default_currency_for_market, get_fx_service
 from app.services.point_in_time_universe_service import (
     hash_point_in_time_universe_symbols,
 )
@@ -44,9 +44,6 @@ class StaticBreadthEngineInputs:
 class StaticBreadthEngineInputFactory:
     """Build cache-only canonical inputs for static breadth generation."""
 
-    def __init__(self, *, fx_service=None) -> None:
-        self._fx_service = fx_service
-
     def build(
         self,
         *,
@@ -57,11 +54,11 @@ class StaticBreadthEngineInputFactory:
         universes_by_date: Mapping[date, BreadthUniverseSnapshot] | None = None,
     ) -> StaticBreadthEngineInputs:
         normalized_market = market.upper()
-        default_currency = default_currency_for_market(normalized_market)
+        market_policy = get_breadth_market_policy(normalized_market)
         symbols = tuple(sorted(str(symbol).upper() for symbol in price_data))
         currency_map = {
             symbol: str(
-                (currencies_by_symbol or {}).get(symbol) or default_currency
+                (currencies_by_symbol or {}).get(symbol) or market_policy.currency
             ).upper()
             for symbol in symbols
         }
@@ -98,34 +95,13 @@ class StaticBreadthEngineInputFactory:
             },
             tuple(canonical_dates),
         )
-        dates_by_currency: dict[str, set[date]] = {}
-        for symbol, history in usable_prices.items():
-            currency = currency_map[str(symbol).upper()]
-            dates_by_currency.setdefault(currency, set()).update(
-                pd.Timestamp(value).date() for value in history.index
-            )
-        fx_by_currency: dict[str, pd.Series] = {}
-        for currency, required_dates in dates_by_currency.items():
-            if currency == "USD":
-                fx_by_currency[currency] = pd.Series(
-                    1.0,
-                    index=pd.DatetimeIndex(sorted(required_dates)),
-                )
-                continue
-            fx_service = self._fx_service or get_fx_service()
-            fx_by_currency.update(
-                fx_service.get_historical_usd_rates(
-                    (currency,),
-                    required_dates,
-                )
-            )
         return StaticBreadthEngineInputs(
             request=BreadthEngineRequest(
                 market=normalized_market,
                 dates=tuple(canonical_dates),
                 universes_by_date=universes,
                 prices_by_symbol=usable_prices,
-                fx_by_currency=fx_by_currency,
+                market_policy=market_policy,
             ),
             currencies_by_symbol=currency_map,
         )
@@ -379,8 +355,8 @@ class StaticBreadthSectionBuilder:
             symbols_meta=symbols_meta,
             price_data=price_data,
             target_dates=attribution_dates,
+            market=market,
             currencies_by_symbol=engine_inputs.currencies_by_symbol,
-            fx_by_currency=engine_inputs.request.fx_by_currency,
             symbols_by_date={
                 calculation_date: frozenset(
                     member.symbol

@@ -343,6 +343,24 @@ Directional cells use a dark neutral background for ordinary readings, lighter g
 
 Formula tooltips identify the source, required history, liquidity rule, and eligible denominator. The **Stockbee MM** tab on the Daily page surfaces the same daily counts in a market-monitor grid. The chart time-range selector covers 1M, 3M, 6M, and 1Y windows.
 
+### StockBee market thresholds
+
+StockBee eligibility uses fixed thresholds in each market's primary trading currency. These are rounded initial settings from a one-time cross-market calibration; they are maintained manually in the shared server-side policy and are not recalculated from daily FX or changing percentiles.
+
+| Market | Currency | Minimum ADTV20 (local) | Minimum daily shares | Minimum raw reference price (local) |
+|--------|----------|-----------------------:|---------------------:|------------------------------------:|
+| US | USD | 250,000 | 100,000 | 5.00 |
+| CA | CAD | 5,000 | 5,000 | 0.30 |
+| DE | EUR | 5,000 | 300 | 8.00 |
+| HK | HKD | 20,000 | 150,000 | 0.20 |
+| IN | INR | 100,000 | 15,000 | 15.00 |
+| JP | JPY | 8,000,000 | 50,000 | 500 |
+| KR | KRW | 100,000,000 | 50,000 | 2,000 |
+| TW | TWD | 3,500,000 | 400,000 | 20.00 |
+| CN | CNY | 50,000,000 | 10,000,000 | 5.00 |
+
+`ADTV20` is the 20-session mean of raw local close × shares traded. Monthly StockBee signals also require the raw close exactly 20 sessions earlier to meet the local reference-price floor. A listing whose currency differs from its market's policy currency is excluded from StockBee metrics, but it can still contribute to advance/decline, T2108, 52-week high/low, and ATR context indicators.
+
 ---
 
 ## Groups & Relative Rotation Graph

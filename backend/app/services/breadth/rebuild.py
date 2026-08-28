@@ -1,4 +1,4 @@
-"""Shadow rebuild, validation, and atomic cutover for breadth revision 2."""
+"""Shadow rebuild, validation, and atomic cutover for the current breadth revision."""
 
 from __future__ import annotations
 
@@ -170,7 +170,10 @@ class BreadthRebuildService:
         inserted = 0
         for result in results:
             if result.calculation_revision != CURRENT_BREADTH_CALCULATION_REVISION:
-                raise ValueError("Staging accepts only canonical revision-2 results")
+                raise ValueError(
+                    "Staging accepts only results from the current canonical "
+                    f"breadth revision ({CURRENT_BREADTH_CALCULATION_REVISION})"
+                )
             values = result.to_record_mapping()
             values["calculation_duration_seconds"] = (
                 duration_seconds_by_date.get(result.calculation_date)
@@ -462,8 +465,9 @@ class BreadthRebuildService:
             "calculation_revision": CURRENT_BREADTH_CALCULATION_REVISION,
             "formula_contract": {
                 "signals": "adjusted_ohlc",
-                "liquidity": "raw_close_usd_x_volume_adtv20",
-                "fx": "exact_or_prior_7_calendar_days_never_future",
+                "liquidity": "raw_close_local_x_volume_adtv20",
+                "market_policy": "fixed_market_calibrated_thresholds",
+                "currency_mismatch": "stockbee_ineligible_context_preserved",
                 "ratios": "today_inclusive",
             },
         }
@@ -512,7 +516,10 @@ class BreadthRebuildService:
             )
             if inserted != report["row_count"] or wrong_revision:
                 raise RuntimeError("Breadth activation verification failed")
-        return {"activated": inserted, "calculation_revision": 2}
+        return {
+            "activated": inserted,
+            "calculation_revision": CURRENT_BREADTH_CALCULATION_REVISION,
+        }
 
     def cleanup(self) -> None:
         self.db.execute(text(f"DROP TABLE IF EXISTS {STAGING_TABLE}"))

@@ -91,6 +91,7 @@ def _build_market_plan(
     supports_group_rankings = (
         get_market_catalog().get(market).capabilities.group_rankings
     )
+    supports_breadth = get_market_catalog().get(market).capabilities.breadth
     stages = [
         _stage(
             key="universe",
@@ -182,6 +183,13 @@ def _build_market_plan(
             ),
         ]
     )
+
+    if not supports_breadth:
+        stages = [
+            stage
+            for stage in stages
+            if stage.key not in {"breadth", "exposure"}
+        ]
 
     if supports_group_rankings:
         stages.append(

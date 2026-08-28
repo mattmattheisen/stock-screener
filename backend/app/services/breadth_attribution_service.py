@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 
 from app.services.breadth.formulas import prepare_feature_frame, signal_flags_at
+from app.services.breadth.market_policy import get_breadth_market_policy
 from app.services.breadth.types import BreadthFormulaPolicy
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,8 @@ class BreadthAttributionService:
         symbols_meta: Iterable[Mapping[str, Any]],
         price_data: Mapping[str, pd.DataFrame | None],
         target_dates: Iterable[date],
+        market: str = "US",
         currencies_by_symbol: Mapping[str, str] | None = None,
-        fx_by_currency: Mapping[str, pd.Series] | None = None,
         symbols_by_date: Mapping[date, Iterable[str]] | None = None,
         policy: BreadthFormulaPolicy | None = None,
     ) -> list[dict[str, Any]]:
@@ -67,6 +68,7 @@ class BreadthAttributionService:
                 ],
             }
         """
+        market_policy = get_breadth_market_policy(market)
         meta_by_symbol: dict[str, Mapping[str, Any]] = {}
         for entry in symbols_meta:
             if not entry:
@@ -97,36 +99,11 @@ class BreadthAttributionService:
             history = price_data.get(symbol)
             if history is None or getattr(history, "empty", True):
                 continue
-            currency = str((currencies_by_symbol or {}).get(symbol) or "USD").upper()
-            fx = (fx_by_currency or {}).get(currency)
-            if fx is None:
-                if currency != "USD":
-                    raise ValueError(f"Missing historical FX series for {currency}")
-                fx = pd.Series(1.0, index=history.index)
-            rates_by_date = {
-                pd.Timestamp(value).date(): float(rate)
-                for value, rate in fx.items()
-            }
-            aligned_fx = pd.Series(
-                (
-                    rates_by_date.get(pd.Timestamp(value).date())
-                    for value in history.index
-                ),
-                index=history.index,
-                dtype=float,
-            )
-            if aligned_fx.isna().any():
-                missing_date = pd.Timestamp(
-                    aligned_fx[aligned_fx.isna()].index[0]
-                ).date()
-                raise ValueError(
-                    f"Missing historical {currency}->USD FX for "
-                    f"{missing_date.isoformat()}"
-                )
+            raw_currency = (currencies_by_symbol or {}).get(symbol)
+            currency = str(raw_currency).upper() if raw_currency else None
             try:
                 features = prepare_feature_frame(
                     history,
-                    aligned_fx,
                     atr_period=formula_policy.atr_period,
                 )
             except ValueError as exc:
@@ -146,7 +123,15 @@ class BreadthAttributionService:
                     and symbol not in normalized_symbols_by_date.get(d, frozenset())
                 ):
                     continue
-                flags = signal_flags_at(features, d, formula_policy)
+                flags = signal_flags_at(
+                    features,
+                    d,
+                    formula_policy,
+                    market_policy,
+                    stockbee_currency_matches=(
+                        currency is not None and currency == market_policy.currency
+                    ),
+                )
                 direction = (
                     "up"
                     if flags.up_4pct

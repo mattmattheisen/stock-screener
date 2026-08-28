@@ -1,10 +1,32 @@
 import pandas as pd
 import pytest
 
-from app.services.breadth.formulas import prepare_feature_frame, signal_flags_at
+from app.services.breadth.formulas import (
+    prepare_feature_frame,
+    signal_flags_at as calculate_signal_flags,
+)
+from app.services.breadth.market_policy import get_breadth_market_policy
 from app.services.breadth.types import BreadthFormulaPolicy
 
 CALCULATION_DATE = pd.Timestamp("2026-08-21")
+US_POLICY = get_breadth_market_policy("US")
+
+
+def signal_flags_at(
+    feature_frame,
+    calculation_date,
+    formula_policy,
+    market_policy=US_POLICY,
+    *,
+    stockbee_currency_matches=True,
+):
+    return calculate_signal_flags(
+        feature_frame,
+        calculation_date,
+        formula_policy,
+        market_policy,
+        stockbee_currency_matches=stockbee_currency_matches,
+    )
 
 
 def _feature_row(**overrides):
@@ -14,9 +36,9 @@ def _feature_row(**overrides):
         "daily_return": 0.04,
         "volume": 100_000.0,
         "prior_volume": 99_999.0,
-        "adtv20_usd": 250_000.0,
+        "adtv20_local": 250_000.0,
         "adjusted_close_20": 100.0,
-        "raw_close_usd_20": 5.0,
+        "raw_close_local_20": 5.0,
         "month_return": 0.04,
         "low_34": 92.0,
         "high_34": 104.0,
@@ -47,13 +69,13 @@ def test_prepare_feature_frame_separates_adjusted_signals_from_raw_liquidity():
         },
         index=index,
     )
-    fx = pd.Series([0.8, 0.8], index=prices.index)
-
-    result = prepare_feature_frame(prices, fx)
+    result = prepare_feature_frame(prices)
 
     assert result.iloc[0].adjusted_high == pytest.approx(51.0)
-    assert result.iloc[0].raw_close_usd == pytest.approx(80.0)
-    assert result.iloc[0].dollar_volume_usd == pytest.approx(16_000_000.0)
+    assert result.iloc[0].raw_close_local == pytest.approx(100.0)
+    assert result.iloc[0].traded_value_local == pytest.approx(20_000_000.0)
+    assert "fx_to_usd" not in result
+    assert "adtv20_usd" not in result
 
 
 def test_prepare_feature_frame_normalizes_timezone_aware_daily_sessions():
@@ -69,9 +91,7 @@ def test_prepare_feature_frame_normalizes_timezone_aware_daily_sessions():
         },
         index=index,
     )
-    fx = pd.Series(1.0, index=index.tz_localize(None))
-
-    features = prepare_feature_frame(prices, fx)
+    features = prepare_feature_frame(prices)
     signals = signal_flags_at(
         features,
         index[-1].date(),
@@ -97,7 +117,7 @@ def test_prepare_feature_frame_rejects_a_missing_session():
     )
 
     with pytest.raises(ValueError, match="valid sessions"):
-        prepare_feature_frame(prices, pd.Series(1.0, index=index))
+        prepare_feature_frame(prices)
 
 
 def test_prepare_feature_frame_initializes_and_smooths_wilder_atr():
@@ -114,7 +134,7 @@ def test_prepare_feature_frame_initializes_and_smooths_wilder_atr():
         index=index,
     )
 
-    result = prepare_feature_frame(prices, pd.Series(1.0, index=index))
+    result = prepare_feature_frame(prices)
 
     assert result.atr14.iloc[:13].isna().all()
     assert result.atr14.iloc[13] == pytest.approx(2.0)
@@ -138,7 +158,6 @@ def test_prepare_feature_frame_restarts_wilder_atr_after_initial_gap():
 
     result = prepare_feature_frame(
         prices,
-        pd.Series(1.0, index=index),
         atr_period=14,
     )
 
@@ -160,7 +179,7 @@ def test_prepare_feature_frame_restarts_wilder_atr_after_initial_gap():
             False,
             False,
         ),
-        ({"daily_return": 0.04, "adtv20_usd": 249_999.99}, False, False),
+        ({"daily_return": 0.04, "adtv20_local": 249_999.99}, False, False),
     ],
 )
 def test_daily_stockbee_boundaries(overrides, expected_up, expected_down):
@@ -195,22 +214,80 @@ def test_month_stockbee_boundaries(month_return, up_25, down_25, up_50, down_50)
     assert signals.down_50pct_month is down_50
 
 
-def test_month_reference_price_is_usd_five_inclusive():
+def test_month_reference_price_uses_market_local_threshold_inclusively():
+    ca_policy = get_breadth_market_policy("CA")
     eligible = signal_flags_at(
-        _feature_row(raw_close_usd_20=5.0, month_return=0.25),
+        _feature_row(
+            adtv20_local=5_000.0,
+            raw_close_local_20=0.30,
+            month_return=0.25,
+        ),
         CALCULATION_DATE.date(),
         BreadthFormulaPolicy(),
+        ca_policy,
     )
     ineligible = signal_flags_at(
-        _feature_row(raw_close_usd_20=4.999, month_return=0.25),
+        _feature_row(
+            adtv20_local=5_000.0,
+            raw_close_local_20=0.299,
+            month_return=0.25,
+        ),
         CALCULATION_DATE.date(),
         BreadthFormulaPolicy(),
+        ca_policy,
     )
 
     assert eligible.eligibility.stockbee_month is True
     assert eligible.up_25pct_month is True
     assert ineligible.eligibility.stockbee_month is False
     assert ineligible.up_25pct_month is False
+
+
+def test_daily_volume_uses_market_local_share_threshold():
+    de_policy = get_breadth_market_policy("DE")
+    eligible = signal_flags_at(
+        _feature_row(
+            adtv20_local=5_000.0,
+            volume=300.0,
+            prior_volume=299.0,
+        ),
+        CALCULATION_DATE.date(),
+        BreadthFormulaPolicy(),
+        de_policy,
+    )
+    ineligible = signal_flags_at(
+        _feature_row(
+            adtv20_local=5_000.0,
+            volume=299.0,
+            prior_volume=298.0,
+        ),
+        CALCULATION_DATE.date(),
+        BreadthFormulaPolicy(),
+        de_policy,
+    )
+
+    assert eligible.up_4pct is True
+    assert ineligible.up_4pct is False
+
+
+def test_currency_mismatch_disables_only_stockbee_eligibility():
+    signals = signal_flags_at(
+        _feature_row(),
+        CALCULATION_DATE.date(),
+        BreadthFormulaPolicy(),
+        US_POLICY,
+        stockbee_currency_matches=False,
+    )
+
+    assert signals.eligibility.stockbee_liquidity is False
+    assert signals.eligibility.stockbee_daily is False
+    assert signals.eligibility.stockbee_month is False
+    assert signals.eligibility.stockbee_34day is False
+    assert signals.eligibility.stockbee_quarter is False
+    assert signals.eligibility.advance_decline is True
+    assert signals.eligibility.t2108 is True
+    assert signals.eligibility.high_low_52week is True
+    assert signals.eligibility.atr_extension is True
 
 
 @pytest.mark.parametrize(

@@ -71,11 +71,11 @@ def _breadth_row(market: str, day: date, *, up: int, down: int) -> MarketBreadth
         stocks_down_13pct_34days=down + 3,
         total_stocks_scanned=up + down,
         calculation_duration_seconds=1.25,
-        calculation_revision=2,
+        calculation_revision=3,
     )
 
 
-def _revision_2_values() -> dict:
+def _revision_3_values() -> dict:
     return {
         "advancing_count": 120,
         "declining_count": 80,
@@ -96,7 +96,7 @@ def _revision_2_values() -> dict:
         "atr_extension_eligible_count": 195,
         "eligibility_signature": "a" * 64,
         "stockbee_eligibility_signature": "b" * 64,
-        "calculation_revision": 2,
+        "calculation_revision": 3,
     }
 
 
@@ -126,7 +126,7 @@ async def test_current_breadth_filters_by_market(client, session):
     assert payload["stocks_up_4pct"] == 22
     assert payload["stocks_down_4pct"] == 8
     assert payload["broad_universe_count"] is None
-    assert payload["calculation_revision"] == 2
+    assert payload["calculation_revision"] == 3
 
 
 @pytest.mark.asyncio
@@ -134,7 +134,7 @@ async def test_current_breadth_ignores_newer_legacy_row(client, session):
     app.dependency_overrides[get_db] = _override_db(session)
     corrected = _breadth_row("US", date(2026, 8, 20), up=12, down=3)
     stale = _breadth_row("US", date(2026, 8, 21), up=99, down=1)
-    stale.calculation_revision = None
+    stale.calculation_revision = 2
     session.add_all([corrected, stale])
     session.commit()
 
@@ -151,7 +151,7 @@ async def test_current_breadth_returns_not_found_when_only_legacy_rows_exist(
 ):
     app.dependency_overrides[get_db] = _override_db(session)
     stale = _breadth_row("US", date(2026, 8, 21), up=99, down=1)
-    stale.calculation_revision = None
+    stale.calculation_revision = 2
     session.add(stale)
     session.commit()
 
@@ -161,10 +161,10 @@ async def test_current_breadth_returns_not_found_when_only_legacy_rows_exist(
 
 
 @pytest.mark.asyncio
-async def test_revision_2_fields_are_flat_and_legacy_fields_are_unchanged(client, session):
+async def test_revision_3_fields_are_flat_and_legacy_fields_are_unchanged(client, session):
     app.dependency_overrides[get_db] = _override_db(session)
     row = _breadth_row("US", date(2026, 8, 21), up=10, down=4)
-    for name, value in _revision_2_values().items():
+    for name, value in _revision_3_values().items():
         setattr(row, name, value)
     session.add(row)
     session.commit()
@@ -178,16 +178,16 @@ async def test_revision_2_fields_are_flat_and_legacy_fields_are_unchanged(client
     assert payload["t2108_pct"] == pytest.approx(75.0)
     assert payload["stockbee_daily_eligible_count"] == 190
     assert payload["stockbee_eligibility_signature"] == "b" * 64
-    assert payload["calculation_revision"] == 2
+    assert payload["calculation_revision"] == 3
     assert "stockbee" not in payload
     assert "context" not in payload
 
 
 @pytest.mark.asyncio
-async def test_trend_accepts_revision_2_indicators_and_denominators(client, session):
+async def test_trend_accepts_revision_3_indicators_and_denominators(client, session):
     app.dependency_overrides[get_db] = _override_db(session)
     row = _breadth_row("US", date.today(), up=10, down=4)
-    for name, value in _revision_2_values().items():
+    for name, value in _revision_3_values().items():
         setattr(row, name, value)
     session.add(row)
     session.commit()

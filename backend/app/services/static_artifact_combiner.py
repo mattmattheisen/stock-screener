@@ -15,6 +15,7 @@ from app.services.static_market_artifact_contract import (
     read_static_market_manifest,
 )
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
+from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,11 @@ class StaticArtifactCombiner:
         selected = dict(current)
         fallback_reasons: dict[str, str] = {}
         for market, fallback_artifact in fallback.items():
+            if not cls._artifact_matches_breadth_revision(
+                market=market,
+                artifact=fallback_artifact,
+            ):
+                continue
             expected_fallback_formula = fallback_required.get(market)
             if (
                 expected_fallback_formula is not None
@@ -246,6 +252,24 @@ class StaticArtifactCombiner:
         return True
 
     @classmethod
+    def _artifact_matches_breadth_revision(
+        cls,
+        *,
+        market: str,
+        artifact: dict[str, Any],
+    ) -> bool:
+        try:
+            cls._validate_breadth_revision(
+                market=market,
+                source_label=artifact["source_label"],
+                metadata=artifact["metadata"],
+                market_dir=artifact["market_dir"],
+            )
+        except StaticArtifactFormulaError:
+            return False
+        return True
+
+    @classmethod
     def _validate_selected_formulas(
         cls,
         *,
@@ -260,14 +284,19 @@ class StaticArtifactCombiner:
                 else required
             )
             expected = required_formulas.get(market)
-            if expected is None:
-                continue
-            artifact["entry"] = cls._validate_formula(
+            if expected is not None:
+                artifact["entry"] = cls._validate_formula(
+                    market=market,
+                    source_label=artifact["source_label"],
+                    metadata=artifact["metadata"],
+                    market_dir=artifact["market_dir"],
+                    expected_formula=expected,
+                )
+            artifact["entry"] = cls._validate_breadth_revision(
                 market=market,
                 source_label=artifact["source_label"],
                 metadata=artifact["metadata"],
                 market_dir=artifact["market_dir"],
-                expected_formula=expected,
             )
 
     def _discover(
@@ -418,6 +447,47 @@ class StaticArtifactCombiner:
             raise StaticArtifactFormulaError(
                 f"{market} {source_label} artifact uses incompatible RS formula: "
                 f"{rendered}; expected {expected_formula!r}"
+            )
+        return entry
+
+    @staticmethod
+    def _validate_breadth_revision(
+        *,
+        market: str,
+        source_label: str,
+        metadata: dict,
+        market_dir: Path,
+    ) -> dict:
+        entry = metadata.get("entry")
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"{market} {source_label} metadata has no Market entry")
+        features = entry.get("features") if isinstance(entry.get("features"), dict) else {}
+        if not features.get("breadth"):
+            return entry
+
+        breadth_path = market_dir / "breadth.json"
+        if not breadth_path.is_file():
+            raise StaticArtifactFormulaError(
+                f"{market} {source_label} artifact advertises breadth but "
+                "breadth.json is absent"
+            )
+        breadth = json.loads(breadth_path.read_text(encoding="utf-8"))
+        payload = breadth.get("payload")
+        current = payload.get("current") if isinstance(payload, dict) else None
+        observed_revision = (
+            current.get("calculation_revision") if isinstance(current, dict) else None
+        )
+        source_revision = str(breadth.get("source_revision") or "")
+        expected_marker = f"|breadth-r{CURRENT_BREADTH_CALCULATION_REVISION}"
+        if (
+            observed_revision != CURRENT_BREADTH_CALCULATION_REVISION
+            or not source_revision.endswith(expected_marker)
+        ):
+            raise StaticArtifactFormulaError(
+                f"{market} {source_label} artifact uses incompatible breadth revision: "
+                f"revision={observed_revision!r}, source_revision={source_revision!r}; "
+                f"expected {CURRENT_BREADTH_CALCULATION_REVISION} and marker "
+                f"{expected_marker!r}"
             )
         return entry
 

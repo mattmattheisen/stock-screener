@@ -29,25 +29,12 @@ def _price_frame(index: pd.DatetimeIndex) -> pd.DataFrame:
     )
 
 
-class _HistoricalFx:
-    def get_historical_usd_rates(self, currencies, required_dates):
-        return {
-            currency: pd.Series(
-                0.13,
-                index=pd.DatetimeIndex(sorted(required_dates)),
-            )
-            for currency in currencies
-        }
-
-
-def test_static_inputs_retain_only_the_feature_window_for_prices_and_fx():
+def test_static_inputs_retain_only_the_local_price_feature_window():
     recent_index = pd.bdate_range(end="2026-08-21", periods=400)
     full_index = pd.DatetimeIndex([pd.Timestamp("2020-01-02"), *recent_index])
     canonical_dates = list(recent_index[-120:].date)
 
-    inputs = StaticBreadthEngineInputFactory(
-        fx_service=_HistoricalFx()
-    ).build(
+    inputs = StaticBreadthEngineInputFactory().build(
         market="HK",
         canonical_dates=canonical_dates,
         price_data={"0700.HK": _price_frame(full_index)},
@@ -58,7 +45,9 @@ def test_static_inputs_retain_only_the_feature_window_for_prices_and_fx():
     assert len(retained_index) == 371
     assert retained_index[0] == recent_index[29]
     assert pd.Timestamp("2020-01-02") not in retained_index
-    assert pd.Timestamp("2020-01-02") not in inputs.request.fx_by_currency["HKD"].index
+    assert inputs.request.market_policy.market == "HK"
+    assert inputs.request.market_policy.currency == "HKD"
+    assert not hasattr(inputs.request, "fx_by_currency")
 
 
 def test_static_inputs_keep_each_dates_point_in_time_universe():

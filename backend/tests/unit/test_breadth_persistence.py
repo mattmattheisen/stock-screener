@@ -36,7 +36,7 @@ def _result(*, advancing: int = 8) -> BreadthDailyResult:
     )
 
 
-def test_persistence_upserts_every_revision_2_field_in_one_market_partition():
+def test_persistence_upserts_every_current_field_in_one_market_partition():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
     db = sessionmaker(bind=engine)()
@@ -53,5 +53,5 @@ def test_persistence_upserts_every_revision_2_field_in_one_market_partition():
     assert row.broad_universe_count == 12
     assert row.total_stocks_scanned == 12
     assert row.stockbee_eligibility_signature == "b" * 64
-    assert row.calculation_revision == 2
+    assert row.calculation_revision == 3
     assert row.calculation_duration_seconds == 0.75

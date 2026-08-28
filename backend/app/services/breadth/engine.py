@@ -16,11 +16,13 @@ from app.services.point_in_time_universe_service import (
 from .formulas import prepare_feature_frame, signal_flags_at, validate_price_frame
 from .ratios import calculate_inclusive_ratios
 from .types import (
+    CURRENT_BREADTH_CALCULATION_REVISION,
     BreadthDailyCount,
     BreadthDailyResult,
     BreadthEligibilityCounts,
     BreadthFormulaPolicy,
     BreadthIndicatorValues,
+    BreadthMarketPolicy,
     BreadthUniverseSnapshot,
     SymbolBreadthSignals,
 )
@@ -35,7 +37,7 @@ class BreadthEngineRequest:
     dates: tuple[date, ...]
     universes_by_date: Mapping[date, BreadthUniverseSnapshot]
     prices_by_symbol: Mapping[str, pd.DataFrame]
-    fx_by_currency: Mapping[str, pd.Series]
+    market_policy: BreadthMarketPolicy
     seed_counts: tuple[BreadthDailyCount, ...] = ()
     policy: BreadthFormulaPolicy = field(default_factory=BreadthFormulaPolicy)
 
@@ -44,6 +46,13 @@ class BreadthEngine:
     def calculate(
         self, request: BreadthEngineRequest
     ) -> Mapping[date, BreadthDailyResult]:
+        market = request.market.strip().upper()
+        if request.market_policy.market != market:
+            raise ValueError(
+                f"Breadth policy market {request.market_policy.market} "
+                f"does not match request market {market}"
+            )
+
         dates = tuple(request.dates)
         if dates != tuple(sorted(set(dates))):
             raise ValueError("Breadth calculation dates must be ordered and unique")
@@ -68,7 +77,7 @@ class BreadthEngine:
                     )
 
         features_by_symbol: dict[str, pd.DataFrame] = {}
-        for symbol, currency in currencies_by_symbol.items():
+        for symbol in currencies_by_symbol:
             prices = request.prices_by_symbol.get(symbol)
             if prices is None or prices.empty:
                 continue
@@ -79,35 +88,8 @@ class BreadthEngine:
                     "Skipping malformed breadth prices for %s: %s", symbol, exc
                 )
                 continue
-            fx = request.fx_by_currency.get(currency)
-            if fx is None:
-                if currency == "USD":
-                    fx = pd.Series(1.0, index=prices.index)
-                else:
-                    raise ValueError(f"Missing historical FX series for {currency}")
-            rates_by_date = {
-                pd.Timestamp(value).date(): float(rate)
-                for value, rate in fx.items()
-            }
-            aligned_fx = pd.Series(
-                (
-                    rates_by_date.get(pd.Timestamp(value).date())
-                    for value in prices.index
-                ),
-                index=prices.index,
-                dtype=float,
-            )
-            if aligned_fx.isna().any():
-                missing_date = pd.Timestamp(
-                    aligned_fx[aligned_fx.isna()].index[0]
-                ).date()
-                raise ValueError(
-                    f"Missing historical {currency}->USD FX for "
-                    f"{missing_date.isoformat()}"
-                )
             features_by_symbol[symbol] = prepare_feature_frame(
                 prices,
-                aligned_fx,
                 atr_period=request.policy.atr_period,
             )
 
@@ -124,6 +106,10 @@ class BreadthEngine:
                     features,
                     calculation_date,
                     request.policy,
+                    request.market_policy,
+                    stockbee_currency_matches=(
+                        member.currency.upper() == request.market_policy.currency
+                    ),
                 )
 
             signals = tuple(signals_by_symbol.values())
@@ -188,8 +174,13 @@ class BreadthEngine:
                 raise AssertionError("Advance/decline counts do not reconcile")
             if not 0 <= values.t2108_count <= eligibility.t2108_eligible_count:
                 raise AssertionError("T2108 count exceeds its eligible denominator")
-            if request.policy.calculation_revision != 2:
-                raise AssertionError("Canonical breadth engine must produce revision 2")
+            if (
+                request.policy.calculation_revision
+                != CURRENT_BREADTH_CALCULATION_REVISION
+            ):
+                raise AssertionError(
+                    "Canonical breadth engine must produce the current revision"
+                )
 
             stockbee_symbols = tuple(
                 sorted(
@@ -199,7 +190,7 @@ class BreadthEngine:
                 )
             )
             result = BreadthDailyResult(
-                market=request.market.upper(),
+                market=market,
                 calculation_date=calculation_date,
                 values=values,
                 eligibility=eligibility,
@@ -226,7 +217,7 @@ class BreadthEngine:
         ratios_by_date = calculate_inclusive_ratios(
             daily_counts,
             request.seed_counts,
-            market=request.market.upper(),
+            market=market,
             calculation_revision=request.policy.calculation_revision,
         )
         return {

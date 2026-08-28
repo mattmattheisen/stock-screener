@@ -11,6 +11,7 @@ from typing import Any, Literal, Mapping, Sequence
 from app.config import settings
 from app.database import SessionLocal
 from app.domain.markets import market_registry
+from app.domain.markets.catalog import get_market_catalog
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
     LEGACY_RS_FORMULA_VERSION,
@@ -774,8 +775,22 @@ def _run_daily_refresh(
         }
         warnings.extend(market_rs_no_current_artifact_warnings.values())
 
+        supports_breadth_by_market = {
+            selected_market: get_market_catalog()
+            .get(selected_market)
+            .capabilities.breadth
+            for selected_market in selected_markets
+        }
         breadth_history: dict[str, Any] = {}
         for selected_market in selected_markets:
+            if not supports_breadth_by_market[selected_market]:
+                breadth_history[selected_market] = {
+                    "status": "skipped",
+                    "reason": "market_breadth_unsupported",
+                    "market": selected_market,
+                    "as_of_date": as_of_by_market[selected_market].isoformat(),
+                }
+                continue
             if (
                 market_rs_artifact_states[selected_market]
                 is StaticMarketRsArtifactState.NO_CURRENT_ARTIFACT
@@ -812,6 +827,14 @@ def _run_daily_refresh(
         market_exposure: dict[str, Any] = {}
         for selected_market in selected_markets:
             market_as_of = as_of_by_market[selected_market]
+            if not supports_breadth_by_market[selected_market]:
+                market_exposure[selected_market] = {
+                    "status": "skipped",
+                    "reason": "market_breadth_unsupported",
+                    "market": selected_market,
+                    "date": market_as_of.isoformat(),
+                }
+                continue
             if (
                 market_rs_artifact_states[selected_market]
                 is StaticMarketRsArtifactState.NO_CURRENT_ARTIFACT

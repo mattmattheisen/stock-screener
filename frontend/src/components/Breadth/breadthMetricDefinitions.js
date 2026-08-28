@@ -1,5 +1,11 @@
 const STOCKBEE_LIQUIDITY =
-  '20-session average raw dollar volume must be at least US$250,000.';
+  "20-session average raw local-currency traded value must meet the selected market's fixed threshold.";
+
+const STOCKBEE_DAILY_VOLUME =
+  'Volume must meet the market-specific daily share threshold and exceed the prior session.';
+
+const STOCKBEE_MONTH_REFERENCE =
+  '21 sessions; raw close 20 sessions earlier must meet the market-specific local reference-price threshold';
 
 const stockBee = (definition) => ({
   formulaOrigin: 'StockBee',
@@ -12,14 +18,14 @@ export const breadthMetricDefinitions = {
   stocks_up_4pct: stockBee({
     label: 'Stocks Up 4%+',
     description:
-      'Adjusted close rises at least 4% today, volume is at least 100,000 shares and exceeds the prior session.',
+      `Adjusted close rises at least 4% today. ${STOCKBEE_DAILY_VOLUME}`,
     requiredHistory: '20 sessions for liquidity plus the prior session',
     eligibleField: 'stockbee_daily_eligible_count',
   }),
   stocks_down_4pct: stockBee({
     label: 'Stocks Down 4%+',
     description:
-      'Adjusted close falls at least 4% today, volume is at least 100,000 shares and exceeds the prior session.',
+      `Adjusted close falls at least 4% today. ${STOCKBEE_DAILY_VOLUME}`,
     requiredHistory: '20 sessions for liquidity plus the prior session',
     eligibleField: 'stockbee_daily_eligible_count',
   }),
@@ -50,25 +56,25 @@ export const breadthMetricDefinitions = {
   stocks_up_25pct_month: stockBee({
     label: 'Up 25%+ Month',
     description: 'Adjusted close is at least 25% above the adjusted close exactly 20 sessions ago.',
-    requiredHistory: '21 sessions; raw reference close must be at least US$5',
+    requiredHistory: STOCKBEE_MONTH_REFERENCE,
     eligibleField: 'stockbee_month_eligible_count',
   }),
   stocks_down_25pct_month: stockBee({
     label: 'Down 25%+ Month',
     description: 'Adjusted close is at least 25% below the adjusted close exactly 20 sessions ago.',
-    requiredHistory: '21 sessions; raw reference close must be at least US$5',
+    requiredHistory: STOCKBEE_MONTH_REFERENCE,
     eligibleField: 'stockbee_month_eligible_count',
   }),
   stocks_up_50pct_month: stockBee({
     label: 'Up 50%+ Month',
     description: 'Adjusted close is at least 50% above the adjusted close exactly 20 sessions ago.',
-    requiredHistory: '21 sessions; raw reference close must be at least US$5',
+    requiredHistory: STOCKBEE_MONTH_REFERENCE,
     eligibleField: 'stockbee_month_eligible_count',
   }),
   stocks_down_50pct_month: stockBee({
     label: 'Down 50%+ Month',
     description: 'Adjusted close is at least 50% below the adjusted close exactly 20 sessions ago.',
-    requiredHistory: '21 sessions; raw reference close must be at least US$5',
+    requiredHistory: STOCKBEE_MONTH_REFERENCE,
     eligibleField: 'stockbee_month_eligible_count',
   }),
   stocks_up_13pct_34days: stockBee({

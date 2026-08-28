@@ -52,6 +52,12 @@ Balanced activation validates every declared Scan chunk and requires exact formu
 
 RRG rolling-history assets use `static-rrg-history-v4` and identify their RS formula version. The weekly RS-Ratio/RS-Momentum transformation is unchanged, but history from different formulas is never merged. A fallback market artifact or RRG-history bundle is rejected when its schema or formula does not match the requested export, so the site cannot silently combine legacy and balanced rankings. Until enough balanced history exists, RRG can correctly report insufficient history rather than falling back to legacy coordinates.
 
+## Breadth Data Contract
+
+Breadth-capable static market artifacts must contain a revision-3 `breadth.json` payload and a `breadth-r3` source marker. The combiner rejects revision-1 or revision-2 breadth artifacts even when their Market RS formula is otherwise compatible. If no current revision-3 artifact exists, that market's breadth is unavailable; the publisher does not silently reuse an older breadth formula.
+
+Revision 3 uses the same fixed local-market StockBee thresholds as the live app and has no historical-FX input. Markets whose catalog capability disables breadth (currently AU, SG, and MY) publish their other supported static sections without requiring breadth or breadth-derived exposure.
+
 ## Maintaining Static Assets
 
 - Keep the static page tour GIF aligned with the exported static routes.

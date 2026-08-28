@@ -1,8 +1,10 @@
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
 import BreadthHistoryTable from './BreadthHistoryTable';
+import { breadthMetricDefinitions } from './breadthMetricDefinitions';
 
 
 const row = {
@@ -88,6 +90,26 @@ describe('BreadthHistoryTable', () => {
     expect(screen.getByTestId('breadth-history-scroll')).toHaveStyle({
       overflowX: 'auto',
     });
+  });
+
+  it('describes StockBee thresholds in selected-market local units', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<BreadthHistoryTable rows={[row]} />);
+
+    await user.hover(
+      screen.getByRole('button', { name: /stocks up 4%\+ formula details/i }),
+    );
+
+    expect(await screen.findByText(
+      /local-currency traded value must meet the selected market's fixed threshold/i,
+    )).toBeInTheDocument();
+    expect(breadthMetricDefinitions.stocks_up_4pct.description).toMatch(
+      /market-specific daily share threshold/i,
+    );
+    expect(breadthMetricDefinitions.stocks_up_25pct_month.requiredHistory).toMatch(
+      /market-specific local reference-price threshold/i,
+    );
+    expect(JSON.stringify(breadthMetricDefinitions)).not.toMatch(/US\$250,000|US\$5/);
   });
 
   it('renders metric values as unavailable when their eligible denominator is zero', () => {
