@@ -34,6 +34,10 @@ import {
   formatGroupRs,
 } from '../../features/groups/groupRankingFields';
 import { sortGroupRankings } from '../../features/groups/groupRankingSort';
+import {
+  groupRsCellSx,
+  groupRsTone,
+} from '../../features/groups/groupRsVisualEncoding';
 
 function SortableTableCell({ field, label, align = 'left', orderBy, order, onSort }) {
   return (
@@ -65,9 +69,14 @@ function StaticRankingCell({ row, column }) {
   }
 
   if (column.kind === 'rs') {
+    const value = row[column.field];
     return (
-      <TableCell align={align} sx={{ fontFamily: 'monospace' }}>
-        {formatGroupRs(row[column.field])}
+      <TableCell
+        align={align}
+        data-rs-tone={groupRsTone(value)}
+        sx={{ fontFamily: 'monospace', ...groupRsCellSx(value) }}
+      >
+        {formatGroupRs(value)}
       </TableCell>
     );
   }

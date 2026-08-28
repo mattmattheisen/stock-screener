@@ -270,6 +270,64 @@ describe('GroupRankingsPage', () => {
     expect(within(table).getAllByRole('row')[1]).toHaveTextContent('HK Semiconductors');
   });
 
+  it('uses fixed background bands for every live RS rating column', async () => {
+    getCurrentRankings.mockResolvedValue({
+      date: '2026-04-18',
+      total_groups: 2,
+      market_scope: 'HK',
+      rankings: [
+        rankingRowFor('HK'),
+        {
+          ...rankingRowFor('HK'),
+          industry_group: 'HK Retail',
+          rank: 196,
+          avg_rs_rating: 20,
+          avg_rs_rating_1d: 30,
+          avg_rs_rating_1w: 30.1,
+          avg_rs_rating_1m: 69.9,
+          avg_rs_rating_3m: 70,
+          avg_rs_rating_6m: 80,
+          median_rs_rating: 25,
+          weighted_avg_rs_rating: 10,
+          rs_std_dev: 90,
+        },
+      ],
+    });
+
+    renderGroupRankingsPage();
+
+    const table = (await screen.findByRole('columnheader', { name: 'RS' })).closest('table');
+    const rows = within(table).getAllByRole('row');
+    const highCells = within(rows[1]).getAllByRole('cell');
+    const boundaryCells = within(rows[2]).getAllByRole('cell');
+
+    expect(highCells.slice(2, 10).map((cell) => cell.dataset.rsTone)).toEqual([
+      'up-strong',
+      'up-soft',
+      'up-soft',
+      'neutral',
+      'neutral',
+      'up-strong',
+      'up-strong',
+      'up-strong',
+    ]);
+    expect(boundaryCells.slice(2, 10).map((cell) => cell.dataset.rsTone)).toEqual([
+      'down-strong',
+      'down-soft',
+      'neutral',
+      'neutral',
+      'up-soft',
+      'up-strong',
+      'down-soft',
+      'down-strong',
+    ]);
+    expect(highCells[2]).toHaveStyle({ backgroundColor: '#0d7a3e', color: '#fff' });
+    expect(highCells[3]).toHaveStyle({ backgroundColor: '#123d2a', color: '#fff' });
+    expect(boundaryCells[2]).toHaveStyle({ backgroundColor: '#9b1c31', color: '#fff' });
+    expect(boundaryCells[3]).toHaveStyle({ backgroundColor: '#452126', color: '#fff' });
+    expect(boundaryCells[10]).not.toHaveAttribute('data-rs-tone');
+  });
+
   it('sorts live group rankings by top stock', async () => {
     getCurrentRankings.mockResolvedValue({
       date: '2026-04-18',

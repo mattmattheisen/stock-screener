@@ -152,6 +152,36 @@ describe('StaticGroupsPage', () => {
     expect(within(rows[2]).getAllByRole('cell')[7]).toHaveTextContent('10.0');
   });
 
+  it('uses the same RS background bands in the static rankings table', async () => {
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'US Group Rankings' })).toBeInTheDocument();
+    const table = screen.getByRole('columnheader', { name: 'Avg RS' }).closest('table');
+    const rows = within(table).getAllByRole('row');
+    const leaderCells = within(rows[1]).getAllByRole('cell');
+    const laggardCells = within(rows[2]).getAllByRole('cell');
+
+    expect(leaderCells.slice(2, 8).map((cell) => cell.dataset.rsTone)).toEqual([
+      'up-strong',
+      'up-strong',
+      'up-soft',
+      'neutral',
+      'neutral',
+      'up-strong',
+    ]);
+    expect(laggardCells.slice(2, 8).map((cell) => cell.dataset.rsTone)).toEqual([
+      'down-strong',
+      'down-strong',
+      'neutral',
+      'down-strong',
+      'neutral',
+      'down-strong',
+    ]);
+    expect(leaderCells[2]).toHaveStyle({ backgroundColor: '#0d7a3e', color: '#fff' });
+    expect(leaderCells[4]).toHaveStyle({ backgroundColor: '#123d2a', color: '#fff' });
+    expect(laggardCells[2]).toHaveStyle({ backgroundColor: '#9b1c31', color: '#fff' });
+  });
+
   it('sorts static group rankings by RS columns', async () => {
     renderPage();
 
