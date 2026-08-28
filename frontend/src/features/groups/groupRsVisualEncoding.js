@@ -2,10 +2,11 @@ import { BREADTH_VISUAL_COLORS } from '../../components/Breadth/breadthVisualEnc
 
 export const groupRsTone = (value) => {
   if (!Number.isFinite(value)) return 'neutral';
-  if (value >= 80) return 'up-strong';
-  if (value >= 70) return 'up-soft';
-  if (value <= 20) return 'down-strong';
-  if (value <= 30) return 'down-soft';
+  const displayedValue = Number(value.toFixed(1));
+  if (displayedValue >= 80) return 'up-strong';
+  if (displayedValue >= 70) return 'up-soft';
+  if (displayedValue <= 20) return 'down-strong';
+  if (displayedValue <= 30) return 'down-soft';
   return 'neutral';
 };
 
