@@ -112,13 +112,13 @@ const liveOnlyColumns = Object.freeze([
     field: 'median_rs_rating',
     label: 'Med RS',
     align: 'right',
-    kind: 'rating',
+    kind: 'rs',
   }),
   Object.freeze({
     field: 'weighted_avg_rs_rating',
     label: 'Wtd RS',
     align: 'right',
-    kind: 'rating',
+    kind: 'rs',
   }),
   Object.freeze({
     field: 'rs_std_dev',

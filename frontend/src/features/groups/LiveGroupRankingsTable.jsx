@@ -16,6 +16,7 @@ import {
   derivePctRsAbove80,
   formatGroupRs,
 } from './groupRankingFields';
+import { groupRsCellSx, groupRsTone } from './groupRsVisualEncoding';
 
 const RankChangeCell = ({ value }) => {
   if (value === null || value === undefined) {
@@ -130,19 +131,14 @@ const LiveRankingCell = ({ row, column, showHistoricalRanks }) => {
   }
 
   const value = row[column.field];
+  const isRsRating = column.kind === 'rs';
   return (
     <TableCell
       align={column.align}
+      data-rs-tone={isRsRating ? groupRsTone(value) : undefined}
       sx={{
         fontFamily: 'monospace',
-        ...(column.field === 'avg_rs_rating' && {
-          fontWeight: 600,
-          color: value >= 70
-            ? 'success.main'
-            : value <= 30
-              ? 'error.main'
-              : 'text.primary',
-        }),
+        ...(isRsRating && groupRsCellSx(value)),
       }}
     >
       {formatGroupRs(value)}
