@@ -77,7 +77,7 @@ class MarketBreadthContributor(Base):
     symbol = Column(String(32), nullable=False)
     company_name = Column(String(255), nullable=True)
     ibd_industry_group = Column(String(255), nullable=False)
-    daily_change_pct = Column(Float, nullable=False)
+    daily_change_pct = Column(Float, nullable=True)
     signals_json = Column(JSON, nullable=False)
 
     snapshot = relationship(

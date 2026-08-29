@@ -203,10 +203,16 @@ class BreadthPersistence:
                     expected.values,
                     definition.aggregate_field,
                 ):
+                    aggregate_count = getattr(stored, definition.aggregate_field)
+                    contributor_count = getattr(
+                        expected.values,
+                        definition.aggregate_field,
+                    )
                     raise ValueError(
-                        "Stored aggregate mismatch for "
-                        f"{definition.aggregate_field} on "
-                        f"{snapshot.market}/{snapshot.calculation_date.isoformat()}"
+                        f"{snapshot.market},"
+                        f"{snapshot.calculation_date.isoformat()},"
+                        f"{definition.aggregate_field},"
+                        f"{aggregate_count},{contributor_count}"
                     )
 
         try:

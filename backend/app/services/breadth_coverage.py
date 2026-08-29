@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
-from .breadth.types import BreadthDailyResult
+from .breadth.types import BreadthContributorSnapshotResult, BreadthDailyResult
 
 
 CACHE_MISS_SYMBOL_SAMPLE_LIMIT = 20
@@ -208,6 +208,7 @@ class BreadthCalculationResult:
     indicators: Mapping[str, Any]
     coverage: BreadthCoverageReport
     daily_result: BreadthDailyResult | None = None
+    contributor_snapshot: BreadthContributorSnapshotResult | None = None
 
     def to_metrics_dict(self) -> dict[str, Any]:
         return {

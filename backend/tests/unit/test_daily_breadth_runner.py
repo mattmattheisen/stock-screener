@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from app.services.breadth.types import (
+    BreadthContributorSnapshotResult,
     BreadthDailyResult,
     BreadthEligibilityCounts,
     BreadthIndicatorValues,
@@ -82,6 +83,13 @@ def _calculation(
         eligibility_signature="a" * 64,
         stockbee_eligibility_signature="b" * 64,
     )
+    contributor_snapshot = BreadthContributorSnapshotResult(
+        market="US",
+        calculation_date=CALCULATION_DATE,
+        calculation_revision=3,
+        schema_id="breadth-contributors-v1",
+        contributors=(),
+    )
     return BreadthCalculationResult(
         indicators=indicators,
         coverage=BreadthCoverageReport.from_parts(
@@ -104,6 +112,7 @@ def _calculation(
             ),
         ),
         daily_result=daily_result,
+        contributor_snapshot=contributor_snapshot,
     )
 
 
@@ -135,6 +144,11 @@ def test_runner_persists_and_serializes_compatible_success():
         policy=policy,
     )
     calculator.store_daily_result.assert_called_once()
+    stored_args = calculator.store_daily_result.call_args
+    assert stored_args.args == (calculator.calculate_daily_breadth.return_value.daily_result,)
+    assert stored_args.kwargs["contributor_snapshot"] is (
+        calculator.calculate_daily_breadth.return_value.contributor_snapshot
+    )
     calculator.store_daily_breadth.assert_not_called()
     dependencies.publish_snapshot.assert_called_once_with("US")
     result = outcome.to_task_result(policy)

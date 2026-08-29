@@ -53,6 +53,7 @@ class StagingBreadthPersistence:
         self,
         results: Iterable[BreadthDailyResult],
         *,
+        contributor_snapshots_by_date=None,
         duration_seconds_by_date: Mapping[date, float] | None = None,
     ) -> tuple[()]:
         self._rebuild.stage_results(

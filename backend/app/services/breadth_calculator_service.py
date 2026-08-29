@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..models.market_breadth import MarketBreadth
 from .breadth.engine import BreadthEngine, BreadthEngineRequest
+from .breadth.contributor_metadata import BreadthContributorMetadataLoader
 from .breadth.formulas import (
     BREADTH_FEATURE_WARMUP_SESSIONS,
     prices_for_feature_window,
@@ -24,6 +25,7 @@ from .breadth.market_policy import get_breadth_market_policy
 from .breadth.persistence import BreadthPersistence
 from .breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
+    BreadthContributorSnapshotResult,
     BreadthDailyCount,
     BreadthDailyResult,
     BreadthEligibilityCounts,
@@ -157,7 +159,20 @@ class BreadthCalculatorService:
             (calculation_date,),
         )
         seeds = self._load_ratio_seed_counts(calculation_date, limit=9)
-        canonical = self.engine.calculate(
+        try:
+            contributor_metadata = BreadthContributorMetadataLoader.current(
+                self.db,
+                self.market,
+                symbols,
+            )
+        except Exception as exc:  # Metadata gaps must not block aggregate breadth.
+            logger.warning(
+                "Breadth contributor metadata unavailable for %s: %s",
+                self.market,
+                exc,
+            )
+            contributor_metadata = {}
+        batch = self.engine.calculate_with_contributors(
             BreadthEngineRequest(
                 market=self.market,
                 dates=(calculation_date,),
@@ -165,8 +180,12 @@ class BreadthCalculatorService:
                 prices_by_symbol=prices_by_symbol,
                 market_policy=self.market_policy,
                 seed_counts=seeds,
+                contributor_metadata_by_date={
+                    calculation_date: contributor_metadata,
+                },
             )
-        )[calculation_date]
+        )
+        canonical = batch.daily_results[calculation_date]
         coverage_report = BreadthCoverageReport.from_parts(
             price_coverage.report(),
             outcomes.report(),
@@ -178,6 +197,7 @@ class BreadthCalculatorService:
             indicators=metrics,
             coverage=coverage_report,
             daily_result=canonical,
+            contributor_snapshot=batch.contributor_snapshots[calculation_date],
         )
 
     @staticmethod
@@ -539,9 +559,14 @@ class BreadthCalculatorService:
         self,
         result: BreadthDailyResult,
         *,
+        contributor_snapshot: BreadthContributorSnapshotResult | None = None,
         duration_seconds: float,
     ) -> None:
-        self.persistence.upsert_daily(result, duration_seconds=duration_seconds)
+        self.persistence.upsert_daily(
+            result,
+            contributor_snapshot=contributor_snapshot,
+            duration_seconds=duration_seconds,
+        )
 
     def _result_from_mapping(
         self,

@@ -9,6 +9,10 @@ import app.services.breadth_calculator_service as breadth_calculator_module
 import pandas as pd
 import pytest
 from app.database import Base
+from app.models.breadth_contributor import (
+    MarketBreadthContributor,
+    MarketBreadthContributorSnapshot,
+)
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from app.services.breadth.types import (
@@ -68,7 +72,15 @@ def _flat_price_df(end_date: date, close: float = 100.0, periods: int = 80) -> p
 
 def _make_db_session():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[StockUniverse.__table__, MarketBreadth.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            StockUniverse.__table__,
+            MarketBreadth.__table__,
+            MarketBreadthContributorSnapshot.__table__,
+            MarketBreadthContributor.__table__,
+        ],
+    )
     testing_session_local = sessionmaker(bind=engine)
     return testing_session_local()
 
@@ -228,6 +240,8 @@ def test_calculate_daily_breadth_uses_bulk_cached_prices():
     assert metrics["ratio_5day"] is None
     assert metrics["ratio_10day"] is None
     assert metrics["cache_miss_stocks"] == 0
+    assert result.contributor_snapshot is not None
+    assert result.contributor_snapshot.calculation_date == date(2026, 3, 20)
     price_cache.get_many_cached_only_fresh.assert_called_once_with(
         ["AAA", "BBB"],
         period="2y",
@@ -343,6 +357,8 @@ def test_daily_breadth_preserves_month_eligibility_without_prior_close():
     assert result.indicators["advance_decline_eligible_count"] == 0
     assert result.indicators["stockbee_month_eligible_count"] == 1
     assert result.indicators["stocks_up_25pct_month"] == 1
+    assert result.contributor_snapshot is not None
+    assert result.contributor_snapshot.contributors[0].daily_change_pct is None
 
 
 def test_daily_breadth_rejects_an_unusable_target_adjusted_close():

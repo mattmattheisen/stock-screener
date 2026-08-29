@@ -54,7 +54,7 @@ def upgrade() -> None:
         sa.Column("symbol", sa.String(length=32), nullable=False),
         sa.Column("company_name", sa.String(length=255), nullable=True),
         sa.Column("ibd_industry_group", sa.String(length=255), nullable=False),
-        sa.Column("daily_change_pct", sa.Float(), nullable=False),
+        sa.Column("daily_change_pct", sa.Float(), nullable=True),
         sa.Column("signals_json", sa.JSON(), nullable=False),
         sa.ForeignKeyConstraint(
             ["snapshot_id"],

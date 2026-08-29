@@ -107,7 +107,7 @@ class BreadthContributor:
     symbol: str
     company_name: str | None
     ibd_industry_group: str
-    daily_change_pct: float
+    daily_change_pct: float | None
     signals: Mapping[str, float]
 
 

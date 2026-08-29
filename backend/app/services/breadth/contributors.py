@@ -64,7 +64,9 @@ def reconcile_contributor_counts(
                 f"Duplicate breadth contributor symbol {contributor.symbol}"
             )
         symbols.add(contributor.symbol)
-        if not math.isfinite(contributor.daily_change_pct):
+        if contributor.daily_change_pct is not None and not math.isfinite(
+            contributor.daily_change_pct
+        ):
             raise ValueError(
                 f"Nonfinite daily change for breadth contributor {contributor.symbol}"
             )

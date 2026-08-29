@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from ..domain.providers.price_symbol_support import split_supported_price_symbols
 from ..models.stock_universe import StockUniverse
 from .breadth.engine import BreadthEngineRequest
+from .breadth.contributor_metadata import BreadthContributorMetadataLoader
 from .breadth.formulas import validate_price_frame
 from .breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
 from .breadth.universe import build_breadth_universe_snapshots
@@ -116,6 +117,10 @@ class BreadthBackfillResult:
         return dict(self.values)
 
 
+class BreadthContributorBackfillIncomplete(RuntimeError):
+    """Raised before persistence when any contributor backfill date is incomplete."""
+
+
 class BreadthBackfillExecutor:
     """Execute one validated historical breadth plan."""
 
@@ -130,6 +135,7 @@ class BreadthBackfillExecutor:
         exclude_unsupported_price_symbols: bool = False,
         required_as_of_date: date | None = None,
         require_complete_cache_coverage: bool = False,
+        contributor_only: bool = False,
     ) -> BreadthBackfillResult:
         return self._execute_canonical(
             plan,
@@ -137,6 +143,7 @@ class BreadthBackfillExecutor:
             exclude_unsupported_price_symbols=exclude_unsupported_price_symbols,
             required_as_of_date=required_as_of_date,
             require_complete_cache_coverage=require_complete_cache_coverage,
+            contributor_only=contributor_only,
         )
 
     def _execute_canonical(
@@ -147,6 +154,7 @@ class BreadthBackfillExecutor:
         exclude_unsupported_price_symbols: bool,
         required_as_of_date: date | None,
         require_complete_cache_coverage: bool,
+        contributor_only: bool,
     ) -> BreadthBackfillResult:
         calculator = self._calculator
         ordered_dates = list(plan.dates)
@@ -344,7 +352,25 @@ class BreadthBackfillExecutor:
             prices_by_symbol,
             tuple(processed_dates),
         )
-        canonical_by_date = calculator.engine.calculate(
+        try:
+            contributor_metadata_by_date = (
+                BreadthContributorMetadataLoader.historical(
+                    calculator.db,
+                    calculator.market,
+                    {
+                        calculation_date: symbols_by_date[calculation_date]
+                        for calculation_date in processed_dates
+                    },
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "Historical breadth contributor metadata unavailable for %s: %s",
+                calculator.market,
+                exc,
+            )
+            contributor_metadata_by_date = {}
+        canonical_batch = calculator.engine.calculate_with_contributors(
             BreadthEngineRequest(
                 market=calculator.market,
                 dates=tuple(processed_dates),
@@ -352,21 +378,41 @@ class BreadthBackfillExecutor:
                 prices_by_symbol=prices_by_symbol,
                 market_policy=calculator.market_policy,
                 seed_counts=calculator._load_ratio_context_counts(processed_dates),
+                contributor_metadata_by_date=contributor_metadata_by_date,
             )
         )
+        canonical_by_date = canonical_batch.daily_results
 
         error_dates = [
             calculation_date.isoformat()
             for calculation_date in ordered_dates
             if calculation_date not in processed_dates
         ]
+        if contributor_only and error_dates:
+            raise BreadthContributorBackfillIncomplete(
+                "Contributor backfill requires complete cached data for every date: "
+                + ",".join(error_dates)
+            )
         if processed_dates:
             elapsed = (datetime.now(UTC) - started_at).total_seconds()
             duration = round(elapsed / len(processed_dates), 2)
-            calculator.persistence.upsert_many(
-                (canonical_by_date[value] for value in processed_dates),
-                duration_seconds_by_date={value: duration for value in processed_dates},
-            )
+            snapshots_by_date = {
+                value: canonical_batch.contributor_snapshots[value]
+                for value in processed_dates
+            }
+            if contributor_only:
+                calculator.persistence.replace_contributor_snapshots(
+                    snapshots_by_date.values(),
+                    expected_aggregates=canonical_by_date,
+                )
+            else:
+                calculator.persistence.upsert_many(
+                    (canonical_by_date[value] for value in processed_dates),
+                    contributor_snapshots_by_date=snapshots_by_date,
+                    duration_seconds_by_date={
+                        value: duration for value in processed_dates
+                    },
+                )
 
         result: dict[str, Any] = {
             "total_dates": len(ordered_dates),

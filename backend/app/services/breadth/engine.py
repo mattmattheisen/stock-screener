@@ -238,10 +238,6 @@ class BreadthEngine:
                 evaluation = evaluations_by_symbol[symbol]
                 if not evaluation.qualifying_values:
                     continue
-                if evaluation.daily_change_pct is None:
-                    raise AssertionError(
-                        f"Contributor {symbol} has signals without a daily change"
-                    )
                 metadata = metadata_by_symbol.get(
                     symbol,
                     BreadthContributorMetadata(),

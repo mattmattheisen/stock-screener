@@ -7,6 +7,11 @@ import app.services.breadth_backfill as breadth_backfill_module
 import pandas as pd
 import pytest
 from app.database import Base
+from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.models.breadth_contributor import (
+    MarketBreadthContributor,
+    MarketBreadthContributorSnapshot,
+)
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from app.services.breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
@@ -49,7 +54,14 @@ def _make_db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[StockUniverse.__table__, MarketBreadth.__table__],
+        tables=[
+            StockUniverse.__table__,
+            MarketBreadth.__table__,
+            MarketBreadthContributorSnapshot.__table__,
+            MarketBreadthContributor.__table__,
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+        ],
     )
     return sessionmaker(bind=engine)()
 
@@ -239,6 +251,70 @@ def test_backfill_without_explicit_universes_resolves_membership_per_date(
         .all()
     }
     assert stored == {first_date: 1, second_date: 2}
+    assert db.query(MarketBreadthContributorSnapshot).count() == 2
+
+
+def test_contributor_only_backfill_never_updates_aggregate_rows():
+    db = _make_db_session()
+    calculation_date = date(2026, 3, 20)
+    db.add(
+        StockUniverse(
+            symbol="AAA",
+            name="Alpha",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=True,
+        )
+    )
+    db.add(
+        MarketBreadth(
+            market="US",
+            date=calculation_date,
+            calculation_revision=3,
+            stocks_up_4pct=0,
+            stocks_down_4pct=0,
+            stocks_up_25pct_quarter=0,
+            stocks_down_25pct_quarter=0,
+            stocks_up_25pct_month=0,
+            stocks_down_25pct_month=0,
+            stocks_up_50pct_month=0,
+            stocks_down_50pct_month=0,
+            stocks_up_13pct_34days=0,
+            stocks_down_13pct_34days=0,
+            atr_10x_extension_count=0,
+            total_stocks_scanned=1,
+        )
+    )
+    db.commit()
+    aggregate = db.query(MarketBreadth).one()
+    aggregate_id = aggregate.id
+    original_created_at = aggregate.created_at
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": _flat_price_df(calculation_date),
+    }
+    calculator = BreadthCalculatorService(db, price_cache, market="US")
+    policy = DerivedDataExecutionPolicy(
+        mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
+        target_kind=DerivedDataTargetKind.HISTORICAL,
+    )
+
+    result = BreadthBackfillExecutor(calculator).execute(
+        BreadthBackfillPlan(dates=(calculation_date,)),
+        policy=policy,
+        require_complete_cache_coverage=True,
+        contributor_only=True,
+    ).to_legacy_dict()
+
+    db.expire_all()
+    aggregate = db.query(MarketBreadth).one()
+    assert result["processed"] == 1
+    assert aggregate.id == aggregate_id
+    assert aggregate.created_at == original_created_at
+    assert aggregate.total_stocks_scanned == 1
+    assert db.query(MarketBreadthContributorSnapshot).count() == 1
 
 
 def test_implicit_backfill_loads_members_at_final_requested_membership_date(
