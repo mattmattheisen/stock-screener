@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..domain.providers.price_symbol_support import split_supported_price_symbols
 from ..models.stock_universe import StockUniverse
+from .breadth.contributor_metadata import BreadthContributorMetadataLoader
 from .breadth.engine import BreadthEngineRequest
 from .breadth.formulas import validate_price_frame
 from .breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
@@ -71,17 +72,13 @@ class BreadthBackfillPlan:
         for calculation_date in ordered_dates:
             if calculation_date not in eligible_symbols_by_date:
                 raise ValueError(
-                    "eligible symbols missing for "
-                    f"{calculation_date.isoformat()}"
+                    f"eligible symbols missing for {calculation_date.isoformat()}"
                 )
             if calculation_date not in eligibility_signatures_by_date:
                 raise ValueError(
-                    "eligibility signature missing for "
-                    f"{calculation_date.isoformat()}"
+                    f"eligibility signature missing for {calculation_date.isoformat()}"
                 )
-            symbols = tuple(
-                sorted(set(eligible_symbols_by_date[calculation_date]))
-            )
+            symbols = tuple(sorted(set(eligible_symbols_by_date[calculation_date])))
             expected_signature = static_breadth_eligibility_signature(symbols)
             supplied_signature = eligibility_signatures_by_date[calculation_date]
             if supplied_signature != expected_signature:
@@ -116,6 +113,10 @@ class BreadthBackfillResult:
         return dict(self.values)
 
 
+class BreadthContributorBackfillIncomplete(RuntimeError):
+    """Raised before persistence when any contributor backfill date is incomplete."""
+
+
 class BreadthBackfillExecutor:
     """Execute one validated historical breadth plan."""
 
@@ -130,6 +131,7 @@ class BreadthBackfillExecutor:
         exclude_unsupported_price_symbols: bool = False,
         required_as_of_date: date | None = None,
         require_complete_cache_coverage: bool = False,
+        contributor_only: bool = False,
     ) -> BreadthBackfillResult:
         return self._execute_canonical(
             plan,
@@ -137,6 +139,7 @@ class BreadthBackfillExecutor:
             exclude_unsupported_price_symbols=exclude_unsupported_price_symbols,
             required_as_of_date=required_as_of_date,
             require_complete_cache_coverage=require_complete_cache_coverage,
+            contributor_only=contributor_only,
         )
 
     def _execute_canonical(
@@ -147,6 +150,7 @@ class BreadthBackfillExecutor:
         exclude_unsupported_price_symbols: bool,
         required_as_of_date: date | None,
         require_complete_cache_coverage: bool,
+        contributor_only: bool,
     ) -> BreadthBackfillResult:
         calculator = self._calculator
         ordered_dates = list(plan.dates)
@@ -176,11 +180,7 @@ class BreadthBackfillExecutor:
                 for calculation_date in ordered_dates
             }
             target_symbols = sorted(
-                {
-                    symbol
-                    for symbols in symbols_by_date.values()
-                    for symbol in symbols
-                }
+                {symbol for symbols in symbols_by_date.values() for symbol in symbols}
             )
             currency_by_symbol = {
                 member.symbol: member.currency
@@ -189,11 +189,7 @@ class BreadthBackfillExecutor:
             }
         else:
             target_symbols = sorted(
-                {
-                    symbol
-                    for symbols in explicit_symbols.values()
-                    for symbol in symbols
-                }
+                {symbol for symbols in explicit_symbols.values() for symbol in symbols}
             )
             stock_rows = (
                 calculator.db.query(StockUniverse)
@@ -344,7 +340,30 @@ class BreadthBackfillExecutor:
             prices_by_symbol,
             tuple(processed_dates),
         )
-        canonical_by_date = calculator.engine.calculate(
+        contributor_metadata_available = True
+        try:
+            contributor_metadata_by_date = BreadthContributorMetadataLoader.historical(
+                calculator.db,
+                calculator.market,
+                {
+                    calculation_date: symbols_by_date[calculation_date]
+                    for calculation_date in processed_dates
+                },
+            )
+        except Exception as exc:
+            calculator.db.rollback()
+            logger.warning(
+                "Historical breadth contributor metadata unavailable for %s: %s",
+                calculator.market,
+                exc,
+            )
+            if contributor_only:
+                raise BreadthContributorBackfillIncomplete(
+                    "Contributor metadata source is unavailable; no snapshots were written"
+                ) from exc
+            contributor_metadata_by_date = {}
+            contributor_metadata_available = False
+        canonical_batch = calculator.engine.calculate_with_contributors(
             BreadthEngineRequest(
                 market=calculator.market,
                 dates=tuple(processed_dates),
@@ -352,21 +371,46 @@ class BreadthBackfillExecutor:
                 prices_by_symbol=prices_by_symbol,
                 market_policy=calculator.market_policy,
                 seed_counts=calculator._load_ratio_context_counts(processed_dates),
+                contributor_metadata_by_date=contributor_metadata_by_date,
             )
         )
+        canonical_by_date = canonical_batch.daily_results
 
         error_dates = [
             calculation_date.isoformat()
             for calculation_date in ordered_dates
             if calculation_date not in processed_dates
         ]
+        if contributor_only and error_dates:
+            raise BreadthContributorBackfillIncomplete(
+                "Contributor backfill requires complete cached data for every date: "
+                + ",".join(error_dates)
+            )
         if processed_dates:
             elapsed = (datetime.now(UTC) - started_at).total_seconds()
             duration = round(elapsed / len(processed_dates), 2)
-            calculator.persistence.upsert_many(
-                (canonical_by_date[value] for value in processed_dates),
-                duration_seconds_by_date={value: duration for value in processed_dates},
+            snapshots_by_date = (
+                {
+                    value: canonical_batch.contributor_snapshots[value]
+                    for value in processed_dates
+                }
+                if contributor_metadata_available
+                else None
             )
+            if contributor_only:
+                assert snapshots_by_date is not None
+                calculator.persistence.replace_contributor_snapshots(
+                    snapshots_by_date.values(),
+                    expected_aggregates=canonical_by_date,
+                )
+            else:
+                calculator.persistence.upsert_many(
+                    (canonical_by_date[value] for value in processed_dates),
+                    contributor_snapshots_by_date=snapshots_by_date,
+                    duration_seconds_by_date={
+                        value: duration for value in processed_dates
+                    },
+                )
 
         result: dict[str, Any] = {
             "total_dates": len(ordered_dates),
@@ -391,8 +435,9 @@ class BreadthBackfillExecutor:
                     },
                     "advance_decline_eligible_stocks_by_date": {
                         value.isoformat(): (
-                            canonical_by_date[value]
-                            .eligibility.advance_decline_eligible_count
+                            canonical_by_date[
+                                value
+                            ].eligibility.advance_decline_eligible_count
                             if value in canonical_by_date
                             else 0
                         )
@@ -407,9 +452,7 @@ class BreadthBackfillExecutor:
         if exclude_unsupported_price_symbols:
             result.update(
                 {
-                    "skipped_unsupported_symbols": len(
-                        skipped_unsupported_symbols
-                    ),
+                    "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
                     "unsupported_symbols_sample": sorted(
                         set(skipped_unsupported_symbols)
                     )[:20],

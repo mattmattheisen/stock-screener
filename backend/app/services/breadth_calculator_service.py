@@ -5,6 +5,7 @@ Calculates StockBee-style breadth metrics across all active stocks
 in the universe, including daily movers, multi-period ratios, and
 monthly/quarterly performance indicators.
 """
+
 import logging
 import math
 from collections.abc import Mapping
@@ -14,6 +15,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from ..models.market_breadth import MarketBreadth
+from .breadth.contributor_metadata import BreadthContributorMetadataLoader
 from .breadth.engine import BreadthEngine, BreadthEngineRequest
 from .breadth.formulas import (
     BREADTH_FEATURE_WARMUP_SESSIONS,
@@ -24,6 +26,7 @@ from .breadth.market_policy import get_breadth_market_policy
 from .breadth.persistence import BreadthPersistence
 from .breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
+    BreadthContributorSnapshotResult,
     BreadthDailyCount,
     BreadthDailyResult,
     BreadthEligibilityCounts,
@@ -105,6 +108,7 @@ class BreadthCalculatorService:
         """
         if calculation_date is None:
             from ..utils.market_hours import get_eastern_now
+
             calculation_date = get_eastern_now().date()
 
         logger.info("Calculating breadth indicators for %s", calculation_date)
@@ -157,7 +161,30 @@ class BreadthCalculatorService:
             (calculation_date,),
         )
         seeds = self._load_ratio_seed_counts(calculation_date, limit=9)
-        canonical = self.engine.calculate(
+        contributor_metadata_available = True
+        try:
+            if policy.target_kind is DerivedDataTargetKind.HISTORICAL:
+                contributor_metadata = BreadthContributorMetadataLoader.historical(
+                    self.db,
+                    self.market,
+                    {calculation_date: symbols},
+                )[calculation_date]
+            else:
+                contributor_metadata = BreadthContributorMetadataLoader.current(
+                    self.db,
+                    self.market,
+                    symbols,
+                )
+        except Exception as exc:  # noqa: BLE001 - metadata is optional for aggregate breadth.
+            self.db.rollback()
+            logger.warning(
+                "Breadth contributor metadata unavailable for %s: %s",
+                self.market,
+                exc,
+            )
+            contributor_metadata = {}
+            contributor_metadata_available = False
+        batch = self.engine.calculate_with_contributors(
             BreadthEngineRequest(
                 market=self.market,
                 dates=(calculation_date,),
@@ -165,8 +192,12 @@ class BreadthCalculatorService:
                 prices_by_symbol=prices_by_symbol,
                 market_policy=self.market_policy,
                 seed_counts=seeds,
+                contributor_metadata_by_date={
+                    calculation_date: contributor_metadata,
+                },
             )
-        )[calculation_date]
+        )
+        canonical = batch.daily_results[calculation_date]
         coverage_report = BreadthCoverageReport.from_parts(
             price_coverage.report(),
             outcomes.report(),
@@ -178,6 +209,11 @@ class BreadthCalculatorService:
             indicators=metrics,
             coverage=coverage_report,
             daily_result=canonical,
+            contributor_snapshot=(
+                batch.contributor_snapshots[calculation_date]
+                if contributor_metadata_available
+                else None
+            ),
         )
 
     @staticmethod
@@ -284,9 +320,7 @@ class BreadthCalculatorService:
         if not calculation_dates:
             return ()
         requested = set(calculation_dates)
-        prior = list(
-            self._load_ratio_seed_counts(min(calculation_dates), limit=9)
-        )
+        prior = list(self._load_ratio_seed_counts(min(calculation_dates), limit=9))
         intervening = (
             self.db.query(MarketBreadth)
             .filter(
@@ -365,12 +399,16 @@ class BreadthCalculatorService:
                 "error_dates": [],
             }
 
-        return BreadthBackfillExecutor(self).execute(
-            plan,
-            policy=policy,
-            exclude_unsupported_price_symbols=exclude_unsupported_price_symbols,
-            required_as_of_date=required_as_of_date,
-        ).to_legacy_dict()
+        return (
+            BreadthBackfillExecutor(self)
+            .execute(
+                plan,
+                policy=policy,
+                exclude_unsupported_price_symbols=exclude_unsupported_price_symbols,
+                required_as_of_date=required_as_of_date,
+            )
+            .to_legacy_dict()
+        )
 
     def _load_price_data_for_batch(
         self,
@@ -449,12 +487,14 @@ class BreadthCalculatorService:
         start_date = window_end - timedelta(days=lookback_days)
 
         # Get all dates that have breadth data for this market
-        existing_dates = self.db.query(
-            func.distinct(MarketBreadth.date)
-        ).filter(
-            MarketBreadth.date >= start_date,
-            MarketBreadth.market == self.market,
-        ).all()
+        existing_dates = (
+            self.db.query(func.distinct(MarketBreadth.date))
+            .filter(
+                MarketBreadth.date >= start_date,
+                MarketBreadth.market == self.market,
+            )
+            .all()
+        )
 
         existing_date_set = {d[0] for d in existing_dates}
 
@@ -462,7 +502,9 @@ class BreadthCalculatorService:
         missing_dates = []
         current_date = start_date
 
-        while current_date < window_end:  # Exclude the target day; it is calculated separately.
+        while (
+            current_date < window_end
+        ):  # Exclude the target day; it is calculated separately.
             if (
                 calendar_service.is_trading_day(self.market, current_date)
                 and current_date not in existing_date_set
@@ -470,7 +512,9 @@ class BreadthCalculatorService:
                 missing_dates.append(current_date)
             current_date += timedelta(days=1)
 
-        logger.info(f"Found {len(missing_dates)} missing breadth dates in last {lookback_days} days")
+        logger.info(
+            f"Found {len(missing_dates)} missing breadth dates in last {lookback_days} days"
+        )
         return sorted(missing_dates)
 
     def fill_gaps(
@@ -498,12 +542,7 @@ class BreadthCalculatorService:
             }
         """
         if not missing_dates:
-            return {
-                'total_dates': 0,
-                'processed': 0,
-                'errors': 0,
-                'error_dates': []
-            }
+            return {"total_dates": 0, "processed": 0, "errors": 0, "error_dates": []}
 
         ordered_dates = sorted(missing_dates)
         logger.info(f"Filling {len(ordered_dates)} missing breadth dates")
@@ -539,9 +578,14 @@ class BreadthCalculatorService:
         self,
         result: BreadthDailyResult,
         *,
+        contributor_snapshot: BreadthContributorSnapshotResult | None = None,
         duration_seconds: float,
     ) -> None:
-        self.persistence.upsert_daily(result, duration_seconds=duration_seconds)
+        self.persistence.upsert_daily(
+            result,
+            contributor_snapshot=contributor_snapshot,
+            duration_seconds=duration_seconds,
+        )
 
     def _result_from_mapping(
         self,

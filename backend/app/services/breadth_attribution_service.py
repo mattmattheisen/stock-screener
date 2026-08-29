@@ -1,179 +1,67 @@
-"""Service for attributing daily breadth movers (4% up/down) to IBD industry groups.
-
-Given the symbol universe for a market and their cached price histories, this
-service classifies each ±4% daily mover into its IBD industry group (US) so the
-breadth UI can show "what is driving the breadth" per session. Symbols with no
-IBD group assignment fall into the synthetic "No Group" bucket.
-"""
+"""Project canonical breadth contributor documents into legacy group history."""
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Iterable, Mapping
-from datetime import date
+from collections.abc import Iterable
 from typing import Any
 
-import pandas as pd
-
-from app.services.breadth.formulas import prepare_feature_frame, signal_flags_at
-from app.services.breadth.market_policy import get_breadth_market_policy
-from app.services.breadth.types import BreadthFormulaPolicy
-
-logger = logging.getLogger(__name__)
-
-
-NO_GROUP_LABEL = "No Group"
+from app.services.breadth.contributor_query import BreadthContributorDocumentPayload
+from app.services.breadth.contributors import NO_GROUP_LABEL
 
 
 class BreadthAttributionService:
-    """Compute per-date IBD-group attribution for ±4% daily movers."""
+    """Summarize frozen ±4% contributor snapshots by IBD industry group."""
 
     def compute(
         self,
         *,
-        symbols_meta: Iterable[Mapping[str, Any]],
-        price_data: Mapping[str, pd.DataFrame | None],
-        target_dates: Iterable[date],
-        market: str = "US",
-        currencies_by_symbol: Mapping[str, str] | None = None,
-        symbols_by_date: Mapping[date, Iterable[str]] | None = None,
-        policy: BreadthFormulaPolicy | None = None,
+        documents: Iterable[BreadthContributorDocumentPayload],
     ) -> list[dict[str, Any]]:
-        """Return attribution rows ordered oldest → newest.
-
-        Args:
-            symbols_meta: Iterable of dicts with at minimum ``symbol``; optional
-                ``company_name`` and ``ibd_industry_group``.
-            price_data: ``{symbol: DataFrame}`` of cached price history (Close
-                required, datetime index). Missing/empty frames are skipped.
-            target_dates: Trading dates to attribute. Each yields one entry in
-                the returned list.
-
-        Each entry shape::
-
-            {
-                "date": "YYYY-MM-DD",
-                "stocks_up_4pct": int,
-                "stocks_down_4pct": int,
-                "groups": [
-                    {
-                        "group": str,
-                        "up_count": int,
-                        "down_count": int,
-                        "net": int,                # up - down
-                        "up_stocks":   [{symbol, name, pct_change, close}, ...],
-                        "down_stocks": [{symbol, name, pct_change, close}, ...],
-                    },
-                    ...
-                ],
-            }
-        """
-        market_policy = get_breadth_market_policy(market)
-        meta_by_symbol: dict[str, Mapping[str, Any]] = {}
-        for entry in symbols_meta:
-            if not entry:
-                continue
-            symbol = entry.get("symbol")
-            if not symbol:
-                continue
-            meta_by_symbol[str(symbol).upper()] = entry
-
-        ordered_dates = sorted({d for d in target_dates if d is not None})
-        if not ordered_dates or not meta_by_symbol:
-            return []
-
-        formula_policy = policy or BreadthFormulaPolicy()
-        per_date: dict[date, dict[str, dict[str, Any]]] = {d: {} for d in ordered_dates}
-        normalized_symbols_by_date = (
-            {
-                calculation_date: frozenset(
-                    str(symbol).upper() for symbol in symbols
-                )
-                for calculation_date, symbols in symbols_by_date.items()
-            }
-            if symbols_by_date is not None
-            else None
-        )
-
-        for symbol, meta in meta_by_symbol.items():
-            history = price_data.get(symbol)
-            if history is None or getattr(history, "empty", True):
-                continue
-            raw_currency = (currencies_by_symbol or {}).get(symbol)
-            currency = str(raw_currency).upper() if raw_currency else None
-            try:
-                features = prepare_feature_frame(
-                    history,
-                    atr_period=formula_policy.atr_period,
-                )
-            except ValueError as exc:
-                logger.warning(
-                    "Skipping malformed breadth attribution prices for %s: %s",
-                    symbol,
-                    exc,
-                )
-                continue
-
-            group = self._resolve_group(meta.get("ibd_industry_group"))
-            name = meta.get("company_name") or meta.get("name")
-
-            for d in ordered_dates:
-                if (
-                    normalized_symbols_by_date is not None
-                    and symbol not in normalized_symbols_by_date.get(d, frozenset())
-                ):
-                    continue
-                flags = signal_flags_at(
-                    features,
-                    d,
-                    formula_policy,
-                    market_policy,
-                    stockbee_currency_matches=(
-                        currency is not None and currency == market_policy.currency
-                    ),
-                )
+        results: list[dict[str, Any]] = []
+        for document in sorted(documents, key=lambda item: item.date):
+            groups: dict[str, dict[str, list[dict[str, Any]]]] = {}
+            for contributor in document.contributors:
                 direction = (
                     "up"
-                    if flags.up_4pct
+                    if "up_4pct" in contributor.signals
                     else "down"
-                    if flags.down_4pct
+                    if "down_4pct" in contributor.signals
                     else None
                 )
                 if direction is None:
                     continue
-                row = features.loc[pd.Timestamp(d)]
-                pct_val = float(row.daily_return) * 100.0
-                stock_entry = {
-                    "symbol": symbol,
-                    "name": name,
-                    "pct_change": round(pct_val, 2),
-                    "close": round(float(row.raw_close), 2),
-                }
-
-                bucket = per_date[d].setdefault(
+                group = self._resolve_group(contributor.ibd_industry_group)
+                bucket = groups.setdefault(
                     group,
                     {"up_stocks": [], "down_stocks": []},
                 )
-                bucket[f"{direction}_stocks"].append(stock_entry)
+                bucket[f"{direction}_stocks"].append(
+                    {
+                        "symbol": contributor.symbol,
+                        "name": contributor.company_name,
+                        "pct_change": contributor.daily_change_pct,
+                        "close": None,
+                    }
+                )
 
-        results: list[dict[str, Any]] = []
-        for d in ordered_dates:
-            groups_for_day = per_date[d]
             groups_payload: list[dict[str, Any]] = []
-            for group_name, bucket in groups_for_day.items():
+            for group_name, bucket in groups.items():
                 up_stocks = sorted(
                     bucket["up_stocks"],
-                    key=lambda row: row["pct_change"],
-                    reverse=True,
+                    key=lambda row: (
+                        -(row["pct_change"] or 0.0),
+                        row["symbol"],
+                    ),
                 )
                 down_stocks = sorted(
                     bucket["down_stocks"],
-                    key=lambda row: row["pct_change"],
+                    key=lambda row: (
+                        row["pct_change"] or 0.0,
+                        row["symbol"],
+                    ),
                 )
                 up_count = len(up_stocks)
                 down_count = len(down_stocks)
-                if up_count == 0 and down_count == 0:
-                    continue
                 groups_payload.append(
                     {
                         "group": group_name,
@@ -184,8 +72,6 @@ class BreadthAttributionService:
                         "down_stocks": down_stocks,
                     }
                 )
-
-            # Sort by total activity descending, then net descending, then name.
             groups_payload.sort(
                 key=lambda row: (
                     -(row["up_count"] + row["down_count"]),
@@ -193,24 +79,22 @@ class BreadthAttributionService:
                     row["group"],
                 )
             )
-            total_up = sum(row["up_count"] for row in groups_payload)
-            total_down = sum(row["down_count"] for row in groups_payload)
             results.append(
                 {
-                    "date": d.isoformat(),
-                    "stocks_up_4pct": total_up,
-                    "stocks_down_4pct": total_down,
+                    "date": document.date.isoformat(),
+                    "stocks_up_4pct": sum(row["up_count"] for row in groups_payload),
+                    "stocks_down_4pct": sum(
+                        row["down_count"] for row in groups_payload
+                    ),
                     "groups": groups_payload,
                 }
             )
-
         return results
 
     @staticmethod
     def _resolve_group(raw_group: Any) -> str:
-        if raw_group is None:
-            return NO_GROUP_LABEL
-        text = str(raw_group).strip()
-        if not text:
-            return NO_GROUP_LABEL
-        return text
+        text = str(raw_group or "").strip()
+        return text or NO_GROUP_LABEL
+
+
+__all__ = ["NO_GROUP_LABEL", "BreadthAttributionService"]

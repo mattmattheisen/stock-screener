@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date
 import os
+from types import MappingProxyType
 from uuid import uuid4
 
 import pytest
@@ -9,9 +10,17 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.models.breadth_contributor import (
+    MarketBreadthContributor,
+    MarketBreadthContributorSnapshot,
+)
 from app.models.market_breadth import MarketBreadth
+from app.services.breadth.contributors import BREADTH_CONTRIBUTOR_SIGNALS
+from app.services.breadth.persistence import BreadthPersistence
 from app.services.breadth.rebuild import BreadthRebuildService
 from app.services.breadth.types import (
+    BreadthContributor,
+    BreadthContributorSnapshotResult,
     BreadthDailyResult,
     BreadthEligibilityCounts,
     BreadthIndicatorValues,
@@ -44,6 +53,46 @@ def _result(day: date) -> BreadthDailyResult:
         broad_universe_count=110,
         eligibility_signature="a" * 64,
         stockbee_eligibility_signature="b" * 64,
+    )
+
+
+def _snapshot(result: BreadthDailyResult) -> BreadthContributorSnapshotResult:
+    contributors = []
+    for signal_key, definition in BREADTH_CONTRIBUTOR_SIGNALS.items():
+        for index in range(getattr(result.values, definition.aggregate_field)):
+            contributors.append(
+                BreadthContributor(
+                    symbol=f"{signal_key.upper()}-{index}",
+                    company_name=f"{signal_key} {index}",
+                    ibd_industry_group="Group A",
+                    daily_change_pct=5.0,
+                    signals=MappingProxyType({signal_key: 5.0}),
+                )
+            )
+    return BreadthContributorSnapshotResult(
+        market=result.market,
+        calculation_date=result.calculation_date,
+        calculation_revision=result.calculation_revision,
+        schema_id="breadth-contributors-v1",
+        contributors=tuple(contributors),
+    )
+
+
+def _stage(service: BreadthRebuildService, result: BreadthDailyResult) -> None:
+    service.stage_results(
+        (result,),
+        contributor_snapshots_by_date={result.calculation_date: _snapshot(result)},
+    )
+
+
+def _create_breadth_tables(engine) -> None:
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            MarketBreadth.__table__,
+            MarketBreadthContributorSnapshot.__table__,
+            MarketBreadthContributor.__table__,
+        ],
     )
 
 
@@ -82,7 +131,7 @@ def _cutover_engine(tmp_path):
 
 def test_revision_cutover_replaces_legacy_rows_and_preserves_unrelated_tables(tmp_path):
     with _cutover_engine(tmp_path) as engine:
-        Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+        _create_breadth_tables(engine)
         with engine.begin() as connection:
             connection.execute(
                 text("CREATE TABLE unrelated (id INTEGER PRIMARY KEY, value TEXT)")
@@ -117,7 +166,7 @@ def test_revision_cutover_replaces_legacy_rows_and_preserves_unrelated_tables(tm
                 {"US": (date(2026, 8, 21),)},
                 full_market_set=True,
             )
-            service.stage_results((_result(date(2026, 8, 21)),))
+            _stage(service, _result(date(2026, 8, 21)))
 
             report = service.validate()
             assert report["valid"] is True
@@ -142,9 +191,40 @@ def test_revision_cutover_replaces_legacy_rows_and_preserves_unrelated_tables(tm
             assert unrelated == "keep"
 
 
+def test_revision_cutover_replaces_contributors_with_the_staged_snapshot(tmp_path):
+    calculation_date = date(2026, 8, 21)
+    with _cutover_engine(tmp_path) as engine:
+        _create_breadth_tables(engine)
+        Session = sessionmaker(bind=engine)
+        with Session() as db:
+            BreadthPersistence(db).upsert_daily(
+                _result(calculation_date),
+                contributor_snapshot=_snapshot(_result(calculation_date)),
+                duration_seconds=0.1,
+            )
+            service = BreadthRebuildService(db, required_markets=("US",))
+            service.recreate_staging()
+            service.record_build_manifest(
+                {"US": (calculation_date,)},
+                full_market_set=True,
+            )
+            service.stage_results(
+                (_result(calculation_date),),
+                contributor_snapshots_by_date={
+                    calculation_date: _snapshot(_result(calculation_date))
+                },
+            )
+
+            service.activate()
+
+            stored = db.query(MarketBreadthContributorSnapshot).one()
+            assert stored.date == calculation_date
+            assert len(stored.contributors) == 10
+
+
 def test_validation_allows_overlapping_trailing_range_signals(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'overlap.sqlite'}")
-    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    _create_breadth_tables(engine)
     Session = sessionmaker(bind=engine)
     with Session() as db:
         result = _result(date(2026, 8, 21))
@@ -164,14 +244,13 @@ def test_validation_allows_overlapping_trailing_range_signals(tmp_path):
             {"US": (date(2026, 8, 21),)},
             full_market_set=True,
         )
-        service.stage_results((result,))
+        _stage(service, result)
 
         report = service.validate()
 
         assert report["valid"] is True
         assert not any(
-            error.startswith("pair_exceeds_eligibility")
-            for error in report["errors"]
+            error.startswith("pair_exceeds_eligibility") for error in report["errors"]
         )
 
     engine.dispose()
@@ -179,7 +258,7 @@ def test_validation_allows_overlapping_trailing_range_signals(tmp_path):
 
 def test_validation_rejects_dates_missing_from_persisted_build_manifest(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'missing-date.sqlite'}")
-    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    _create_breadth_tables(engine)
     Session = sessionmaker(bind=engine)
     with Session() as db:
         service = BreadthRebuildService(db, required_markets=("US",))
@@ -188,7 +267,7 @@ def test_validation_rejects_dates_missing_from_persisted_build_manifest(tmp_path
             {"US": (date(2026, 8, 20), date(2026, 8, 21))},
             full_market_set=True,
         )
-        service.stage_results((_result(date(2026, 8, 21)),))
+        _stage(service, _result(date(2026, 8, 21)))
 
         report = service.validate()
 
@@ -200,7 +279,7 @@ def test_validation_rejects_dates_missing_from_persisted_build_manifest(tmp_path
 
 def test_selective_rebuild_cannot_replace_other_live_markets(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'partial.sqlite'}")
-    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    _create_breadth_tables(engine)
     Session = sessionmaker(bind=engine)
     with Session() as db:
         db.add(
@@ -219,7 +298,7 @@ def test_selective_rebuild_cannot_replace_other_live_markets(tmp_path):
             {"US": (date(2026, 8, 21),)},
             full_market_set=False,
         )
-        service.stage_results((_result(date(2026, 8, 21)),))
+        _stage(service, _result(date(2026, 8, 21)))
 
         report = service.validate()
         with pytest.raises(RuntimeError, match="invalid breadth rebuild"):
@@ -234,7 +313,7 @@ def test_selective_rebuild_cannot_replace_other_live_markets(tmp_path):
 
 def test_validation_rejects_forged_full_market_manifest(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'forged-full.sqlite'}")
-    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    _create_breadth_tables(engine)
     Session = sessionmaker(bind=engine)
     with Session() as db:
         service = BreadthRebuildService(db, required_markets=("US", "HK"))
@@ -243,7 +322,7 @@ def test_validation_rejects_forged_full_market_manifest(tmp_path):
             {"US": (date(2026, 8, 21),)},
             full_market_set=True,
         )
-        service.stage_results((_result(date(2026, 8, 21)),))
+        _stage(service, _result(date(2026, 8, 21)))
 
         report = service.validate()
 
@@ -255,7 +334,7 @@ def test_validation_rejects_forged_full_market_manifest(tmp_path):
 
 def test_validation_rejects_empty_required_market_partition(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'empty-market.sqlite'}")
-    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    _create_breadth_tables(engine)
     Session = sessionmaker(bind=engine)
     with Session() as db:
         service = BreadthRebuildService(db, required_markets=("US", "HK"))
@@ -264,7 +343,7 @@ def test_validation_rejects_empty_required_market_partition(tmp_path):
             {"US": (date(2026, 8, 21),), "HK": ()},
             full_market_set=True,
         )
-        service.stage_results((_result(date(2026, 8, 21)),))
+        _stage(service, _result(date(2026, 8, 21)))
 
         report = service.validate()
 

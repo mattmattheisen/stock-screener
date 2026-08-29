@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import date
-from typing import Any
+from typing import Any, Mapping
 
 CURRENT_BREADTH_CALCULATION_REVISION = 3
 
@@ -90,6 +90,37 @@ class SymbolBreadthSignals:
 
 
 @dataclass(frozen=True, slots=True)
+class SymbolBreadthEvaluation:
+    signals: SymbolBreadthSignals
+    daily_change_pct: float | None
+    qualifying_values: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class BreadthContributorMetadata:
+    company_name: str | None = None
+    ibd_industry_group: str = "No Group"
+
+
+@dataclass(frozen=True, slots=True)
+class BreadthContributor:
+    symbol: str
+    company_name: str | None
+    ibd_industry_group: str
+    daily_change_pct: float | None
+    signals: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class BreadthContributorSnapshotResult:
+    market: str
+    calculation_date: date
+    calculation_revision: int
+    schema_id: str
+    contributors: tuple[BreadthContributor, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class BreadthEligibilityCounts:
     advance_decline_eligible_count: int = 0
     stockbee_daily_eligible_count: int = 0
@@ -149,3 +180,9 @@ class BreadthDailyResult:
             "calculation_revision": self.calculation_revision,
         }
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class BreadthEngineBatchResult:
+    daily_results: Mapping[date, BreadthDailyResult]
+    contributor_snapshots: Mapping[date, BreadthContributorSnapshotResult]

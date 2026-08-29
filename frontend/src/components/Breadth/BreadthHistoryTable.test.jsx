@@ -28,6 +28,26 @@ const row = {
 
 
 describe('BreadthHistoryTable', () => {
+  it('makes only advertised nonzero contributor cells buttons', async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    renderWithProviders(
+      <BreadthHistoryTable
+        rows={[row]}
+        contributorDates={new Set([row.date])}
+        onContributorCellClick={onOpen}
+      />,
+    );
+
+    const button = screen.getByRole('button', {
+      name: 'View 10 contributing stocks for Stocks Up 4%+',
+    });
+    await user.click(button);
+    expect(onOpen).toHaveBeenCalledWith('stocks_up_4pct', row, button);
+    expect(screen.queryByRole('button', { name: /View .*5 Day Ratio/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /View .*Broad Universe/ })).not.toBeInTheDocument();
+  });
+
   it('renders a date-only value as the same local calendar date', () => {
     vi.stubEnv('TZ', 'America/Los_Angeles');
     try {

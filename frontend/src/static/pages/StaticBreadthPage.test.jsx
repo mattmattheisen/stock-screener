@@ -47,6 +47,76 @@ describe('StaticBreadthPage', () => {
     vi.restoreAllMocks();
   });
 
+  it('loads an advertised static contributor shard only after a cell click', async () => {
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+      const payloads = {
+        'manifest.json': {
+          default_market: 'US',
+          supported_markets: ['US'],
+          markets: {
+            US: {
+              display_name: 'United States',
+              pages: { breadth: { path: 'markets/us/breadth.json' } },
+              assets: {
+                breadth_contributors: {
+                  index_path: 'markets/us/breadth/contributors/index.json',
+                },
+              },
+            },
+          },
+        },
+        'markets/us/breadth.json': {
+          available: true,
+          generated_at: '2026-08-28T22:00:00Z',
+          payload: {
+            current: { market: 'US', date: '2026-08-28', stocks_up_4pct: 1 },
+            chart_data: [],
+            history_90d: [{ market: 'US', date: '2026-08-28', stocks_up_4pct: 1 }],
+          },
+        },
+        'markets/us/breadth/contributors/index.json': {
+          schema: 'breadth-contributors-v1',
+          market: 'US',
+          calculation_revision: 3,
+          dates: ['2026-08-28'],
+        },
+        'markets/us/breadth/contributors/2026-08-28.json': {
+          schema: 'breadth-contributors-v1',
+          market: 'US',
+          date: '2026-08-28',
+          calculation_revision: 3,
+          contributors: [{
+            symbol: 'NVDA',
+            company_name: 'NVIDIA',
+            ibd_industry_group: 'Semiconductors',
+            daily_change_pct: 5.5,
+            signals: { up_4pct: 5.5 },
+          }],
+        },
+      };
+      return path in payloads
+        ? { ok: true, status: 200, json: async () => payloads[path] }
+        : { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    renderPage();
+    const button = await screen.findByRole('button', {
+      name: 'View 1 contributing stocks for Stocks Up 4%+',
+    });
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('2026-08-28.json'),
+      expect.anything(),
+    );
+    fireEvent.click(button);
+
+    expect(await screen.findByText('NVIDIA')).toBeInTheDocument();
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('2026-08-28.json'),
+      expect.anything(),
+    );
+  });
+
   it('renders an info alert when the exported breadth bundle is unavailable', async () => {
     globalThis.fetch = vi.fn(async (url) => {
       const path = String(url).split('/static-data/')[1];

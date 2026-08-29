@@ -2,9 +2,17 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import app.services.breadth.rebuild as rebuild_module
 import pandas as pd
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+
+import app.services.breadth.rebuild as rebuild_module
 from app.database import Base
+from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.models.breadth_contributor import (
+    MarketBreadthContributor,
+    MarketBreadthContributorSnapshot,
+)
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse
 from app.scripts.rebuild_market_breadth import (
@@ -18,8 +26,6 @@ from app.services.point_in_time_universe_service import (
     PointInTimeUniverseMember,
     hash_point_in_time_universe_symbols,
 )
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 
 
 class _FakeRebuildService:
@@ -97,7 +103,14 @@ def test_rebuild_does_not_stage_a_date_with_partial_supported_cache_coverage():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[MarketBreadth.__table__, StockUniverse.__table__],
+        tables=[
+            MarketBreadth.__table__,
+            MarketBreadthContributorSnapshot.__table__,
+            MarketBreadthContributor.__table__,
+            StockUniverse.__table__,
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+        ],
     )
     db = sessionmaker(bind=engine)()
     calculation_date = date(2026, 8, 21)
@@ -162,7 +175,14 @@ def test_rebuild_reads_delisted_history_at_its_last_membership_date():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[MarketBreadth.__table__, StockUniverse.__table__],
+        tables=[
+            MarketBreadth.__table__,
+            MarketBreadthContributorSnapshot.__table__,
+            MarketBreadthContributor.__table__,
+            StockUniverse.__table__,
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+        ],
     )
     db = sessionmaker(bind=engine)()
     calculation_date = date(2026, 8, 21)
@@ -207,9 +227,7 @@ def test_rebuild_reads_delisted_history_at_its_last_membership_date():
         assert period == "2y"
         assert minimum_rows == 1
         return {
-            "DELISTED": (
-                prices if required_as_of_date == calculation_date else None
-            )
+            "DELISTED": (prices if required_as_of_date == calculation_date else None)
         }
 
     price_cache.get_many_cached_only_fresh.side_effect = cached_histories
@@ -230,9 +248,18 @@ def test_rebuild_reads_delisted_history_at_its_last_membership_date():
     )
 
     assert result["processed"] == 1
-    assert db.execute(
-        text("SELECT COUNT(*) FROM market_breadth_rebuild")
-    ).scalar_one() == 1
+    assert (
+        db.execute(text("SELECT COUNT(*) FROM market_breadth_rebuild")).scalar_one()
+        == 1
+    )
+    assert len(
+        db.execute(
+            text(
+                "SELECT contributor_calculation_signature "
+                "FROM market_breadth_rebuild"
+            )
+        ).scalar_one()
+    ) == 64
     price_cache.get_many_cached_only_fresh.assert_called_once_with(
         ["DELISTED"],
         period="2y",

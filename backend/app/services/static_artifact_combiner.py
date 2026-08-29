@@ -16,6 +16,10 @@ from app.services.static_market_artifact_contract import (
 )
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
 from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
+from app.services.static_breadth_contributor_asset_validator import (
+    StaticBreadthContributorAssetError,
+    validate_static_breadth_contributor_asset,
+)
 
 
 @dataclass(frozen=True)
@@ -336,12 +340,18 @@ class StaticArtifactCombiner:
                     market_dir=market_dir,
                     expected_formula=expected,
                 )
-            self._validate_advertised_assets(
+            asset_warnings = self._validate_advertised_assets(
                 market=market,
                 source_label=source_label,
                 entry=entry,
                 market_dir=market_dir,
             )
+            if asset_warnings:
+                metadata["warnings"] = [
+                    *metadata.get("warnings", []),
+                    *asset_warnings,
+                ]
+                metadata["entry"] = entry
             discovered[market] = {
                 "entry": entry,
                 "metadata": metadata,
@@ -353,7 +363,8 @@ class StaticArtifactCombiner:
     @staticmethod
     def _validate_advertised_assets(
         *, market: str, source_label: str, entry: dict, market_dir: Path
-    ) -> None:
+    ) -> list[str]:
+        warnings: list[str] = []
         features = entry.get("features") if isinstance(entry.get("features"), dict) else {}
         for feature, filename in (("groups", "groups.json"), ("rrg", "groups_rrg.json")):
             if features.get(feature) and not (market_dir / filename).is_file():
@@ -361,6 +372,48 @@ class StaticArtifactCombiner:
                     f"{market} {source_label} artifact advertises "
                     f"{feature.upper()} but {filename} is absent"
                 )
+        assets = entry.get("assets")
+        contributor_asset = (
+            assets.get("breadth_contributors")
+            if isinstance(assets, dict)
+            else None
+        )
+        if contributor_asset is not None:
+            try:
+                StaticArtifactCombiner._validate_breadth_contributor_asset(
+                    market=market,
+                    market_dir=market_dir,
+                    descriptor=contributor_asset,
+                )
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                StaticArtifactFormulaError,
+                StaticBreadthContributorAssetError,
+            ) as exc:
+                entry["assets"] = dict(assets)
+                entry["assets"].pop("breadth_contributors", None)
+                warnings.append(
+                    f"{market} breadth contributor asset ignored: {exc}"
+                )
+        return warnings
+
+    @staticmethod
+    def _validate_breadth_contributor_asset(
+        *,
+        market: str,
+        market_dir: Path,
+        descriptor: object,
+    ) -> None:
+        try:
+            validate_static_breadth_contributor_asset(
+                market=market,
+                market_dir=market_dir,
+                descriptor=descriptor,
+            )
+        except StaticBreadthContributorAssetError as exc:
+            raise StaticArtifactFormulaError(str(exc)) from exc
 
     @classmethod
     def _validate_formula(

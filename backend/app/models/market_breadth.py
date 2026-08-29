@@ -1,6 +1,17 @@
 """Market breadth indicator models"""
-from sqlalchemy import Column, Integer, Float, Date, DateTime, Index, String, UniqueConstraint
+
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
+
 from ..database import Base
 
 
@@ -24,7 +35,9 @@ class MarketBreadth(Base):
     stocks_down_4pct = Column(Integer, default=0, nullable=False)
 
     # Multi-day ratios (up/down over period)
-    ratio_5day = Column(Float, nullable=True)  # Nullable for edge cases (denominator = 0)
+    ratio_5day = Column(
+        Float, nullable=True
+    )  # Nullable for edge cases (denominator = 0)
     ratio_10day = Column(Float, nullable=True)
 
     # Quarterly movers (65 trading sessions, 25% threshold)
@@ -70,6 +83,7 @@ class MarketBreadth(Base):
     total_stocks_scanned = Column(Integer, default=0, nullable=False)
     eligibility_signature = Column(String(64), nullable=True)
     stockbee_eligibility_signature = Column(String(64), nullable=True)
+    contributor_calculation_signature = Column(String(64), nullable=True)
     calculation_revision = Column(Integer, nullable=True)
     calculation_duration_seconds = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

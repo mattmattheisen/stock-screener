@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
 
+from .contributors import BREADTH_CONTRIBUTOR_SIGNALS
 from .types import (
     BreadthFormulaPolicy,
     BreadthMarketPolicy,
+    SymbolBreadthEvaluation,
     SymbolBreadthSignals,
     SymbolMetricEligibility,
 )
@@ -182,17 +185,21 @@ def _at_most(value: float, threshold: float) -> bool:
     )
 
 
-def signal_flags_at(
+def evaluate_symbol_at(
     feature_frame: pd.DataFrame,
     calculation_date: date,
     policy: BreadthFormulaPolicy,
     market_policy: BreadthMarketPolicy,
     *,
     stockbee_currency_matches: bool = True,
-) -> SymbolBreadthSignals:
+) -> SymbolBreadthEvaluation:
     row = _row_at(feature_frame, calculation_date)
     if row is None:
-        return SymbolBreadthSignals(eligibility=SymbolMetricEligibility())
+        return SymbolBreadthEvaluation(
+            signals=SymbolBreadthSignals(eligibility=SymbolMetricEligibility()),
+            daily_change_pct=None,
+            qualifying_values=MappingProxyType({}),
+        )
 
     advance_decline = _finite(row.adjusted_close, row.prior_adjusted_close)
     liquid = (
@@ -253,21 +260,27 @@ def signal_flags_at(
     )
 
     atr_10x = False
+    extension_ratio = np.nan
     if atr_extension:
         gain_from_sma50_pct = (
             float(row.adjusted_close) / float(row.sma50) - 1.0
         ) * 100.0
         atr_pct = float(row.atr14) / float(row.adjusted_close) * 100.0
+        extension_ratio = (
+            gain_from_sma50_pct / atr_pct
+            if gain_from_sma50_pct > 0 and atr_pct > 0
+            else np.nan
+        )
         atr_10x = (
             gain_from_sma50_pct > 0
             and atr_pct > 0
             and _at_least(
-                gain_from_sma50_pct / atr_pct,
+                extension_ratio,
                 policy.atr_extension_threshold,
             )
         )
 
-    return SymbolBreadthSignals(
+    signals = SymbolBreadthSignals(
         eligibility=eligibility,
         advancing=advance_decline
         and float(row.adjusted_close) > float(row.prior_adjusted_close),
@@ -292,3 +305,45 @@ def signal_flags_at(
         t2108_above=t2108 and float(row.adjusted_close) > float(row.sma40),
         atr_10x_extension=atr_10x,
     )
+    candidate_values = {
+        "up_4pct": daily_return * 100.0,
+        "down_4pct": daily_return * 100.0,
+        "up_25pct_quarter": gain_from_low_65 * 100.0,
+        "down_25pct_quarter": loss_from_high_65 * 100.0,
+        "up_25pct_month": month_return * 100.0,
+        "down_25pct_month": month_return * 100.0,
+        "up_50pct_month": month_return * 100.0,
+        "down_50pct_month": month_return * 100.0,
+        "up_13pct_34days": gain_from_low_34 * 100.0,
+        "down_13pct_34days": loss_from_high_34 * 100.0,
+        "atr_10x_extension": float(extension_ratio),
+    }
+    qualifying_values = {
+        signal_key: candidate_values[signal_key]
+        for signal_key, definition in BREADTH_CONTRIBUTOR_SIGNALS.items()
+        if getattr(signals, definition.signal_attribute)
+    }
+
+    return SymbolBreadthEvaluation(
+        signals=signals,
+        daily_change_pct=(daily_return * 100.0 if _finite(daily_return) else None),
+        qualifying_values=MappingProxyType(qualifying_values),
+    )
+
+
+def signal_flags_at(
+    feature_frame: pd.DataFrame,
+    calculation_date: date,
+    policy: BreadthFormulaPolicy,
+    market_policy: BreadthMarketPolicy,
+    *,
+    stockbee_currency_matches: bool = True,
+) -> SymbolBreadthSignals:
+    """Compatibility wrapper for callers that only need canonical flags."""
+    return evaluate_symbol_at(
+        feature_frame,
+        calculation_date,
+        policy,
+        market_policy,
+        stockbee_currency_matches=stockbee_currency_matches,
+    ).signals

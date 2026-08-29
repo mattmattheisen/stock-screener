@@ -1,7 +1,34 @@
 """Pydantic schemas for market breadth API endpoints"""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import date as Date
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
+
+
+class BreadthContributorItem(BaseModel):
+    symbol: str
+    company_name: str | None = None
+    ibd_industry_group: str
+    daily_change_pct: float | None = None
+    signals: Dict[str, float]
+
+
+class BreadthContributorIndexResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_id: Literal["breadth-contributors-v1"] = Field(alias="schema")
+    market: str
+    calculation_revision: Literal[3]
+    dates: List[Date]
+
+
+class BreadthContributorDocumentResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_id: Literal["breadth-contributors-v1"] = Field(alias="schema")
+    market: str
+    date: Date
+    calculation_revision: Literal[3]
+    contributors: List[BreadthContributorItem]
 
 
 class BreadthResponse(BaseModel):

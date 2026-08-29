@@ -13,13 +13,17 @@ import { format, parseISO } from 'date-fns';
 
 import {
   getBreadthBootstrap,
+  getBreadthContributorIndex,
+  getBreadthContributors,
   getBreadthSummary,
   getCurrentBreadth,
   getHistoricalBreadth,
 } from '../api/breadth';
 import { getPriceHistory } from '../api/stocks';
 import BreadthContextStrip from '../components/Breadth/BreadthContextStrip';
+import BreadthContributorDialog from '../components/Breadth/BreadthContributorDialog';
 import BreadthHistoryTable from '../components/Breadth/BreadthHistoryTable';
+import { useBreadthContributors } from '../components/Breadth/useBreadthContributors';
 import BreadthChart from '../components/Charts/BreadthChart';
 import { useMarketForCapability } from '../contexts/MarketContext';
 import { useRuntime } from '../contexts/RuntimeContext';
@@ -119,6 +123,16 @@ function BreadthPage() {
   const liveQueriesEnabled = runtimeReady && (
     !snapshotEnabled || breadthBootstrapQuery.isSuccess || breadthBootstrapQuery.isError
   );
+  const contributorDrilldown = useBreadthContributors({
+    market: selectedMarket,
+    indexQueryKey: liveQueriesEnabled
+      ? ['breadthContributors', 'index', selectedMarket]
+      : null,
+    loadIndex: liveQueriesEnabled
+      ? () => getBreadthContributorIndex(selectedMarket)
+      : null,
+    loadDate: (date) => getBreadthContributors(selectedMarket, date),
+  });
 
   const {
     data: currentBreadth,
@@ -176,7 +190,14 @@ function BreadthPage() {
     enabled: liveQueriesEnabled && Boolean(benchmarkSymbol),
     staleTime: 60_000,
   });
-
+  const contributorError = contributorDrilldown.dialogQuery.error;
+  const contributorErrorStatus = contributorError?.response?.status;
+  const contributorErrorDetail = contributorError?.response?.data?.detail;
+  const contributorInconsistent = contributorErrorStatus === 409
+    ? (typeof contributorErrorDetail === 'string'
+      ? contributorErrorDetail
+      : 'The contributor snapshot is inconsistent with breadth history.')
+    : contributorDrilldown.viewState.inconsistent;
   if (!runtimeReady || isLoadingCurrent) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
@@ -245,9 +266,28 @@ function BreadthPage() {
               Primary tracks daily movers and ratios; secondary tracks trend windows; context adds T2108, ATR extension, and universe size.
             </Typography>
           </Box>
-          <BreadthHistoryTable rows={historicalBreadth} />
+          <BreadthHistoryTable
+            rows={historicalBreadth}
+            contributorDates={contributorDrilldown.availableDates}
+            onContributorCellClick={contributorDrilldown.open}
+          />
         </Paper>
       )}
+
+      <BreadthContributorDialog
+        open={Boolean(contributorDrilldown.selected)}
+        metric={contributorDrilldown.selected?.metric}
+        row={contributorDrilldown.selected?.row}
+        view={contributorDrilldown.viewState.view}
+        isLoading={contributorDrilldown.dialogQuery.isLoading}
+        error={[404, 409].includes(contributorErrorStatus)
+          ? null
+          : contributorError}
+        unavailable={contributorErrorStatus === 404}
+        inconsistent={contributorInconsistent}
+        onRetry={() => contributorDrilldown.dialogQuery.refetch()}
+        onClose={contributorDrilldown.close}
+      />
 
       {currentBreadth && (
         <Typography

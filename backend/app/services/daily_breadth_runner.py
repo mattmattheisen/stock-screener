@@ -101,6 +101,7 @@ def run_daily_breadth(
     if calculation.daily_result is not None:
         dependencies.calculator.store_daily_result(
             calculation.daily_result,
+            contributor_snapshot=calculation.contributor_snapshot,
             duration_seconds=duration_seconds,
         )
     else:
