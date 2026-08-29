@@ -6,6 +6,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date
+from types import MappingProxyType
 
 import pandas as pd
 
@@ -13,17 +14,27 @@ from app.services.point_in_time_universe_service import (
     hash_point_in_time_universe_symbols,
 )
 
-from .formulas import prepare_feature_frame, signal_flags_at, validate_price_frame
+from .contributors import (
+    CONTRIBUTOR_SCHEMA_ID,
+    NO_GROUP_LABEL,
+    reconcile_contributor_counts,
+)
+from .formulas import evaluate_symbol_at, prepare_feature_frame, validate_price_frame
 from .ratios import calculate_inclusive_ratios
 from .types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
+    BreadthContributor,
+    BreadthContributorMetadata,
+    BreadthContributorSnapshotResult,
     BreadthDailyCount,
     BreadthDailyResult,
+    BreadthEngineBatchResult,
     BreadthEligibilityCounts,
     BreadthFormulaPolicy,
     BreadthIndicatorValues,
     BreadthMarketPolicy,
     BreadthUniverseSnapshot,
+    SymbolBreadthEvaluation,
     SymbolBreadthSignals,
 )
 from .universe import breadth_eligibility_signature
@@ -39,6 +50,9 @@ class BreadthEngineRequest:
     prices_by_symbol: Mapping[str, pd.DataFrame]
     market_policy: BreadthMarketPolicy
     seed_counts: tuple[BreadthDailyCount, ...] = ()
+    contributor_metadata_by_date: Mapping[
+        date, Mapping[str, BreadthContributorMetadata]
+    ] = field(default_factory=dict)
     policy: BreadthFormulaPolicy = field(default_factory=BreadthFormulaPolicy)
 
 
@@ -46,6 +60,12 @@ class BreadthEngine:
     def calculate(
         self, request: BreadthEngineRequest
     ) -> Mapping[date, BreadthDailyResult]:
+        """Compatibility projection for aggregate-only callers."""
+        return self.calculate_with_contributors(request).daily_results
+
+    def calculate_with_contributors(
+        self, request: BreadthEngineRequest
+    ) -> BreadthEngineBatchResult:
         market = request.market.strip().upper()
         if request.market_policy.market != market:
             raise ValueError(
@@ -94,15 +114,16 @@ class BreadthEngine:
             )
 
         partial_results: dict[date, BreadthDailyResult] = {}
+        contributor_snapshots: dict[date, BreadthContributorSnapshotResult] = {}
         daily_counts: list[BreadthDailyCount] = []
         for calculation_date in dates:
             snapshot = request.universes_by_date[calculation_date]
-            signals_by_symbol: dict[str, SymbolBreadthSignals] = {}
+            evaluations_by_symbol: dict[str, SymbolBreadthEvaluation] = {}
             for member in snapshot.members:
                 features = features_by_symbol.get(member.symbol)
                 if features is None or not member.is_common_stock:
                     continue
-                signals_by_symbol[member.symbol] = signal_flags_at(
+                evaluations_by_symbol[member.symbol] = evaluate_symbol_at(
                     features,
                     calculation_date,
                     request.policy,
@@ -112,6 +133,10 @@ class BreadthEngine:
                     ),
                 )
 
+            signals_by_symbol: dict[str, SymbolBreadthSignals] = {
+                symbol: evaluation.signals
+                for symbol, evaluation in evaluations_by_symbol.items()
+            }
             signals = tuple(signals_by_symbol.values())
             eligibility = BreadthEligibilityCounts(
                 advance_decline_eligible_count=sum(
@@ -204,6 +229,48 @@ class BreadthEngine:
                 calculation_revision=request.policy.calculation_revision,
             )
             partial_results[calculation_date] = result
+            metadata_by_symbol = request.contributor_metadata_by_date.get(
+                calculation_date,
+                {},
+            )
+            contributors: list[BreadthContributor] = []
+            for symbol in sorted(evaluations_by_symbol):
+                evaluation = evaluations_by_symbol[symbol]
+                if not evaluation.qualifying_values:
+                    continue
+                if evaluation.daily_change_pct is None:
+                    raise AssertionError(
+                        f"Contributor {symbol} has signals without a daily change"
+                    )
+                metadata = metadata_by_symbol.get(
+                    symbol,
+                    BreadthContributorMetadata(),
+                )
+                company_name = (
+                    str(metadata.company_name).strip()
+                    if metadata.company_name is not None
+                    and str(metadata.company_name).strip()
+                    else None
+                )
+                group = str(metadata.ibd_industry_group or "").strip() or NO_GROUP_LABEL
+                contributors.append(
+                    BreadthContributor(
+                        symbol=symbol,
+                        company_name=company_name,
+                        ibd_industry_group=group,
+                        daily_change_pct=evaluation.daily_change_pct,
+                        signals=MappingProxyType(dict(evaluation.qualifying_values)),
+                    )
+                )
+            contributor_snapshot = BreadthContributorSnapshotResult(
+                market=market,
+                calculation_date=calculation_date,
+                calculation_revision=request.policy.calculation_revision,
+                schema_id=CONTRIBUTOR_SCHEMA_ID,
+                contributors=tuple(contributors),
+            )
+            reconcile_contributor_counts(contributor_snapshot, result)
+            contributor_snapshots[calculation_date] = contributor_snapshot
             daily_counts.append(
                 BreadthDailyCount(
                     date=calculation_date,
@@ -220,7 +287,7 @@ class BreadthEngine:
             market=market,
             calculation_revision=request.policy.calculation_revision,
         )
-        return {
+        daily_results = {
             calculation_date: replace(
                 result,
                 values=replace(
@@ -231,3 +298,7 @@ class BreadthEngine:
             )
             for calculation_date, result in partial_results.items()
         }
+        return BreadthEngineBatchResult(
+            daily_results=MappingProxyType(daily_results),
+            contributor_snapshots=MappingProxyType(contributor_snapshots),
+        )
