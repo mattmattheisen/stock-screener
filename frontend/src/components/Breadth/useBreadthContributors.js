@@ -1,22 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-
-const validateIndex = (index, market) => {
-  const dates = index?.dates;
-  if (
-    index?.schema !== 'breadth-contributors-v1'
-    || index?.calculation_revision !== 3
-    || String(index?.market || '').toUpperCase() !== String(market || '').toUpperCase()
-    || !Array.isArray(dates)
-    || dates.length > 20
-    || new Set(dates).size !== dates.length
-    || dates.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date))
-    || dates.some((date, position) => position > 0 && dates[position - 1] < date)
-  ) {
-    throw new Error('Invalid breadth contributor index');
-  }
-  return index;
-};
+import {
+  BREADTH_CONTRIBUTOR_REVISION,
+  BREADTH_CONTRIBUTOR_SCHEMA,
+  validateBreadthContributorIndex,
+} from './breadthContributorContract';
+import { buildBreadthContributorView } from './breadthContributorView';
 
 export const useBreadthContributors = ({
   market,
@@ -29,7 +18,7 @@ export const useBreadthContributors = ({
   useEffect(() => setSelected(null), [market, indexIdentity]);
   const indexQuery = useQuery({
     queryKey: indexQueryKey,
-    queryFn: async () => validateIndex(await loadIndex(), market),
+    queryFn: async () => validateBreadthContributorIndex(await loadIndex(), market),
     enabled: Boolean(loadIndex && indexQueryKey),
     staleTime: Infinity,
   });
@@ -41,20 +30,42 @@ export const useBreadthContributors = ({
     if (!availableDates.has(row?.date)) return;
     setSelected({ metric, row, anchor });
   }, [availableDates]);
-  const close = useCallback(() => setSelected(null), []);
+  const close = useCallback(() => {
+    selected?.anchor?.focus?.();
+    setSelected(null);
+  }, [selected]);
   const selectedDate = selected?.row?.date || null;
   const dialogQuery = useQuery({
     queryKey: [
       'breadthContributors',
       String(market || '').toUpperCase(),
       selectedDate,
-      'breadth-contributors-v1',
-      3,
+      BREADTH_CONTRIBUTOR_SCHEMA,
+      BREADTH_CONTRIBUTOR_REVISION,
     ],
     queryFn: () => loadDate(selectedDate),
     enabled: Boolean(selectedDate && loadDate && availableDates.has(selectedDate)),
     staleTime: Infinity,
   });
+  const viewState = useMemo(() => {
+    if (!dialogQuery.data || !selected) {
+      return { view: null, inconsistent: null };
+    }
+    const { metric, row } = selected;
+    try {
+      return {
+        view: buildBreadthContributorView(
+          dialogQuery.data,
+          metric,
+          row[metric],
+          { market, date: row.date },
+        ),
+        inconsistent: null,
+      };
+    } catch (error) {
+      return { view: null, inconsistent: error.message };
+    }
+  }, [dialogQuery.data, market, selected]);
 
   return {
     availableDates,
@@ -63,5 +74,6 @@ export const useBreadthContributors = ({
     open,
     close,
     dialogQuery,
+    viewState,
   };
 };

@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from inspect import Parameter, getsource, signature
-from types import SimpleNamespace
+from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
+from unittest.mock import MagicMock
 
 import app.services.static_site_export_service as export_module
 import pandas as pd
@@ -21,16 +23,33 @@ from app.domain.scanning.filter_expression_model import FilterExpression
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
 from app.models.industry import IBDGroupRank
+from app.models.breadth_contributor import (
+    MarketBreadthContributor,
+    MarketBreadthContributorSnapshot,
+)
+from app.models.market_breadth import MarketBreadth
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.services.breadth.universe import breadth_eligibility_signature
+from app.services.breadth.contributors import BREADTH_CONTRIBUTOR_SIGNALS
+from app.services.breadth.persistence import BreadthPersistence
+from app.services.breadth.types import (
+    BreadthContributor,
+    BreadthContributorSnapshotResult,
+    BreadthDailyResult,
+    BreadthEligibilityCounts,
+    BreadthIndicatorValues,
+)
 from app.services.group_ranking_history import select_market_run_series
 from app.services.key_market_history import build_key_market_entries
 from app.services.static_artifact_combiner import StaticArtifactFormulaError
 from app.services.static_breadth_section_builder import (
     StaticBreadthEngineInputFactory,
     StaticBreadthSectionBuilder,
+)
+from app.services.static_breadth_contributor_exporter import (
+    StaticBreadthContributorUnavailable,
 )
 from app.services.static_chart_bundle_exporter import StaticChartBundleConfig
 from app.services.static_groups_rrg_export import (
@@ -65,6 +84,9 @@ def service_and_session_factory():
             MarketRsRun.__table__,
             IBDGroupRank.__table__,
             StockUniverse.__table__,
+            MarketBreadth.__table__,
+            MarketBreadthContributorSnapshot.__table__,
+            MarketBreadthContributor.__table__,
         ],
     )
     session_factory = sessionmaker(
@@ -108,6 +130,55 @@ def _insert_common_stock_universe(session_factory, *, market, symbols):
             for symbol in symbols
         )
         db.commit()
+
+
+def _insert_breadth_contributors(
+    session_factory,
+    *,
+    calculation_date: date,
+    contributors: tuple[tuple[str, str | None, float, str], ...],
+) -> None:
+    counts = {signal_key: 0 for signal_key in BREADTH_CONTRIBUTOR_SIGNALS}
+    items = []
+    for symbol, group, daily_change_pct, signal_key in contributors:
+        counts[signal_key] += 1
+        items.append(
+            BreadthContributor(
+                symbol=symbol,
+                company_name=f"{symbol} Co",
+                ibd_industry_group=group or "No Group",
+                daily_change_pct=daily_change_pct,
+                signals=MappingProxyType({signal_key: daily_change_pct}),
+            )
+        )
+    values = BreadthIndicatorValues(
+        **{
+            definition.aggregate_field: counts[signal_key]
+            for signal_key, definition in BREADTH_CONTRIBUTOR_SIGNALS.items()
+        }
+    )
+    aggregate = BreadthDailyResult(
+        market="US",
+        calculation_date=calculation_date,
+        values=values,
+        eligibility=BreadthEligibilityCounts(),
+        broad_universe_count=len(contributors),
+        eligibility_signature="a" * 64,
+        stockbee_eligibility_signature="b" * 64,
+    )
+    snapshot = BreadthContributorSnapshotResult(
+        market="US",
+        calculation_date=calculation_date,
+        calculation_revision=3,
+        schema_id="breadth-contributors-v1",
+        contributors=tuple(items),
+    )
+    with session_factory() as db:
+        BreadthPersistence(db).upsert_daily(
+            aggregate,
+            contributor_snapshot=snapshot,
+            duration_seconds=0.1,
+        )
 
 
 class _FakePriceCache:
@@ -1514,6 +1585,53 @@ def test_combiner_drops_invalid_optional_contributors_without_dropping_market(
     )
 
 
+def test_unexpected_contributor_export_failure_is_not_swallowed(
+    service_and_session_factory,
+    tmp_path,
+):
+    service, _session_factory = service_and_session_factory
+    service._breadth_contributor_exporter = SimpleNamespace(
+        export=MagicMock(side_effect=OSError("disk full"))
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        service._export_breadth_contributors(  # noqa: SLF001
+            db=MagicMock(),
+            output_dir=tmp_path,
+            path_prefix=Path("markets/us"),
+            breadth_payload={"available": True},
+            market="US",
+            warnings=[],
+        )
+
+
+def test_expected_contributor_unavailability_adds_manifest_warning(
+    service_and_session_factory,
+    tmp_path,
+):
+    service, _session_factory = service_and_session_factory
+    service._breadth_contributor_exporter = SimpleNamespace(
+        export=MagicMock(
+            side_effect=StaticBreadthContributorUnavailable("snapshot changed")
+        )
+    )
+    warnings = []
+
+    asset = service._export_breadth_contributors(  # noqa: SLF001
+        db=MagicMock(),
+        output_dir=tmp_path,
+        path_prefix=Path("markets/us"),
+        breadth_payload={"available": True},
+        market="US",
+        warnings=warnings,
+    )
+
+    assert asset is None
+    assert warnings == [
+        "Static breadth contributor data unavailable for US: snapshot changed"
+    ]
+
+
 def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_path):
     current_dir = tmp_path / "current"
     fallback_dir = tmp_path / "fallback"
@@ -2352,6 +2470,16 @@ def test_build_breadth_payload_includes_us_group_attribution(
             "ibd_industry_group": None,
         },
     ]
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=date(2026, 4, 24),
+        contributors=(
+            ("PLTR", "Computer Software-Database", 10.0, "up_4pct"),
+            ("AAPL", "Computer Software-Database", 10.0, "up_4pct"),
+            ("BANK", "Banks-Money Center", -10.0, "down_4pct"),
+            ("NOGRP", None, 10.0, "up_4pct"),
+        ),
+    )
 
     payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
         generated_at="2026-04-24T22:00:00Z",
@@ -2422,6 +2550,11 @@ def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(
         ),
         fundamentals_cache=object(),
         benchmark_cache=_FakeBenchmarkCache(),
+    )
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=date(2026, 4, 24),
+        contributors=(),
     )
 
     payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage

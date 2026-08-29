@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -23,7 +23,6 @@ import { getPriceHistory } from '../api/stocks';
 import BreadthContextStrip from '../components/Breadth/BreadthContextStrip';
 import BreadthContributorDialog from '../components/Breadth/BreadthContributorDialog';
 import BreadthHistoryTable from '../components/Breadth/BreadthHistoryTable';
-import { buildBreadthContributorView } from '../components/Breadth/breadthContributorView';
 import { useBreadthContributors } from '../components/Breadth/useBreadthContributors';
 import BreadthChart from '../components/Charts/BreadthChart';
 import { useMarketForCapability } from '../contexts/MarketContext';
@@ -191,25 +190,6 @@ function BreadthPage() {
     enabled: liveQueriesEnabled && Boolean(benchmarkSymbol),
     staleTime: 60_000,
   });
-  const contributorViewState = useMemo(() => {
-    if (!contributorDrilldown.dialogQuery.data || !contributorDrilldown.selected) {
-      return { view: null, inconsistent: null };
-    }
-    const { metric, row } = contributorDrilldown.selected;
-    try {
-      return {
-        view: buildBreadthContributorView(
-          contributorDrilldown.dialogQuery.data,
-          metric,
-          row[metric],
-        ),
-        inconsistent: null,
-      };
-    } catch (error) {
-      return { view: null, inconsistent: error.message };
-    }
-  }, [contributorDrilldown.dialogQuery.data, contributorDrilldown.selected]);
-
   if (!runtimeReady || isLoadingCurrent) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
@@ -290,13 +270,13 @@ function BreadthPage() {
         open={Boolean(contributorDrilldown.selected)}
         metric={contributorDrilldown.selected?.metric}
         row={contributorDrilldown.selected?.row}
-        view={contributorViewState.view}
+        view={contributorDrilldown.viewState.view}
         isLoading={contributorDrilldown.dialogQuery.isLoading}
         error={contributorDrilldown.dialogQuery.error?.response?.status === 404
           ? null
           : contributorDrilldown.dialogQuery.error}
         unavailable={contributorDrilldown.dialogQuery.error?.response?.status === 404}
-        inconsistent={contributorViewState.inconsistent}
+        inconsistent={contributorDrilldown.viewState.inconsistent}
         onRetry={() => contributorDrilldown.dialogQuery.refetch()}
         onClose={contributorDrilldown.close}
       />

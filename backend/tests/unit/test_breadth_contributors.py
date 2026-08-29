@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from datetime import date
+from types import MappingProxyType
 
 import pandas as pd
 import pytest
@@ -137,3 +138,45 @@ def test_engine_emits_a_complete_snapshot_when_no_stock_qualifies():
 
     assert snapshot.schema_id == "breadth-contributors-v1"
     assert snapshot.contributors == ()
+
+
+def test_shared_parser_normalizes_and_reconciles_transport_rows():
+    module = _contributors_module()
+    contributors = module.parse_contributor_rows(
+        [
+            {
+                "symbol": " AAA ",
+                "company_name": "Alpha",
+                "ibd_industry_group": "",
+                "daily_change_pct": 5,
+                "signals": {"up_4pct": 5},
+            }
+        ]
+    )
+
+    assert contributors[0].symbol == "AAA"
+    assert contributors[0].ibd_industry_group == "No Group"
+    assert contributors[0].signals == MappingProxyType({"up_4pct": 5.0})
+    module.reconcile_contributor_aggregate(
+        contributors,
+        {
+            definition.aggregate_field: int(signal_key == "up_4pct")
+            for signal_key, definition in module.BREADTH_CONTRIBUTOR_SIGNALS.items()
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"symbol": "", "signals": {"up_4pct": 5}},
+        {"symbol": "AAA", "signals": {"unknown": 5}},
+        {"symbol": "AAA", "signals": {"up_4pct": True}},
+        {"symbol": "AAA", "signals": {}},
+    ],
+)
+def test_shared_parser_rejects_invalid_transport_rows(row):
+    module = _contributors_module()
+
+    with pytest.raises(module.BreadthContributorContractError):
+        module.parse_contributor_rows([row])

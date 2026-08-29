@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -40,12 +41,13 @@ from app.services.static_artifact_combiner import (
     StaticArtifactCombiner,
     StaticArtifactFormulaError,
 )
+from app.services.static_breadth_contributor_exporter import (
+    StaticBreadthContributorExporter,
+    StaticBreadthContributorUnavailable,
+)
 from app.services.static_breadth_section_builder import (
     StaticBreadthEngineInputFactory,
     StaticBreadthSectionBuilder,
-)
-from app.services.static_breadth_contributor_exporter import (
-    StaticBreadthContributorExporter,
 )
 from app.services.static_chart_bundle_exporter import (
     StaticChartBundleConfig,
@@ -107,6 +109,8 @@ STATIC_MARKET_DISPLAY = {
     market: _MARKET_CATALOG.get(market).label for market in STATIC_SUPPORTED_MARKETS
 }
 STATIC_GROUP_HISTORY_RUNS = 40
+
+
 @dataclass(frozen=True)
 class StaticSiteExportResult:
     """Summary of one static-site export run."""
@@ -144,7 +148,9 @@ class StaticSiteExportService:
         )
         self._ui_snapshot_service = UISnapshotService(session_factory)
         self._market_rs_repository = MarketRsRunRepository()
-        self._price_cache = price_cache if price_cache is not None else get_price_cache()
+        self._price_cache = (
+            price_cache if price_cache is not None else get_price_cache()
+        )
         self._fundamentals_cache = (
             fundamentals_cache
             if fundamentals_cache is not None
@@ -153,9 +159,12 @@ class StaticSiteExportService:
         self._benchmark_cache = (
             benchmark_cache if benchmark_cache is not None else get_benchmark_cache()
         )
-        self._group_section_builder = group_section_builder or StaticGroupSectionBuilder(
-            snapshot_reader=GroupRankSnapshotReader(),
-            rank_history_reader=get_group_rank_service(),
+        self._group_section_builder = (
+            group_section_builder
+            or StaticGroupSectionBuilder(
+                snapshot_reader=GroupRankSnapshotReader(),
+                rank_history_reader=get_group_rank_service(),
+            )
         )
         self._chart_exporter = StaticChartBundleExporter(
             price_cache=self._price_cache,
@@ -190,7 +199,9 @@ class StaticSiteExportService:
         feature_run_ids_by_market: Mapping[str, int] | None = None,
     ) -> StaticSiteExportResult:
         output_dir = Path(output_dir)
-        generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        generated_at = (
+            datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        )
         warnings: list[str] = []
 
         if clean and output_dir.exists():
@@ -430,14 +441,17 @@ class StaticSiteExportService:
             "symbols_total": chart_manifest["symbols_total"],
             "available": chart_manifest["available"],
         }
-        self._write_json(output_dir / path_prefix / "scan" / "manifest.json", scan_manifest)
+        self._write_json(
+            output_dir / path_prefix / "scan" / "manifest.json", scan_manifest
+        )
 
         skipped_chart_symbols = chart_manifest.get("skipped_symbols") or []
         if skipped_chart_symbols:
             preview = ", ".join(skipped_chart_symbols[:5])
             warnings.append(
                 f"Static charts skipped {len(skipped_chart_symbols)} {market} symbols without cached "
-                f"{STATIC_CHART_PERIOD} price history" + (f": {preview}" if preview else "")
+                f"{STATIC_CHART_PERIOD} price history"
+                + (f": {preview}" if preview else "")
             )
 
         breadth_path = path_prefix / "breadth.json"
@@ -456,20 +470,14 @@ class StaticSiteExportService:
                 "symbols_total": chart_manifest["symbols_total"],
             },
         }
-        try:
-            breadth_contributor_asset = self._breadth_contributor_exporter.export(
-                db,
-                output_dir,
-                path_prefix,
-                breadth_payload,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Static breadth contributor export unavailable for %s: %s",
-                market,
-                exc,
-            )
-            breadth_contributor_asset = None
+        breadth_contributor_asset = self._export_breadth_contributors(
+            db=db,
+            output_dir=output_dir,
+            path_prefix=path_prefix,
+            breadth_payload=breadth_payload,
+            market=market,
+            warnings=warnings,
+        )
         if breadth_contributor_asset is not None:
             assets["breadth_contributors"] = breadth_contributor_asset
         # Only publish the RRG asset/file for markets that actually have it, so
@@ -516,6 +524,29 @@ class StaticSiteExportService:
             "assets": assets,
             "freshness": home_payload.get("freshness", {}),
         }
+
+    def _export_breadth_contributors(
+        self,
+        *,
+        db: Session,
+        output_dir: Path,
+        path_prefix: Path,
+        breadth_payload: dict[str, Any],
+        market: str,
+        warnings: list[str],
+    ) -> dict[str, str] | None:
+        try:
+            return self._breadth_contributor_exporter.export(
+                db,
+                output_dir,
+                path_prefix,
+                breadth_payload,
+            )
+        except StaticBreadthContributorUnavailable as exc:
+            warning = f"Static breadth contributor data unavailable for {market}: {exc}"
+            logger.warning(warning)
+            warnings.append(warning)
+            return None
 
     def _build_groups_payload(
         self,
@@ -585,7 +616,9 @@ class StaticSiteExportService:
         warnings: list[str],
     ) -> dict[str, Any]:
         if not market_entries:
-            raise RuntimeError("No market artifacts are available to build a static-site manifest")
+            raise RuntimeError(
+                "No market artifacts are available to build a static-site manifest"
+            )
 
         ordered_markets = [
             market for market in STATIC_SUPPORTED_MARKETS if market in market_entries
@@ -684,7 +717,9 @@ class StaticSiteExportService:
             "payload": {},
         }
 
-    def _get_latest_published_run(self, db: Session, market: str | None = None) -> FeatureRun | None:
+    def _get_latest_published_run(
+        self, db: Session, market: str | None = None
+    ) -> FeatureRun | None:
         normalized_market = market.upper() if market is not None else None
         pointer_key = (
             f"latest_published_market:{normalized_market}"
@@ -701,7 +736,10 @@ class StaticSiteExportService:
             if (
                 run is not None
                 and run.status == "published"
-                and (normalized_market is None or feature_run_market(run) == normalized_market)
+                and (
+                    normalized_market is None
+                    or feature_run_market(run) == normalized_market
+                )
             ):
                 return run
 
@@ -761,7 +799,9 @@ class StaticSiteExportService:
             include_setup_payload=False,
         )
 
-    def _load_scan_export_source(self, db: Session, run: FeatureRun) -> tuple[list[Any], Any]:
+    def _load_scan_export_source(
+        self, db: Session, run: FeatureRun
+    ) -> tuple[list[Any], Any]:
         repo = SqlFeatureStoreRepository(db)
         rows = self._load_scan_export_rows(
             db,
@@ -817,20 +857,25 @@ class StaticSiteExportService:
             as_of_date=latest_run.as_of_date,
         )
         top_groups = (
-            ((groups_payload.get("payload") or {}).get("rankings") or {}).get("rankings") or []
+            ((groups_payload.get("payload") or {}).get("rankings") or {}).get(
+                "rankings"
+            )
+            or []
         )[:10]
 
         breadth_current = ((breadth_payload.get("payload") or {}).get("current")) or {}
-        exposure_payload = build_exposure_payload(db, market, as_of_date=latest_run.as_of_date)
+        exposure_payload = build_exposure_payload(
+            db, market, as_of_date=latest_run.as_of_date
+        )
         exposure_date = (
-            exposure_payload.get("date")
-            if isinstance(exposure_payload, dict)
-            else None
+            exposure_payload.get("date") if isinstance(exposure_payload, dict) else None
         )
         snapshot_date = latest_run.as_of_date.isoformat()
         market_entry = get_market_catalog().get(market)
         breadth_date = breadth_current.get("date")
-        groups_date = (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date"))
+        groups_date = ((groups_payload.get("payload") or {}).get("rankings") or {}).get(
+            "date"
+        )
         freshness = build_snapshot_freshness(
             base_freshness={
                 "scan_run_id": latest_run.id,
@@ -860,7 +905,9 @@ class StaticSiteExportService:
             "scan_summary": {
                 "run_id": latest_run.id,
                 "rows_total": scan_manifest.get("rows_total", 0),
-                "default_filtered_rows_total": scan_manifest.get("default_filtered_rows_total", 0),
+                "default_filtered_rows_total": scan_manifest.get(
+                    "default_filtered_rows_total", 0
+                ),
                 "top_results": scan_manifest.get("preview_rows", []),
             },
             "top_groups": top_groups,
@@ -905,7 +952,8 @@ class StaticSiteExportService:
                 allow_nan=False,
                 indent=2,
                 sort_keys=True,
-            ) + "\n",
+            )
+            + "\n",
             encoding="utf-8",
         )
 

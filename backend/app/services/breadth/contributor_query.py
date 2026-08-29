@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
-from types import MappingProxyType
 
 from sqlalchemy.orm import Session, joinedload
 
@@ -16,7 +14,13 @@ from app.models.breadth_contributor import (
 )
 from app.models.market_breadth import MarketBreadth
 
-from .contributors import BREADTH_CONTRIBUTOR_SIGNALS, CONTRIBUTOR_SCHEMA_ID
+from .contributors import (
+    BREADTH_CONTRIBUTOR_SIGNALS,
+    CONTRIBUTOR_SCHEMA_ID,
+    BreadthContributorContractError,
+    parse_contributor_rows,
+    reconcile_contributor_aggregate,
+)
 from .types import CURRENT_BREADTH_CALCULATION_REVISION
 
 logger = logging.getLogger(__name__)
@@ -95,8 +99,7 @@ def _document_from_snapshot(
         .filter(
             MarketBreadth.market == snapshot.market,
             MarketBreadth.date == snapshot.date,
-            MarketBreadth.calculation_revision
-            == CURRENT_BREADTH_CALCULATION_REVISION,
+            MarketBreadth.calculation_revision == CURRENT_BREADTH_CALCULATION_REVISION,
         )
         .one_or_none()
     )
@@ -105,73 +108,46 @@ def _document_from_snapshot(
             "Matching current aggregate breadth row is unavailable"
         )
 
-    counts = {key: 0 for key in BREADTH_CONTRIBUTOR_SIGNALS}
-    symbols: set[str] = set()
-    items: list[BreadthContributorItemPayload] = []
-    for contributor in snapshot.contributors:
-        symbol = str(contributor.symbol or "").strip()
-        if not symbol or symbol in symbols:
-            raise BreadthContributorSnapshotInconsistent(
-                f"Duplicate or blank contributor symbol {symbol!r}"
-            )
-        symbols.add(symbol)
-        daily_change = contributor.daily_change_pct
-        if daily_change is not None and not math.isfinite(float(daily_change)):
-            raise BreadthContributorSnapshotInconsistent(
-                f"Nonfinite daily change for {symbol}"
-            )
-        raw_signals = contributor.signals_json
-        if not isinstance(raw_signals, dict) or not raw_signals:
-            raise BreadthContributorSnapshotInconsistent(
-                f"Contributor {symbol} has no valid signals"
-            )
-        signals: dict[str, float] = {}
-        for signal_key, raw_value in raw_signals.items():
-            if signal_key not in counts:
-                raise BreadthContributorSnapshotInconsistent(
-                    f"Unknown breadth contributor signal {signal_key}"
-                )
-            if isinstance(raw_value, bool):
-                raise BreadthContributorSnapshotInconsistent(
-                    f"Invalid breadth contributor value for {signal_key}"
-                )
-            try:
-                value = float(raw_value)
-            except (TypeError, ValueError) as exc:
-                raise BreadthContributorSnapshotInconsistent(
-                    f"Invalid breadth contributor value for {signal_key}"
-                ) from exc
-            if not math.isfinite(value):
-                raise BreadthContributorSnapshotInconsistent(
-                    f"Invalid breadth contributor value for {signal_key}"
-                )
-            signals[signal_key] = value
-            counts[signal_key] += 1
-        items.append(
-            BreadthContributorItemPayload(
-                symbol=symbol,
-                company_name=contributor.company_name,
-                ibd_industry_group=contributor.ibd_industry_group,
-                daily_change_pct=(
-                    float(daily_change) if daily_change is not None else None
-                ),
-                signals=MappingProxyType(signals),
-            )
+    try:
+        contributors = parse_contributor_rows(
+            {
+                "symbol": contributor.symbol,
+                "company_name": contributor.company_name,
+                "ibd_industry_group": contributor.ibd_industry_group,
+                "daily_change_pct": contributor.daily_change_pct,
+                "signals": contributor.signals_json,
+            }
+            for contributor in snapshot.contributors
         )
+        reconcile_contributor_aggregate(
+            contributors,
+            {
+                definition.aggregate_field: getattr(
+                    aggregate,
+                    definition.aggregate_field,
+                )
+                for definition in BREADTH_CONTRIBUTOR_SIGNALS.values()
+            },
+        )
+    except (BreadthContributorContractError, TypeError, ValueError) as exc:
+        raise BreadthContributorSnapshotInconsistent(str(exc)) from exc
 
-    for signal_key, definition in BREADTH_CONTRIBUTOR_SIGNALS.items():
-        aggregate_count = getattr(aggregate, definition.aggregate_field)
-        if counts[signal_key] != aggregate_count:
-            raise BreadthContributorSnapshotInconsistent(
-                f"Contributor count mismatch for {definition.aggregate_field}: "
-                f"contributors={counts[signal_key]}, aggregate={aggregate_count}"
-            )
+    items = tuple(
+        BreadthContributorItemPayload(
+            symbol=contributor.symbol,
+            company_name=contributor.company_name,
+            ibd_industry_group=contributor.ibd_industry_group,
+            daily_change_pct=contributor.daily_change_pct,
+            signals=contributor.signals,
+        )
+        for contributor in contributors
+    )
     return BreadthContributorDocumentPayload(
         schema=CONTRIBUTOR_SCHEMA_ID,
         market=snapshot.market,
         date=snapshot.date,
         calculation_revision=CURRENT_BREADTH_CALCULATION_REVISION,
-        contributors=tuple(sorted(items, key=lambda item: item.symbol)),
+        contributors=items,
     )
 
 

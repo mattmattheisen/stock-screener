@@ -1,7 +1,9 @@
 import { breadthMetricDefinitions } from './breadthMetricDefinitions';
+import {
+  BREADTH_CONTRIBUTOR_SCHEMA,
+  validateBreadthContributorDocumentIdentity,
+} from './breadthContributorContract';
 
-const SCHEMA = 'breadth-contributors-v1';
-const REVISION = 3;
 const NO_GROUP = 'No Group';
 
 const finiteNumber = (value, label, { nullable = false } = {}) => {
@@ -11,9 +13,13 @@ const finiteNumber = (value, label, { nullable = false } = {}) => {
   return number;
 };
 
-export const buildBreadthContributorView = (document, metricKey, expectedCount) => {
-  if (document?.schema !== SCHEMA) throw new Error('Unsupported breadth contributor schema');
-  if (document?.calculation_revision !== REVISION) throw new Error('Unsupported breadth contributor revision');
+export const buildBreadthContributorView = (
+  document,
+  metricKey,
+  expectedCount,
+  expectedIdentity,
+) => {
+  validateBreadthContributorDocumentIdentity(document, expectedIdentity);
   const definition = breadthMetricDefinitions[metricKey];
   if (!definition?.contributor) throw new Error(`${metricKey} does not support contributors`);
   if (!Array.isArray(document.contributors)) throw new Error('Breadth contributors must be an array');
@@ -64,7 +70,7 @@ export const buildBreadthContributorView = (document, metricKey, expectedCount) 
   });
 
   return {
-    schema: SCHEMA,
+    schema: BREADTH_CONTRIBUTOR_SCHEMA,
     market: document.market,
     date: document.date,
     metricKey,

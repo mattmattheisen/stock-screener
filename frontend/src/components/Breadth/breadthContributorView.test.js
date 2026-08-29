@@ -47,4 +47,19 @@ describe('buildBreadthContributorView', () => {
     expect(() => buildBreadthContributorView({ ...document, calculation_revision: 2 }, 'stocks_up_4pct', 1))
       .toThrow('revision');
   });
+
+  it('rejects a document for a different requested market or date', () => {
+    expect(() => buildBreadthContributorView(
+      document,
+      'stocks_up_4pct',
+      1,
+      { market: 'CA', date: '2026-08-28' },
+    )).toThrow('identity');
+    expect(() => buildBreadthContributorView(
+      document,
+      'stocks_up_4pct',
+      1,
+      { market: 'US', date: '2026-08-27' },
+    )).toThrow('identity');
+  });
 });

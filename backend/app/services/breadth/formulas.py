@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from types import MappingProxyType
 from datetime import date
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
 
+from .contributors import BREADTH_CONTRIBUTOR_SIGNALS
 from .types import (
     BreadthFormulaPolicy,
     BreadthMarketPolicy,
@@ -304,29 +305,24 @@ def evaluate_symbol_at(
         t2108_above=t2108 and float(row.adjusted_close) > float(row.sma40),
         atr_10x_extension=atr_10x,
     )
-    qualifying_values: dict[str, float] = {}
-    if signals.up_4pct:
-        qualifying_values["up_4pct"] = daily_return * 100.0
-    if signals.down_4pct:
-        qualifying_values["down_4pct"] = daily_return * 100.0
-    if signals.up_25pct_quarter:
-        qualifying_values["up_25pct_quarter"] = gain_from_low_65 * 100.0
-    if signals.down_25pct_quarter:
-        qualifying_values["down_25pct_quarter"] = loss_from_high_65 * 100.0
-    if signals.up_25pct_month:
-        qualifying_values["up_25pct_month"] = month_return * 100.0
-    if signals.down_25pct_month:
-        qualifying_values["down_25pct_month"] = month_return * 100.0
-    if signals.up_50pct_month:
-        qualifying_values["up_50pct_month"] = month_return * 100.0
-    if signals.down_50pct_month:
-        qualifying_values["down_50pct_month"] = month_return * 100.0
-    if signals.up_13pct_34days:
-        qualifying_values["up_13pct_34days"] = gain_from_low_34 * 100.0
-    if signals.down_13pct_34days:
-        qualifying_values["down_13pct_34days"] = loss_from_high_34 * 100.0
-    if signals.atr_10x_extension:
-        qualifying_values["atr_10x_extension"] = float(extension_ratio)
+    candidate_values = {
+        "up_4pct": daily_return * 100.0,
+        "down_4pct": daily_return * 100.0,
+        "up_25pct_quarter": gain_from_low_65 * 100.0,
+        "down_25pct_quarter": loss_from_high_65 * 100.0,
+        "up_25pct_month": month_return * 100.0,
+        "down_25pct_month": month_return * 100.0,
+        "up_50pct_month": month_return * 100.0,
+        "down_50pct_month": month_return * 100.0,
+        "up_13pct_34days": gain_from_low_34 * 100.0,
+        "down_13pct_34days": loss_from_high_34 * 100.0,
+        "atr_10x_extension": float(extension_ratio),
+    }
+    qualifying_values = {
+        signal_key: candidate_values[signal_key]
+        for signal_key, definition in BREADTH_CONTRIBUTOR_SIGNALS.items()
+        if getattr(signals, definition.signal_attribute)
+    }
 
     return SymbolBreadthEvaluation(
         signals=signals,

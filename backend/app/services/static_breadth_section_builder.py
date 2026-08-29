@@ -3,7 +3,7 @@
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.services.bounded_history_universe import (
     CurrentActiveFallbackUniverseResolver,
+)
+from app.services.breadth.contributor_query import (
+    get_contributor_document,
+    list_contributor_dates,
 )
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
 from app.services.breadth.formulas import prices_for_feature_window
@@ -150,9 +154,11 @@ class StaticBreadthSectionBuilder:
         db: Session | None = None,
     ) -> dict[str, Any]:
         if serialized_rows is None:
-            snapshot = self._ui_snapshot_service.publish_breadth_bootstrap(market=market).to_dict()
+            snapshot = self._ui_snapshot_service.publish_breadth_bootstrap(
+                market=market
+            ).to_dict()
             payload = snapshot.get("payload", {})
-            current_date = ((payload.get("current") or {}).get("date"))
+            current_date = (payload.get("current") or {}).get("date")
             if current_date != expected_as_of_date.isoformat():
                 raise StaticSiteSectionUnavailableError(
                     section="breadth",
@@ -171,9 +177,7 @@ class StaticBreadthSectionBuilder:
             }
 
         scan_symbols = [
-            str(row["symbol"]).upper()
-            for row in serialized_rows
-            if row.get("symbol")
+            str(row["symbol"]).upper() for row in serialized_rows if row.get("symbol")
         ]
         currencies_by_symbol: dict[str, str] = {}
         universes_by_date: dict[date, BreadthUniverseSnapshot] | None = None
@@ -186,8 +190,7 @@ class StaticBreadthSectionBuilder:
             )
             symbols = list(universe.symbols)
             currencies_by_symbol = {
-                member.symbol: member.currency
-                for member in universe.members
+                member.symbol: member.currency for member in universe.members
             }
         if not symbols:
             raise StaticSiteSectionUnavailableError(
@@ -198,7 +201,9 @@ class StaticBreadthSectionBuilder:
                 ),
             )
 
-        benchmark_symbol, benchmark = self._get_market_benchmark_history(market, period="1y")
+        benchmark_symbol, benchmark = self._get_market_benchmark_history(
+            market, period="1y"
+        )
         if benchmark.empty:
             raise StaticSiteSectionUnavailableError(
                 section="breadth",
@@ -219,7 +224,9 @@ class StaticBreadthSectionBuilder:
                 ),
             )
 
-        canonical_dates = canonical_dates[-max(STATIC_BREADTH_HISTORY_LOOKBACK_DAYS + 15, 120):]
+        canonical_dates = canonical_dates[
+            -max(STATIC_BREADTH_HISTORY_LOOKBACK_DAYS + 15, 120) :
+        ]
         if db is not None:
             universes_by_date = dict(
                 build_breadth_universe_snapshots(
@@ -275,16 +282,15 @@ class StaticBreadthSectionBuilder:
             end_date=expected_as_of_date,
         )
         group_attribution = self._build_group_attribution(
+            db=db,
             market=market,
-            serialized_rows=serialized_rows,
             ordered_dates=ordered_dates,
-            engine_inputs=engine_inputs,
         )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
             "available": True,
-            "published_at": _coerce_datetime(datetime.utcnow()),
+            "published_at": _coerce_datetime(datetime.now(UTC)),
             "source_revision": (
                 f"feature-run:{market}:{expected_as_of_date.isoformat()}"
                 f"|breadth-r{CURRENT_BREADTH_CALCULATION_REVISION}"
@@ -296,10 +302,16 @@ class StaticBreadthSectionBuilder:
                     "market": market,
                     "latest_date": expected_as_of_date.isoformat(),
                     "total_records": len(ordered_history),
-                    "date_range_start": ordered_dates[0].isoformat() if ordered_dates else None,
-                    "date_range_end": ordered_dates[-1].isoformat() if ordered_dates else None,
+                    "date_range_start": ordered_dates[0].isoformat()
+                    if ordered_dates
+                    else None,
+                    "date_range_end": ordered_dates[-1].isoformat()
+                    if ordered_dates
+                    else None,
                 },
-                "history_90d": list(reversed(ordered_history[-STATIC_BREADTH_HISTORY_LOOKBACK_DAYS:])),
+                "history_90d": list(
+                    reversed(ordered_history[-STATIC_BREADTH_HISTORY_LOOKBACK_DAYS:])
+                ),
                 "chart_range": "1M",
                 "chart_data": list(reversed(chart_data)),
                 "benchmark_symbol": benchmark_symbol,
@@ -312,10 +324,9 @@ class StaticBreadthSectionBuilder:
     def _build_group_attribution(
         self,
         *,
+        db: Session | None,
         market: str,
-        serialized_rows: list[dict[str, Any]],
         ordered_dates: list[date],
-        engine_inputs: StaticBreadthEngineInputs,
     ) -> dict[str, Any]:
         """Attribute ±4% movers to IBD industry groups for the most recent sessions.
 
@@ -334,39 +345,26 @@ class StaticBreadthSectionBuilder:
                 "available": False,
                 "reason": "No trading dates were available to attribute.",
             }
-
-        attribution_dates = ordered_dates[-STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS:]
-        metadata_by_symbol = {
-            str(row["symbol"]).upper(): {
-                "symbol": str(row["symbol"]).upper(),
-                "company_name": row.get("company_name"),
-                "ibd_industry_group": row.get("ibd_industry_group"),
+        if db is None:
+            return {
+                "available": False,
+                "reason": "Canonical contributor snapshots require a database session.",
             }
-            for row in serialized_rows
-            if row.get("symbol")
-        }
-        price_data = engine_inputs.request.prices_by_symbol
-        symbols_meta = [
-            metadata_by_symbol.get(symbol, {"symbol": symbol})
-            for symbol in price_data
-        ]
-        service = BreadthAttributionService()
-        history = service.compute(
-            symbols_meta=symbols_meta,
-            price_data=price_data,
-            target_dates=attribution_dates,
-            market=market,
-            currencies_by_symbol=engine_inputs.currencies_by_symbol,
-            symbols_by_date={
-                calculation_date: frozenset(
-                    member.symbol
-                    for member in universe.members
-                )
-                for calculation_date, universe in (
-                    engine_inputs.request.universes_by_date.items()
-                )
-            },
+
+        attribution_dates = set(
+            ordered_dates[-STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS:]
         )
+        index = list_contributor_dates(
+            db,
+            market,
+            limit=STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS,
+        )
+        documents = tuple(
+            get_contributor_document(db, market, calculation_date)
+            for calculation_date in index.dates
+            if calculation_date in attribution_dates
+        )
+        history = BreadthAttributionService().compute(documents=documents)
         has_any_mover = any(
             (day.get("stocks_up_4pct", 0) + day.get("stocks_down_4pct", 0)) > 0
             for day in history
@@ -397,18 +395,22 @@ class StaticBreadthSectionBuilder:
             str(symbol).upper(): None for symbol in symbols
         }
         for start in range(0, len(symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
-            batch = symbols[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE]
+            batch = symbols[start : start + STATIC_CHART_LOOKUP_BATCH_SIZE]
             results.update(self._price_cache.get_many_cached_only(batch, period=period))
         return results
 
-    def _get_market_benchmark_history(self, market: str, *, period: str) -> tuple[str, pd.DataFrame]:
+    def _get_market_benchmark_history(
+        self, market: str, *, period: str
+    ) -> tuple[str, pd.DataFrame]:
         for candidate in self._benchmark_cache.get_benchmark_candidates(market):
             history = self._get_symbol_price_history(candidate, period=period)
             if history is not None and not history.empty:
                 return candidate, history
         return self._benchmark_cache.get_benchmark_symbol(market), pd.DataFrame()
 
-    def _get_symbol_price_history(self, symbol: str, *, period: str) -> pd.DataFrame | None:
+    def _get_symbol_price_history(
+        self, symbol: str, *, period: str
+    ) -> pd.DataFrame | None:
         data = self._price_cache.get_cached_only(symbol.upper(), period=period)
         if data is None or data.empty:
             return None
@@ -439,7 +441,9 @@ class StaticBreadthSectionBuilder:
         }
 
     @staticmethod
-    def _serialize_close_history(data: pd.DataFrame | None, *, days: int) -> list[dict[str, Any]]:
+    def _serialize_close_history(
+        data: pd.DataFrame | None, *, days: int
+    ) -> list[dict[str, Any]]:
         if data is None or data.empty or "Close" not in data.columns:
             return []
         frame = data.tail(days).reset_index()
@@ -464,7 +468,7 @@ class StaticBreadthSectionBuilder:
     ) -> list[dict[str, Any]]:
         if data is None or data.empty:
             return []
-        end_timestamp = pd.Timestamp(end_date or datetime.utcnow())
+        end_timestamp = pd.Timestamp(end_date or datetime.now(UTC))
         cutoff_date = end_timestamp - timedelta(days=period_days)
         if data.index.tz is not None:
             cutoff_date = cutoff_date.tz_localize(data.index.tz)
@@ -488,6 +492,12 @@ class StaticBreadthSectionBuilder:
             for _, row in frame.iterrows()
             if all(
                 value is not None and not math.isnan(float(value))
-                for value in (row["Open"], row["High"], row["Low"], row["Close"], row["Volume"])
+                for value in (
+                    row["Open"],
+                    row["High"],
+                    row["Low"],
+                    row["Close"],
+                    row["Volume"],
+                )
             )
         ]

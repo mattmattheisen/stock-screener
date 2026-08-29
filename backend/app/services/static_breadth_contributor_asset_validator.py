@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
 from app.services.breadth.contributors import (
     BREADTH_CONTRIBUTOR_SIGNALS,
     CONTRIBUTOR_SCHEMA_ID,
+    BreadthContributorContractError,
+    parse_contributor_rows,
+    reconcile_contributor_aggregate,
 )
 from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
 
@@ -46,8 +48,7 @@ def validate_static_breadth_contributor_asset(
     if (
         index.get("schema") != CONTRIBUTOR_SCHEMA_ID
         or index.get("market") != market
-        or index.get("calculation_revision")
-        != CURRENT_BREADTH_CALCULATION_REVISION
+        or index.get("calculation_revision") != CURRENT_BREADTH_CALCULATION_REVISION
     ):
         raise StaticBreadthContributorAssetError("index identity is invalid")
     dates = index.get("dates")
@@ -92,49 +93,23 @@ def validate_static_breadth_contributor_asset(
             raise StaticBreadthContributorAssetError(
                 f"contributors are invalid for {date_value}"
             )
-        counts = {key: 0 for key in BREADTH_CONTRIBUTOR_SIGNALS}
-        symbols: set[str] = set()
-        for contributor in contributors:
-            if not isinstance(contributor, dict):
-                raise StaticBreadthContributorAssetError(
-                    f"contributor row is invalid for {date_value}"
-                )
-            symbol = str(contributor.get("symbol") or "").strip()
-            if not symbol or symbol in symbols:
-                raise StaticBreadthContributorAssetError(
-                    f"contributor symbols are invalid for {date_value}"
-                )
-            symbols.add(symbol)
-            daily_change = contributor.get("daily_change_pct")
-            if daily_change is not None and (
-                isinstance(daily_change, bool)
-                or not math.isfinite(float(daily_change))
-            ):
-                raise StaticBreadthContributorAssetError(
-                    f"daily change is invalid for {symbol}/{date_value}"
-                )
-            signals = contributor.get("signals")
-            if not isinstance(signals, dict) or not signals:
-                raise StaticBreadthContributorAssetError(
-                    f"signals are invalid for {symbol}/{date_value}"
-                )
-            for signal_key, value in signals.items():
-                if (
-                    signal_key not in counts
-                    or isinstance(value, bool)
-                    or not math.isfinite(float(value))
-                ):
-                    raise StaticBreadthContributorAssetError(
-                        f"signal is invalid for {symbol}/{date_value}"
-                    )
-                counts[signal_key] += 1
         aggregate = aggregates_by_date.get(date_value)
         if aggregate is None:
             raise StaticBreadthContributorAssetError(
                 f"aggregate breadth row is absent for {date_value}"
             )
-        for signal_key, definition in BREADTH_CONTRIBUTOR_SIGNALS.items():
-            if counts[signal_key] != aggregate.get(definition.aggregate_field):
-                raise StaticBreadthContributorAssetError(
-                    f"count mismatch for {definition.aggregate_field}/{date_value}"
-                )
+        try:
+            parsed = parse_contributor_rows(contributors)
+            reconcile_contributor_aggregate(
+                parsed,
+                {
+                    definition.aggregate_field: aggregate.get(
+                        definition.aggregate_field
+                    )
+                    for definition in BREADTH_CONTRIBUTOR_SIGNALS.values()
+                },
+            )
+        except (BreadthContributorContractError, TypeError, ValueError) as exc:
+            raise StaticBreadthContributorAssetError(
+                f"invalid contributors for {date_value}: {exc}"
+            ) from exc

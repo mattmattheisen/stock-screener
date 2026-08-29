@@ -4,6 +4,7 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
 from app.database import Base
 from app.models.breadth_contributor import (
     MarketBreadthContributor,
@@ -112,9 +113,7 @@ def test_export_writes_index_and_twenty_date_shards(tmp_path: Path):
         _breadth_payload("CA", dates),
     )
 
-    assert asset == {
-        "index_path": "markets/ca/breadth/contributors/index.json"
-    }
+    assert asset == {"index_path": "markets/ca/breadth/contributors/index.json"}
     index = json.loads((tmp_path / asset["index_path"]).read_text())
     assert index["schema"] == "breadth-contributors-v1"
     assert index["market"] == "CA"
@@ -122,9 +121,7 @@ def test_export_writes_index_and_twenty_date_shards(tmp_path: Path):
     assert index["dates"] == sorted(index["dates"], reverse=True)
     document = json.loads(
         (
-            tmp_path
-            / "markets/ca/breadth/contributors"
-            / f"{index['dates'][0]}.json"
+            tmp_path / "markets/ca/breadth/contributors" / f"{index['dates'][0]}.json"
         ).read_text()
     )
     assert document["market"] == "CA"
@@ -154,3 +151,59 @@ def test_export_is_additive_and_omits_asset_when_no_snapshot(tmp_path: Path):
         is None
     )
     assert payload["available"] is True
+
+
+def test_export_preserves_previous_directory_when_a_stage_write_fails(
+    tmp_path: Path,
+):
+    db = _db_session()
+    calculation_date = date(2026, 8, 28)
+    _seed(db, "DE", calculation_date)
+    destination = tmp_path / "markets/de/breadth/contributors"
+    destination.mkdir(parents=True)
+    (destination / "index.json").write_text('{"previous": true}', encoding="utf-8")
+    (destination / "stale.json").write_text('{"stale": true}', encoding="utf-8")
+    writes = 0
+
+    def failing_writer(path, payload):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("disk full")
+        StaticBreadthContributorExporter._write_json(path, payload)
+
+    with pytest.raises(OSError, match="disk full"):
+        StaticBreadthContributorExporter(json_writer=failing_writer).export(
+            db,
+            tmp_path,
+            Path("markets/de"),
+            _breadth_payload("DE", [calculation_date]),
+        )
+
+    assert json.loads((destination / "index.json").read_text()) == {"previous": True}
+    assert (destination / "stale.json").is_file()
+    assert not (destination / f"{calculation_date.isoformat()}.json").exists()
+    assert not any(
+        path.name.startswith(".contributors-") for path in destination.parent.iterdir()
+    )
+
+
+def test_successful_export_replaces_directory_and_removes_stale_shards(
+    tmp_path: Path,
+):
+    db = _db_session()
+    calculation_date = date(2026, 8, 28)
+    _seed(db, "DE", calculation_date)
+    destination = tmp_path / "markets/de/breadth/contributors"
+    destination.mkdir(parents=True)
+    (destination / "stale.json").write_text('{"stale": true}', encoding="utf-8")
+
+    StaticBreadthContributorExporter().export(
+        db,
+        tmp_path,
+        Path("markets/de"),
+        _breadth_payload("DE", [calculation_date]),
+    )
+
+    assert not (destination / "stale.json").exists()
+    assert (destination / "index.json").is_file()

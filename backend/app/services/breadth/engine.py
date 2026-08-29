@@ -15,6 +15,7 @@ from app.services.point_in_time_universe_service import (
 )
 
 from .contributors import (
+    BREADTH_CONTRIBUTOR_SIGNALS,
     CONTRIBUTOR_SCHEMA_ID,
     NO_GROUP_LABEL,
     reconcile_contributor_counts,
@@ -28,8 +29,8 @@ from .types import (
     BreadthContributorSnapshotResult,
     BreadthDailyCount,
     BreadthDailyResult,
-    BreadthEngineBatchResult,
     BreadthEligibilityCounts,
+    BreadthEngineBatchResult,
     BreadthFormulaPolicy,
     BreadthIndicatorValues,
     BreadthMarketPolicy,
@@ -163,21 +164,14 @@ class BreadthEngine:
                 ),
             )
             t2108_count = sum(item.t2108_above for item in signals)
+            contributor_counts = {
+                definition.aggregate_field: sum(
+                    getattr(item, definition.signal_attribute) for item in signals
+                )
+                for definition in BREADTH_CONTRIBUTOR_SIGNALS.values()
+            }
             values = BreadthIndicatorValues(
-                stocks_up_4pct=sum(item.up_4pct for item in signals),
-                stocks_down_4pct=sum(item.down_4pct for item in signals),
-                stocks_up_25pct_quarter=sum(item.up_25pct_quarter for item in signals),
-                stocks_down_25pct_quarter=sum(
-                    item.down_25pct_quarter for item in signals
-                ),
-                stocks_up_25pct_month=sum(item.up_25pct_month for item in signals),
-                stocks_down_25pct_month=sum(item.down_25pct_month for item in signals),
-                stocks_up_50pct_month=sum(item.up_50pct_month for item in signals),
-                stocks_down_50pct_month=sum(item.down_50pct_month for item in signals),
-                stocks_up_13pct_34days=sum(item.up_13pct_34days for item in signals),
-                stocks_down_13pct_34days=sum(
-                    item.down_13pct_34days for item in signals
-                ),
+                **contributor_counts,
                 advancing_count=sum(item.advancing for item in signals),
                 declining_count=sum(item.declining for item in signals),
                 unchanged_count=sum(item.unchanged for item in signals),
@@ -189,7 +183,6 @@ class BreadthEngine:
                     if eligibility.t2108_eligible_count
                     else None
                 ),
-                atr_10x_extension_count=sum(item.atr_10x_extension for item in signals),
             )
 
             if (

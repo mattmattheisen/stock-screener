@@ -13,6 +13,10 @@ import pandas as pd
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
+from app.models.breadth_contributor import (
+    MarketBreadthContributor,
+    MarketBreadthContributorSnapshot,
+)
 from app.models.market_breadth import MarketBreadth
 from app.services.breadth_backfill import (
     BreadthBackfillExecutor,
@@ -27,11 +31,28 @@ from app.services.derived_data_execution_policy import (
 )
 from app.services.point_in_time_universe_service import PointInTimeUniverseService
 
-from .types import CURRENT_BREADTH_CALCULATION_REVISION, BreadthDailyResult
+from .contributors import (
+    BREADTH_CONTRIBUTOR_SIGNALS,
+    CONTRIBUTOR_RETENTION_SESSIONS,
+    CONTRIBUTOR_SCHEMA_ID,
+    BreadthContributorContractError,
+    parse_contributor_rows,
+    reconcile_contributor_aggregate,
+    reconcile_contributor_counts,
+)
+from .types import (
+    CURRENT_BREADTH_CALCULATION_REVISION,
+    BreadthContributorSnapshotResult,
+    BreadthDailyResult,
+)
 
 TARGET_TABLE = "market_breadth"
 STAGING_TABLE = "market_breadth_rebuild"
 MANIFEST_TABLE = "market_breadth_rebuild_manifest"
+CONTRIBUTOR_SNAPSHOT_TARGET_TABLE = MarketBreadthContributorSnapshot.__tablename__
+CONTRIBUTOR_TARGET_TABLE = MarketBreadthContributor.__tablename__
+CONTRIBUTOR_SNAPSHOT_STAGING_TABLE = "market_breadth_contributor_snapshots_rebuild"
+CONTRIBUTOR_STAGING_TABLE = "market_breadth_contributors_rebuild"
 _EXCLUDED_COPY_COLUMNS = {"id", "created_at"}
 
 
@@ -46,18 +67,22 @@ def _copy_columns() -> tuple[str, ...]:
 class StagingBreadthPersistence:
     """Breadth persistence adapter that writes only to the shadow table."""
 
-    def __init__(self, rebuild: "BreadthRebuildService") -> None:
+    def __init__(self, rebuild: BreadthRebuildService) -> None:
         self._rebuild = rebuild
 
     def upsert_many(
         self,
         results: Iterable[BreadthDailyResult],
         *,
-        contributor_snapshots_by_date=None,
+        contributor_snapshots_by_date: Mapping[date, BreadthContributorSnapshotResult]
+        | None = None,
         duration_seconds_by_date: Mapping[date, float] | None = None,
     ) -> tuple[()]:
+        if contributor_snapshots_by_date is None:
+            raise ValueError("Breadth rebuild requires canonical contributor snapshots")
         self._rebuild.stage_results(
             results,
+            contributor_snapshots_by_date=contributor_snapshots_by_date,
             duration_seconds_by_date=duration_seconds_by_date,
         )
         return ()
@@ -96,6 +121,10 @@ class BreadthRebuildService:
         return inspect(self.db.connection()).has_table(table_name)
 
     def recreate_staging(self) -> None:
+        self.db.execute(text(f"DROP TABLE IF EXISTS {CONTRIBUTOR_STAGING_TABLE}"))
+        self.db.execute(
+            text(f"DROP TABLE IF EXISTS {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE}")
+        )
         self.db.execute(text(f"DROP TABLE IF EXISTS {STAGING_TABLE}"))
         self.db.execute(text(f"DROP TABLE IF EXISTS {MANIFEST_TABLE}"))
         if self.dialect_name == "postgresql":
@@ -117,6 +146,36 @@ class BreadthRebuildService:
             text(
                 f"CREATE UNIQUE INDEX uix_breadth_rebuild_date_market "
                 f"ON {STAGING_TABLE} (date, market)"
+            )
+        )
+        self.db.execute(
+            text(
+                f"CREATE TABLE {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE} AS "
+                "SELECT market, date, calculation_revision, schema_id "
+                f"FROM {CONTRIBUTOR_SNAPSHOT_TARGET_TABLE} WHERE 1 = 0"
+            )
+        )
+        self.db.execute(
+            text(
+                "CREATE UNIQUE INDEX uix_breadth_contributor_snapshot_rebuild_market_date "
+                f"ON {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE} (market, date)"
+            )
+        )
+        self.db.execute(
+            text(
+                f"CREATE TABLE {CONTRIBUTOR_STAGING_TABLE} AS "
+                "SELECT snapshots.market, snapshots.date, contributors.symbol, "
+                "contributors.company_name, contributors.ibd_industry_group, "
+                "contributors.daily_change_pct, contributors.signals_json "
+                f"FROM {CONTRIBUTOR_TARGET_TABLE} AS contributors "
+                f"JOIN {CONTRIBUTOR_SNAPSHOT_TARGET_TABLE} AS snapshots "
+                "ON snapshots.id = contributors.snapshot_id WHERE 1 = 0"
+            )
+        )
+        self.db.execute(
+            text(
+                "CREATE UNIQUE INDEX uix_breadth_contributor_rebuild_market_date_symbol "
+                f"ON {CONTRIBUTOR_STAGING_TABLE} (market, date, symbol)"
             )
         )
         self.db.execute(
@@ -161,20 +220,35 @@ class BreadthRebuildService:
         self,
         results: Iterable[BreadthDailyResult],
         *,
+        contributor_snapshots_by_date: Mapping[date, BreadthContributorSnapshotResult],
         duration_seconds_by_date: Mapping[date, float] | None = None,
     ) -> int:
         if not self._has_table(STAGING_TABLE):
             raise RuntimeError("Breadth rebuild staging table does not exist")
+        if not self._has_table(
+            CONTRIBUTOR_SNAPSHOT_STAGING_TABLE
+        ) or not self._has_table(CONTRIBUTOR_STAGING_TABLE):
+            raise RuntimeError(
+                "Breadth contributor rebuild staging tables do not exist"
+            )
+        ordered_results = tuple(results)
+        expected_dates = {result.calculation_date for result in ordered_results}
+        if set(contributor_snapshots_by_date) != expected_dates:
+            raise ValueError(
+                "Contributor snapshot dates must match staged result dates"
+            )
         columns = _copy_columns()
         placeholders = ", ".join(f":{column}" for column in columns)
         column_sql = ", ".join(columns)
         inserted = 0
-        for result in results:
+        for result in ordered_results:
             if result.calculation_revision != CURRENT_BREADTH_CALCULATION_REVISION:
                 raise ValueError(
                     "Staging accepts only results from the current canonical "
                     f"breadth revision ({CURRENT_BREADTH_CALCULATION_REVISION})"
                 )
+            snapshot = contributor_snapshots_by_date[result.calculation_date]
+            reconcile_contributor_counts(snapshot, result)
             values = result.to_record_mapping()
             values["calculation_duration_seconds"] = (
                 duration_seconds_by_date.get(result.calculation_date)
@@ -195,9 +269,93 @@ class BreadthRebuildService:
                 ),
                 {column: values.get(column) for column in columns},
             )
+            identity = {
+                "market": result.market,
+                "date": result.calculation_date,
+            }
+            self.db.execute(
+                text(
+                    f"DELETE FROM {CONTRIBUTOR_STAGING_TABLE} "
+                    "WHERE market = :market AND date = :date"
+                ),
+                identity,
+            )
+            self.db.execute(
+                text(
+                    f"DELETE FROM {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE} "
+                    "WHERE market = :market AND date = :date"
+                ),
+                identity,
+            )
+            self.db.execute(
+                text(
+                    f"INSERT INTO {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE} "
+                    "(market, date, calculation_revision, schema_id) "
+                    "VALUES (:market, :date, :calculation_revision, :schema_id)"
+                ),
+                {
+                    **identity,
+                    "calculation_revision": snapshot.calculation_revision,
+                    "schema_id": snapshot.schema_id,
+                },
+            )
+            signals_placeholder = (
+                "CAST(:signals_json AS JSON)"
+                if self.dialect_name == "postgresql"
+                else ":signals_json"
+            )
+            for contributor in snapshot.contributors:
+                self.db.execute(
+                    text(
+                        f"INSERT INTO {CONTRIBUTOR_STAGING_TABLE} "
+                        "(market, date, symbol, company_name, ibd_industry_group, "
+                        "daily_change_pct, signals_json) VALUES "
+                        "(:market, :date, :symbol, :company_name, "
+                        ":ibd_industry_group, :daily_change_pct, "
+                        f"{signals_placeholder})"
+                    ),
+                    {
+                        **identity,
+                        "symbol": contributor.symbol,
+                        "company_name": contributor.company_name,
+                        "ibd_industry_group": contributor.ibd_industry_group,
+                        "daily_change_pct": contributor.daily_change_pct,
+                        "signals_json": json.dumps(dict(contributor.signals)),
+                    },
+                )
             inserted += 1
+        self._prune_staged_contributors()
         self.db.commit()
         return inserted
+
+    def _prune_staged_contributors(self) -> None:
+        rows = self.db.execute(
+            text(
+                f"SELECT market, date FROM {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE} "
+                "ORDER BY market, date DESC"
+            )
+        ).mappings()
+        seen_by_market: dict[str, int] = {}
+        for row in rows:
+            market = str(row["market"])
+            seen_by_market[market] = seen_by_market.get(market, 0) + 1
+            if seen_by_market[market] <= CONTRIBUTOR_RETENTION_SESSIONS:
+                continue
+            identity = {"market": market, "date": row["date"]}
+            self.db.execute(
+                text(
+                    f"DELETE FROM {CONTRIBUTOR_STAGING_TABLE} "
+                    "WHERE market = :market AND date = :date"
+                ),
+                identity,
+            )
+            self.db.execute(
+                text(
+                    f"DELETE FROM {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE} "
+                    "WHERE market = :market AND date = :date"
+                ),
+                identity,
+            )
 
     def build(
         self,
@@ -251,16 +409,20 @@ class BreadthRebuildService:
                 dates=dates,
                 universes=MappingProxyType(universes),
             )
-            reports[market] = BreadthBackfillExecutor(calculator).execute(
-                plan,
-                policy=DerivedDataExecutionPolicy(
-                    mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
-                    target_kind=DerivedDataTargetKind.HISTORICAL,
-                ),
-                exclude_unsupported_price_symbols=True,
-                required_as_of_date=dates[-1],
-                require_complete_cache_coverage=True,
-            ).to_legacy_dict()
+            reports[market] = (
+                BreadthBackfillExecutor(calculator)
+                .execute(
+                    plan,
+                    policy=DerivedDataExecutionPolicy(
+                        mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
+                        target_kind=DerivedDataTargetKind.HISTORICAL,
+                    ),
+                    exclude_unsupported_price_symbols=True,
+                    required_as_of_date=dates[-1],
+                    require_complete_cache_coverage=True,
+                )
+                .to_legacy_dict()
+            )
         return {
             "markets": reports,
             "processed": sum(value["processed"] for value in reports.values()),
@@ -283,13 +445,20 @@ class BreadthRebuildService:
                 "errors": ["staging_manifest_missing"],
                 "row_count": 0,
             }
-        rows = self.db.execute(
-            text(f"SELECT * FROM {STAGING_TABLE} ORDER BY market, date")
-        ).mappings().all()
+        rows = (
+            self.db.execute(
+                text(f"SELECT * FROM {STAGING_TABLE} ORDER BY market, date")
+            )
+            .mappings()
+            .all()
+        )
+        aggregate_by_key: dict[tuple[str, date], Mapping[str, Any]] = {}
         errors: list[str] = []
-        manifest_rows = self.db.execute(
-            text(f"SELECT * FROM {MANIFEST_TABLE} ORDER BY market")
-        ).mappings().all()
+        manifest_rows = (
+            self.db.execute(text(f"SELECT * FROM {MANIFEST_TABLE} ORDER BY market"))
+            .mappings()
+            .all()
+        )
         manifest_dates_by_market: dict[str, set[date]] = {}
         full_market_flags: set[bool] = set()
         for manifest_row in manifest_rows:
@@ -332,6 +501,7 @@ class BreadthRebuildService:
             if key in seen:
                 errors.append(f"duplicate:{key[0]}:{key[1]}")
             seen.add(key)
+            aggregate_by_key[key] = row
             dates_by_market.setdefault(key[0], set()).add(row_date)
             if row["calculation_revision"] != CURRENT_BREADTH_CALCULATION_REVISION:
                 errors.append(f"wrong_revision:{key[0]}:{key[1]}")
@@ -429,6 +599,101 @@ class BreadthRebuildService:
                         f"context_exceeds_eligibility:{count_name}:{key[0]}:{key[1]}"
                     )
 
+        snapshot_rows = (
+            self.db.execute(
+                text(
+                    f"SELECT * FROM {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE} "
+                    "ORDER BY market, date"
+                )
+            )
+            .mappings()
+            .all()
+        )
+        snapshot_keys: set[tuple[str, date]] = set()
+        for row in snapshot_rows:
+            row_date = (
+                date.fromisoformat(row["date"])
+                if isinstance(row["date"], str)
+                else row["date"]
+            )
+            key = (str(row["market"]), row_date)
+            if key in snapshot_keys:
+                errors.append(f"duplicate_contributor_snapshot:{key[0]}:{key[1]}")
+            snapshot_keys.add(key)
+            if row["schema_id"] != CONTRIBUTOR_SCHEMA_ID:
+                errors.append(f"wrong_contributor_schema:{key[0]}:{key[1]}")
+            if row["calculation_revision"] != CURRENT_BREADTH_CALCULATION_REVISION:
+                errors.append(f"wrong_contributor_revision:{key[0]}:{key[1]}")
+
+        expected_snapshot_keys = {
+            (market, calculation_date)
+            for market, calculation_dates in dates_by_market.items()
+            for calculation_date in sorted(calculation_dates, reverse=True)[
+                :CONTRIBUTOR_RETENTION_SESSIONS
+            ]
+        }
+        for market, calculation_date in sorted(expected_snapshot_keys - snapshot_keys):
+            errors.append(
+                f"missing_contributor_snapshot:{market}:{calculation_date.isoformat()}"
+            )
+        for market, calculation_date in sorted(snapshot_keys - expected_snapshot_keys):
+            errors.append(
+                f"unexpected_contributor_snapshot:{market}:{calculation_date.isoformat()}"
+            )
+
+        contributor_rows = (
+            self.db.execute(
+                text(
+                    f"SELECT * FROM {CONTRIBUTOR_STAGING_TABLE} "
+                    "ORDER BY market, date, symbol"
+                )
+            )
+            .mappings()
+            .all()
+        )
+        contributor_rows_by_key: dict[tuple[str, date], list[dict[str, Any]]] = {}
+        for row in contributor_rows:
+            row_date = (
+                date.fromisoformat(row["date"])
+                if isinstance(row["date"], str)
+                else row["date"]
+            )
+            key = (str(row["market"]), row_date)
+            raw_signals = row["signals_json"]
+            if isinstance(raw_signals, str):
+                try:
+                    raw_signals = json.loads(raw_signals)
+                except json.JSONDecodeError:
+                    raw_signals = None
+            contributor_rows_by_key.setdefault(key, []).append(
+                {
+                    "symbol": row["symbol"],
+                    "company_name": row["company_name"],
+                    "ibd_industry_group": row["ibd_industry_group"],
+                    "daily_change_pct": row["daily_change_pct"],
+                    "signals": raw_signals,
+                }
+            )
+
+        for key in snapshot_keys:
+            aggregate = aggregate_by_key.get(key)
+            if aggregate is None:
+                errors.append(f"contributor_without_aggregate:{key[0]}:{key[1]}")
+                continue
+            try:
+                parsed = parse_contributor_rows(contributor_rows_by_key.get(key, []))
+                reconcile_contributor_aggregate(
+                    parsed,
+                    {
+                        definition.aggregate_field: aggregate[
+                            definition.aggregate_field
+                        ]
+                        for definition in BREADTH_CONTRIBUTOR_SIGNALS.values()
+                    },
+                )
+            except (BreadthContributorContractError, TypeError, ValueError) as exc:
+                errors.append(f"invalid_contributors:{key[0]}:{key[1]}:{exc}")
+
         effective_expected = dict(manifest_dates_by_market)
         for market, expected_dates in (expected_dates_by_market or {}).items():
             normalized_market = market.upper()
@@ -480,11 +745,17 @@ class BreadthRebuildService:
         with self.db.begin():
             if self.dialect_name == "postgresql":
                 self.db.execute(
-                    text(f"LOCK TABLE {TARGET_TABLE} IN ACCESS EXCLUSIVE MODE")
+                    text(
+                        "LOCK TABLE "
+                        f"{TARGET_TABLE}, {CONTRIBUTOR_SNAPSHOT_TARGET_TABLE}, "
+                        f"{CONTRIBUTOR_TARGET_TABLE} IN ACCESS EXCLUSIVE MODE"
+                    )
                 )
                 self.db.execute(
                     text(
-                        f"LOCK TABLE {STAGING_TABLE}, {MANIFEST_TABLE} "
+                        f"LOCK TABLE {STAGING_TABLE}, {MANIFEST_TABLE}, "
+                        f"{CONTRIBUTOR_SNAPSHOT_STAGING_TABLE}, "
+                        f"{CONTRIBUTOR_STAGING_TABLE} "
                         "IN ACCESS EXCLUSIVE MODE"
                     )
                 )
@@ -493,11 +764,34 @@ class BreadthRebuildService:
                 raise RuntimeError(
                     "Cannot activate invalid breadth rebuild staging data"
                 )
+            self.db.execute(text(f"DELETE FROM {CONTRIBUTOR_TARGET_TABLE}"))
+            self.db.execute(text(f"DELETE FROM {CONTRIBUTOR_SNAPSHOT_TARGET_TABLE}"))
             self.db.execute(text(f"DELETE FROM {TARGET_TABLE}"))
             self.db.execute(
                 text(
                     f"INSERT INTO {TARGET_TABLE} ({column_sql}) "
                     f"SELECT {column_sql} FROM {STAGING_TABLE}"
+                )
+            )
+            self.db.execute(
+                text(
+                    f"INSERT INTO {CONTRIBUTOR_SNAPSHOT_TARGET_TABLE} "
+                    "(market, date, calculation_revision, schema_id) "
+                    "SELECT market, date, calculation_revision, schema_id "
+                    f"FROM {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE}"
+                )
+            )
+            self.db.execute(
+                text(
+                    f"INSERT INTO {CONTRIBUTOR_TARGET_TABLE} "
+                    "(snapshot_id, symbol, company_name, ibd_industry_group, "
+                    "daily_change_pct, signals_json) "
+                    "SELECT snapshots.id, staged.symbol, staged.company_name, "
+                    "staged.ibd_industry_group, staged.daily_change_pct, "
+                    "staged.signals_json "
+                    f"FROM {CONTRIBUTOR_STAGING_TABLE} AS staged "
+                    f"JOIN {CONTRIBUTOR_SNAPSHOT_TARGET_TABLE} AS snapshots "
+                    "ON snapshots.market = staged.market AND snapshots.date = staged.date"
                 )
             )
             inserted = int(
@@ -517,12 +811,45 @@ class BreadthRebuildService:
             )
             if inserted != report["row_count"] or wrong_revision:
                 raise RuntimeError("Breadth activation verification failed")
+            staged_snapshot_count = int(
+                self.db.execute(
+                    text(f"SELECT COUNT(*) FROM {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE}")
+                ).scalar()
+                or 0
+            )
+            activated_snapshot_count = int(
+                self.db.execute(
+                    text(f"SELECT COUNT(*) FROM {CONTRIBUTOR_SNAPSHOT_TARGET_TABLE}")
+                ).scalar()
+                or 0
+            )
+            staged_contributor_count = int(
+                self.db.execute(
+                    text(f"SELECT COUNT(*) FROM {CONTRIBUTOR_STAGING_TABLE}")
+                ).scalar()
+                or 0
+            )
+            activated_contributor_count = int(
+                self.db.execute(
+                    text(f"SELECT COUNT(*) FROM {CONTRIBUTOR_TARGET_TABLE}")
+                ).scalar()
+                or 0
+            )
+            if (
+                staged_snapshot_count != activated_snapshot_count
+                or staged_contributor_count != activated_contributor_count
+            ):
+                raise RuntimeError("Breadth contributor activation verification failed")
         return {
             "activated": inserted,
             "calculation_revision": CURRENT_BREADTH_CALCULATION_REVISION,
         }
 
     def cleanup(self) -> None:
+        self.db.execute(text(f"DROP TABLE IF EXISTS {CONTRIBUTOR_STAGING_TABLE}"))
+        self.db.execute(
+            text(f"DROP TABLE IF EXISTS {CONTRIBUTOR_SNAPSHOT_STAGING_TABLE}")
+        )
         self.db.execute(text(f"DROP TABLE IF EXISTS {STAGING_TABLE}"))
         self.db.execute(text(f"DROP TABLE IF EXISTS {MANIFEST_TABLE}"))
         self.db.commit()

@@ -12,7 +12,11 @@ from app.models.breadth_contributor import (
     MarketBreadthContributorSnapshot,
 )
 from app.models.market_breadth import MarketBreadth
-from app.services.breadth.contributor_query import get_contributor_document
+from app.services.breadth.contributor_query import (
+    BreadthContributorDocumentPayload,
+    BreadthContributorItemPayload,
+    get_contributor_document,
+)
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
 from app.services.breadth.market_policy import get_breadth_market_policy
 from app.services.breadth.persistence import BreadthPersistence
@@ -62,15 +66,23 @@ def test_static_and_attribution_daily_counts_match_canonical_engine():
         members=members,
         broad_signature=hash_point_in_time_universe_symbols(("DOWN", "UP")),
     )
-    canonical = BreadthEngine().calculate(
+    batch = BreadthEngine().calculate_with_contributors(
         BreadthEngineRequest(
             market="US",
             dates=(calculation_date,),
             universes_by_date={calculation_date: snapshot},
             prices_by_symbol=prices,
             market_policy=get_breadth_market_policy("US"),
+            contributor_metadata_by_date={
+                calculation_date: {
+                    "UP": BreadthContributorMetadata("Up Co", "Group A"),
+                    "DOWN": BreadthContributorMetadata("Down Co", "No Group"),
+                }
+            },
         )
-    )[calculation_date]
+    )
+    canonical = batch.daily_results[calculation_date]
+    snapshot = batch.contributor_snapshots[calculation_date]
 
     builder = StaticBreadthSectionBuilder(
         ui_snapshot_service=Mock(),
@@ -83,14 +95,24 @@ def test_static_and_attribution_daily_counts_match_canonical_engine():
         market="US",
     )[calculation_date]
     attribution = BreadthAttributionService().compute(
-        symbols_meta=[
-            {"symbol": "UP", "ibd_industry_group": "Group A"},
-            {"symbol": "DOWN"},
-        ],
-        price_data=prices,
-        target_dates=[calculation_date],
-        market="US",
-        currencies_by_symbol={"UP": "USD", "DOWN": "USD"},
+        documents=(
+            BreadthContributorDocumentPayload(
+                schema=snapshot.schema_id,
+                market=snapshot.market,
+                date=snapshot.calculation_date,
+                calculation_revision=snapshot.calculation_revision,
+                contributors=tuple(
+                    BreadthContributorItemPayload(
+                        symbol=item.symbol,
+                        company_name=item.company_name,
+                        ibd_industry_group=item.ibd_industry_group,
+                        daily_change_pct=item.daily_change_pct,
+                        signals=item.signals,
+                    )
+                    for item in snapshot.contributors
+                ),
+            ),
+        ),
     )[0]
 
     expected = (

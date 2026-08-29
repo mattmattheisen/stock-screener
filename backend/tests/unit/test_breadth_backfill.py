@@ -16,7 +16,11 @@ from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from app.services.breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
 from app.services.breadth.universe import breadth_eligibility_signature
-from app.services.breadth_backfill import BreadthBackfillExecutor, BreadthBackfillPlan
+from app.services.breadth_backfill import (
+    BreadthBackfillExecutor,
+    BreadthBackfillPlan,
+    BreadthContributorBackfillIncomplete,
+)
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.derived_data_execution_policy import (
     DerivedDataExecutionMode,
@@ -81,13 +85,8 @@ def _use_current_rows_as_default_backfill_universe(monkeypatch):
             .all(),
             key=lambda row: row.symbol,
         )
-        members = tuple(
-            BreadthUniverseMember(row.symbol, row.currency)
-            for row in rows
-        )
-        signature = breadth_eligibility_signature(
-            member.symbol for member in members
-        )
+        members = tuple(BreadthUniverseMember(row.symbol, row.currency) for row in rows)
+        signature = breadth_eligibility_signature(member.symbol for member in members)
         return {
             calculation_date: BreadthUniverseSnapshot(
                 calculation_date=calculation_date,
@@ -301,12 +300,16 @@ def test_contributor_only_backfill_never_updates_aggregate_rows():
         target_kind=DerivedDataTargetKind.HISTORICAL,
     )
 
-    result = BreadthBackfillExecutor(calculator).execute(
-        BreadthBackfillPlan(dates=(calculation_date,)),
-        policy=policy,
-        require_complete_cache_coverage=True,
-        contributor_only=True,
-    ).to_legacy_dict()
+    result = (
+        BreadthBackfillExecutor(calculator)
+        .execute(
+            BreadthBackfillPlan(dates=(calculation_date,)),
+            policy=policy,
+            require_complete_cache_coverage=True,
+            contributor_only=True,
+        )
+        .to_legacy_dict()
+    )
 
     db.expire_all()
     aggregate = db.query(MarketBreadth).one()
@@ -315,6 +318,70 @@ def test_contributor_only_backfill_never_updates_aggregate_rows():
     assert aggregate.created_at == original_created_at
     assert aggregate.total_stocks_scanned == 1
     assert db.query(MarketBreadthContributorSnapshot).count() == 1
+
+
+def test_contributor_only_backfill_fails_when_metadata_source_is_unavailable(
+    monkeypatch,
+):
+    db = _make_db_session()
+    calculation_date = date(2026, 3, 20)
+    db.add(
+        StockUniverse(
+            symbol="AAA",
+            name="Alpha",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=True,
+        )
+    )
+    db.add(
+        MarketBreadth(
+            market="US",
+            date=calculation_date,
+            calculation_revision=3,
+            stocks_up_4pct=0,
+            stocks_down_4pct=0,
+            stocks_up_25pct_quarter=0,
+            stocks_down_25pct_quarter=0,
+            stocks_up_25pct_month=0,
+            stocks_down_25pct_month=0,
+            stocks_up_50pct_month=0,
+            stocks_down_50pct_month=0,
+            stocks_up_13pct_34days=0,
+            stocks_down_13pct_34days=0,
+            atr_10x_extension_count=0,
+            total_stocks_scanned=1,
+        )
+    )
+    db.commit()
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": _flat_price_df(calculation_date),
+    }
+    monkeypatch.setattr(
+        breadth_backfill_module.BreadthContributorMetadataLoader,
+        "historical",
+        MagicMock(side_effect=RuntimeError("metadata database unavailable")),
+    )
+    calculator = BreadthCalculatorService(db, price_cache, market="US")
+
+    with pytest.raises(
+        BreadthContributorBackfillIncomplete,
+        match="metadata",
+    ):
+        BreadthBackfillExecutor(calculator).execute(
+            BreadthBackfillPlan(dates=(calculation_date,)),
+            policy=DerivedDataExecutionPolicy(
+                mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
+                target_kind=DerivedDataTargetKind.HISTORICAL,
+            ),
+            require_complete_cache_coverage=True,
+            contributor_only=True,
+        )
+
+    assert db.query(MarketBreadthContributorSnapshot).count() == 0
 
 
 def test_implicit_backfill_loads_members_at_final_requested_membership_date(
@@ -375,33 +442,40 @@ def test_implicit_backfill_loads_members_at_final_requested_membership_date(
     assert result["processed"] == 2
     assert result["error_dates"] == []
 
-def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratios(monkeypatch):
+
+def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratios(
+    monkeypatch,
+):
     db = _make_db_session()
-    db.add_all([
-        StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
-        StockUniverse(symbol="BBB", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
-    ])
+    db.add_all(
+        [
+            StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+            StockUniverse(symbol="BBB", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+        ]
+    )
 
     prior_dates = [date(2026, 3, day) for day in range(2, 12)]
     for prior_date in prior_dates:
-        db.add(MarketBreadth(
-            date=prior_date,
-            stocks_up_4pct=2,
-            stocks_down_4pct=1,
-            ratio_5day=2.0,
-            ratio_10day=2.0,
-            stocks_up_25pct_quarter=0,
-            stocks_down_25pct_quarter=0,
-            stocks_up_25pct_month=0,
-            stocks_down_25pct_month=0,
-            stocks_up_50pct_month=0,
-            stocks_down_50pct_month=0,
-            stocks_up_13pct_34days=0,
-            stocks_down_13pct_34days=0,
-            total_stocks_scanned=2,
-            broad_universe_count=2,
-            calculation_revision=3,
-        ))
+        db.add(
+            MarketBreadth(
+                date=prior_date,
+                stocks_up_4pct=2,
+                stocks_down_4pct=1,
+                ratio_5day=2.0,
+                ratio_10day=2.0,
+                stocks_up_25pct_quarter=0,
+                stocks_down_25pct_quarter=0,
+                stocks_up_25pct_month=0,
+                stocks_down_25pct_month=0,
+                stocks_up_50pct_month=0,
+                stocks_down_50pct_month=0,
+                stocks_up_13pct_34days=0,
+                stocks_down_13pct_34days=0,
+                total_stocks_scanned=2,
+                broad_universe_count=2,
+                calculation_revision=3,
+            )
+        )
     db.commit()
 
     aaa_df = _flat_price_df(date(2026, 3, 13))
@@ -420,7 +494,9 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     service = BreadthCalculatorService(db, price_cache)
     trading_dates = [date(2026, 3, 12), date(2026, 3, 13)]
 
-    result = service.backfill_range(trading_dates[0], trading_dates[-1], trading_dates=trading_dates)
+    result = service.backfill_range(
+        trading_dates[0], trading_dates[-1], trading_dates=trading_dates
+    )
 
     assert result == {
         "total_dates": 2,
@@ -436,9 +512,12 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     price_cache.get_many_cached_only.assert_not_called()
     price_cache.get_historical_data.assert_called_once_with(symbol="BBB", period="2y")
 
-    stored = db.query(MarketBreadth).filter(
-        MarketBreadth.date.in_(trading_dates)
-    ).order_by(MarketBreadth.date.asc()).all()
+    stored = (
+        db.query(MarketBreadth)
+        .filter(MarketBreadth.date.in_(trading_dates))
+        .order_by(MarketBreadth.date.asc())
+        .all()
+    )
 
     assert len(stored) == 2
     assert stored[0].stocks_up_4pct == 1
@@ -493,15 +572,16 @@ def test_backfill_range_excludes_explicit_non_common_instruments():
         trading_dates=[calculation_date],
     )
 
-    stored = db.query(MarketBreadth).filter(
-        MarketBreadth.date == calculation_date
-    ).one()
+    stored = (
+        db.query(MarketBreadth).filter(MarketBreadth.date == calculation_date).one()
+    )
     assert stored.broad_universe_count == 1
     price_cache.get_many_cached_only_fresh.assert_called_once_with(
         ["AAA"],
         period="2y",
         required_as_of_date=calculation_date,
     )
+
 
 def test_backfill_range_scans_only_explicit_date_specific_eligible_symbols():
     db = _make_db_session()
@@ -693,9 +773,7 @@ def test_backfill_range_preserves_existing_failed_date_in_ratio_context():
         },
     )
 
-    stored = db.query(MarketBreadth).filter(
-        MarketBreadth.date == processed_date
-    ).one()
+    stored = db.query(MarketBreadth).filter(MarketBreadth.date == processed_date).one()
     assert result["error_dates"] == ["2026-03-19"]
     assert stored.ratio_5day == 0.31
     assert stored.ratio_10day == 0.5
@@ -727,16 +805,20 @@ def test_strict_backfill_rejects_date_with_supported_missing_target_session():
         },
     )
 
-    result = BreadthBackfillExecutor(service).execute(
-        plan,
-        policy=DerivedDataExecutionPolicy(
-            mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
-            target_kind=DerivedDataTargetKind.HISTORICAL,
-        ),
-        exclude_unsupported_price_symbols=True,
-        required_as_of_date=complete_date,
-        require_complete_cache_coverage=True,
-    ).to_legacy_dict()
+    result = (
+        BreadthBackfillExecutor(service)
+        .execute(
+            plan,
+            policy=DerivedDataExecutionPolicy(
+                mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
+                target_kind=DerivedDataTargetKind.HISTORICAL,
+            ),
+            exclude_unsupported_price_symbols=True,
+            required_as_of_date=complete_date,
+            require_complete_cache_coverage=True,
+        )
+        .to_legacy_dict()
+    )
 
     assert result["processed"] == 1
     assert result["error_dates"] == [missing_date.isoformat()]

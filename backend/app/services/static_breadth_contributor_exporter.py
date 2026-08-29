@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from .breadth.contributor_query import (
+    BreadthContributorSnapshotInconsistent,
+    BreadthContributorSnapshotUnavailable,
     get_contributor_document,
     list_contributor_dates,
 )
+
+
+class StaticBreadthContributorUnavailable(RuntimeError):
+    """Validated contributor data disappeared or changed during export."""
 
 
 class StaticBreadthContributorExporter:
@@ -59,38 +68,113 @@ class StaticBreadthContributorExporter:
             if calculation_date.isoformat() in advertised_dates
         )
         if not dates:
+            destination = output_dir / path_prefix / "breadth" / "contributors"
+            if destination.exists():
+                shutil.rmtree(destination)
             return None
 
         base_path = path_prefix / "breadth" / "contributors"
-        for calculation_date in dates:
-            document = get_contributor_document(db, market, calculation_date)
+        destination = output_dir / base_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=".contributors-",
+                dir=destination.parent,
+            )
+        )
+        try:
+            for calculation_date in dates:
+                try:
+                    document = get_contributor_document(
+                        db,
+                        market,
+                        calculation_date,
+                    )
+                except (
+                    BreadthContributorSnapshotInconsistent,
+                    BreadthContributorSnapshotUnavailable,
+                ) as exc:
+                    raise StaticBreadthContributorUnavailable(str(exc)) from exc
+                self._json_writer(
+                    staging / f"{calculation_date.isoformat()}.json",
+                    {
+                        "schema": document.schema,
+                        "market": document.market,
+                        "date": document.date.isoformat(),
+                        "calculation_revision": document.calculation_revision,
+                        "contributors": [
+                            {
+                                "symbol": item.symbol,
+                                "company_name": item.company_name,
+                                "ibd_industry_group": item.ibd_industry_group,
+                                "daily_change_pct": item.daily_change_pct,
+                                "signals": dict(item.signals),
+                            }
+                            for item in document.contributors
+                        ],
+                    },
+                )
             self._json_writer(
-                output_dir / base_path / f"{calculation_date.isoformat()}.json",
+                staging / "index.json",
                 {
-                    "schema": document.schema,
-                    "market": document.market,
-                    "date": document.date.isoformat(),
-                    "calculation_revision": document.calculation_revision,
-                    "contributors": [
-                        {
-                            "symbol": item.symbol,
-                            "company_name": item.company_name,
-                            "ibd_industry_group": item.ibd_industry_group,
-                            "daily_change_pct": item.daily_change_pct,
-                            "signals": dict(item.signals),
-                        }
-                        for item in document.contributors
-                    ],
+                    "schema": index.schema,
+                    "market": market,
+                    "calculation_revision": index.calculation_revision,
+                    "dates": [value.isoformat() for value in dates],
                 },
             )
+            self._validate_stage(staging, market=market, dates=dates)
+            self._replace_directory(staging, destination)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
         index_path = base_path / "index.json"
-        self._json_writer(
-            output_dir / index_path,
-            {
-                "schema": index.schema,
-                "market": market,
-                "calculation_revision": index.calculation_revision,
-                "dates": [value.isoformat() for value in dates],
-            },
-        )
         return {"index_path": index_path.as_posix()}
+
+    @staticmethod
+    def _validate_stage(
+        staging: Path,
+        *,
+        market: str,
+        dates: tuple,
+    ) -> None:
+        expected_names = {"index.json"} | {
+            f"{value.isoformat()}.json" for value in dates
+        }
+        if {path.name for path in staging.iterdir()} != expected_names:
+            raise ValueError("Contributor staging files do not match advertised dates")
+        index = json.loads((staging / "index.json").read_text(encoding="utf-8"))
+        if index.get("market") != market or index.get("dates") != [
+            value.isoformat() for value in dates
+        ]:
+            raise ValueError("Contributor staging index identity is invalid")
+        for calculation_date in dates:
+            document = json.loads(
+                (staging / f"{calculation_date.isoformat()}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            if (
+                document.get("market") != market
+                or document.get("date") != calculation_date.isoformat()
+            ):
+                raise ValueError("Contributor staging document identity is invalid")
+
+    @staticmethod
+    def _replace_directory(staging: Path, destination: Path) -> None:
+        backup = destination.parent / f".contributors-backup-{uuid4().hex}"
+        moved_existing = False
+        try:
+            if destination.exists():
+                destination.replace(backup)
+                moved_existing = True
+            staging.replace(destination)
+        except Exception:
+            if destination.exists():
+                shutil.rmtree(destination)
+            if moved_existing and backup.exists():
+                backup.replace(destination)
+            raise
+        else:
+            if backup.exists():
+                shutil.rmtree(backup)

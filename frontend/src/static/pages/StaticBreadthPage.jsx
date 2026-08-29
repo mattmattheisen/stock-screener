@@ -13,7 +13,6 @@ import {
 import BreadthContextStrip from '../../components/Breadth/BreadthContextStrip';
 import BreadthContributorDialog from '../../components/Breadth/BreadthContributorDialog';
 import BreadthHistoryTable from '../../components/Breadth/BreadthHistoryTable';
-import { buildBreadthContributorView } from '../../components/Breadth/breadthContributorView';
 import { useBreadthContributors } from '../../components/Breadth/useBreadthContributors';
 import BreadthChart from '../../components/Charts/BreadthChart';
 import BreadthGroupAttribution from '../components/BreadthGroupAttribution';
@@ -71,25 +70,6 @@ function StaticBreadthPage() {
   }, [payload.benchmark_overlay, payload.spy_overlay, timeRange]);
   const benchmarkLabel = payload.benchmark_symbol
     || (marketEntry.market === 'US' ? 'SPY' : 'Benchmark');
-  const contributorViewState = useMemo(() => {
-    if (!contributorDrilldown.dialogQuery.data || !contributorDrilldown.selected) {
-      return { view: null, inconsistent: null };
-    }
-    const { metric, row } = contributorDrilldown.selected;
-    try {
-      return {
-        view: buildBreadthContributorView(
-          contributorDrilldown.dialogQuery.data,
-          metric,
-          row[metric],
-        ),
-        inconsistent: null,
-      };
-    } catch (error) {
-      return { view: null, inconsistent: error.message };
-    }
-  }, [contributorDrilldown.dialogQuery.data, contributorDrilldown.selected]);
-
   if (manifestQuery.isLoading || breadthQuery.isLoading) {
     return (
       <Box display="flex" justifyContent="center" py={8}>
@@ -173,10 +153,10 @@ function StaticBreadthPage() {
         open={Boolean(contributorDrilldown.selected)}
         metric={contributorDrilldown.selected?.metric}
         row={contributorDrilldown.selected?.row}
-        view={contributorViewState.view}
+        view={contributorDrilldown.viewState.view}
         isLoading={contributorDrilldown.dialogQuery.isLoading}
         error={contributorDrilldown.dialogQuery.error}
-        inconsistent={contributorViewState.inconsistent}
+        inconsistent={contributorDrilldown.viewState.inconsistent}
         onRetry={() => contributorDrilldown.dialogQuery.refetch()}
         onClose={contributorDrilldown.close}
       />
