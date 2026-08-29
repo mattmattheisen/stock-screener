@@ -18,6 +18,11 @@ from .breadth.contributor_query import (
     get_contributor_document,
     list_contributor_dates,
 )
+from .breadth.contributors import (
+    BreadthContributorContractError,
+    parse_contributor_rows,
+    reconcile_contributor_aggregate,
+)
 
 
 class StaticBreadthContributorUnavailable(RuntimeError):
@@ -56,8 +61,8 @@ class StaticBreadthContributorExporter:
         if not market:
             return None
         history = (breadth_payload.get("payload") or {}).get("history_90d") or []
-        advertised_dates = {
-            str(row.get("date"))
+        aggregates_by_date = {
+            str(row.get("date")): row
             for row in history
             if isinstance(row, dict) and row.get("date")
         }
@@ -65,7 +70,7 @@ class StaticBreadthContributorExporter:
         dates = tuple(
             calculation_date
             for calculation_date in index.dates
-            if calculation_date.isoformat() in advertised_dates
+            if calculation_date.isoformat() in aggregates_by_date
         )
         if not dates:
             destination = output_dir / path_prefix / "breadth" / "contributors"
@@ -123,7 +128,12 @@ class StaticBreadthContributorExporter:
                     "dates": [value.isoformat() for value in dates],
                 },
             )
-            self._validate_stage(staging, market=market, dates=dates)
+            self._validate_stage(
+                staging,
+                market=market,
+                dates=dates,
+                aggregates_by_date=aggregates_by_date,
+            )
             self._replace_directory(staging, destination)
         finally:
             if staging.exists():
@@ -137,6 +147,7 @@ class StaticBreadthContributorExporter:
         *,
         market: str,
         dates: tuple,
+        aggregates_by_date: dict[str, dict[str, Any]],
     ) -> None:
         expected_names = {"index.json"} | {
             f"{value.isoformat()}.json" for value in dates
@@ -159,6 +170,24 @@ class StaticBreadthContributorExporter:
                 or document.get("date") != calculation_date.isoformat()
             ):
                 raise ValueError("Contributor staging document identity is invalid")
+            try:
+                contributors = parse_contributor_rows(
+                    document.get("contributors") or ()
+                )
+                reconcile_contributor_aggregate(
+                    contributors,
+                    aggregates_by_date[calculation_date.isoformat()],
+                )
+            except (
+                BreadthContributorContractError,
+                KeyError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                raise StaticBreadthContributorUnavailable(
+                    f"Contributor shard disagrees with static breadth for "
+                    f"{market}/{calculation_date}: {exc}"
+                ) from exc
 
     @staticmethod
     def _replace_directory(staging: Path, destination: Path) -> None:

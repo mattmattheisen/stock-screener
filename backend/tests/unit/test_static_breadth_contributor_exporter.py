@@ -13,6 +13,7 @@ from app.models.breadth_contributor import (
 from app.models.market_breadth import MarketBreadth
 from app.services.static_breadth_contributor_exporter import (
     StaticBreadthContributorExporter,
+    StaticBreadthContributorUnavailable,
 )
 from app.services.static_artifact_combiner import StaticArtifactCombiner
 from sqlalchemy import create_engine
@@ -207,3 +208,35 @@ def test_successful_export_replaces_directory_and_removes_stale_shards(
 
     assert not (destination / "stale.json").exists()
     assert (destination / "index.json").is_file()
+
+
+def test_export_rejects_shards_that_disagree_with_static_breadth_history(
+    tmp_path: Path,
+):
+    db = _db_session()
+    calculation_date = date(2026, 8, 28)
+    _seed(db, "DE", calculation_date)
+    destination = tmp_path / "markets/de/breadth/contributors"
+    destination.mkdir(parents=True)
+    (destination / "index.json").write_text(
+        '{"previous": true}',
+        encoding="utf-8",
+    )
+    payload = _breadth_payload("DE", [calculation_date])
+    payload["payload"]["history_90d"][0]["stocks_up_4pct"] = 2
+
+    with pytest.raises(
+        StaticBreadthContributorUnavailable,
+        match="stocks_up_4pct",
+    ):
+        StaticBreadthContributorExporter().export(
+            db,
+            tmp_path,
+            Path("markets/de"),
+            payload,
+        )
+
+    assert json.loads((destination / "index.json").read_text()) == {
+        "previous": True
+    }
+    assert not (destination / f"{calculation_date.isoformat()}.json").exists()

@@ -190,6 +190,14 @@ function BreadthPage() {
     enabled: liveQueriesEnabled && Boolean(benchmarkSymbol),
     staleTime: 60_000,
   });
+  const contributorError = contributorDrilldown.dialogQuery.error;
+  const contributorErrorStatus = contributorError?.response?.status;
+  const contributorErrorDetail = contributorError?.response?.data?.detail;
+  const contributorInconsistent = contributorErrorStatus === 409
+    ? (typeof contributorErrorDetail === 'string'
+      ? contributorErrorDetail
+      : 'The contributor snapshot is inconsistent with breadth history.')
+    : contributorDrilldown.viewState.inconsistent;
   if (!runtimeReady || isLoadingCurrent) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
@@ -272,11 +280,11 @@ function BreadthPage() {
         row={contributorDrilldown.selected?.row}
         view={contributorDrilldown.viewState.view}
         isLoading={contributorDrilldown.dialogQuery.isLoading}
-        error={contributorDrilldown.dialogQuery.error?.response?.status === 404
+        error={[404, 409].includes(contributorErrorStatus)
           ? null
-          : contributorDrilldown.dialogQuery.error}
-        unavailable={contributorDrilldown.dialogQuery.error?.response?.status === 404}
-        inconsistent={contributorDrilldown.viewState.inconsistent}
+          : contributorError}
+        unavailable={contributorErrorStatus === 404}
+        inconsistent={contributorInconsistent}
         onRetry={() => contributorDrilldown.dialogQuery.refetch()}
         onClose={contributorDrilldown.close}
       />

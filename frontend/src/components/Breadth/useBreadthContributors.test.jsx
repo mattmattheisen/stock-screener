@@ -65,4 +65,27 @@ describe('useBreadthContributors', () => {
     await waitFor(() => expect(result.current.availableDates.has('2026-08-29')).toBe(true));
     expect(loadIndex).toHaveBeenCalledTimes(2);
   });
+
+  it('reloads a stale live date document when its cell is reopened', async () => {
+    const loadDate = vi.fn()
+      .mockResolvedValueOnce({ ...index, date: '2026-08-28', marker: 'first', contributors: [] })
+      .mockResolvedValueOnce({ ...index, date: '2026-08-28', marker: 'second', contributors: [] });
+    const { result } = renderHookWithProviders(() => useBreadthContributors({
+      market: 'US',
+      indexQueryKey: ['contributors', 'US'],
+      loadIndex: () => Promise.resolve(index),
+      loadDate,
+      documentStaleTime: 0,
+    }));
+    await waitFor(() => expect(result.current.availableDates.has('2026-08-28')).toBe(true));
+    const row = { date: '2026-08-28', stocks_up_4pct: 0 };
+
+    act(() => result.current.open('stocks_up_4pct', row));
+    await waitFor(() => expect(result.current.dialogQuery.data?.marker).toBe('first'));
+    act(() => result.current.close());
+    act(() => result.current.open('stocks_up_4pct', row));
+
+    await waitFor(() => expect(result.current.dialogQuery.data?.marker).toBe('second'));
+    expect(loadDate).toHaveBeenCalledTimes(2);
+  });
 });

@@ -181,6 +181,35 @@ describe('BreadthPage', () => {
     expect(breadthApi.getBreadthContributors).toHaveBeenCalledWith('HK', '2026-04-24');
   });
 
+  it('renders contributor 409 responses as an inconsistent snapshot', async () => {
+    const user = userEvent.setup();
+    breadthApi.getHistoricalBreadth.mockImplementation((startDate, endDate, limit, market = 'US') => (
+      Promise.resolve([{ ...breadthRow(market), stocks_up_4pct: 1 }])
+    ));
+    breadthApi.getBreadthContributorIndex.mockResolvedValue({
+      schema: 'breadth-contributors-v1',
+      market: 'HK',
+      calculation_revision: 3,
+      dates: ['2026-04-24'],
+    });
+    breadthApi.getBreadthContributors.mockRejectedValue({
+      response: {
+        status: 409,
+        data: { detail: 'Contributor count mismatch for stocks_up_4pct' },
+      },
+    });
+
+    renderBreadthPage();
+    await user.click(await screen.findByRole('button', {
+      name: 'View 1 contributing stocks for Stocks Up 4%+',
+    }));
+
+    expect(await screen.findByText(
+      'Contributor count mismatch for stocks_up_4pct',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load contributors/i)).not.toBeInTheDocument();
+  });
+
   it('explains the purpose of each recent-history indicator group', async () => {
     renderBreadthPage();
 

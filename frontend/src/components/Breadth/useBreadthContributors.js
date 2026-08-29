@@ -15,6 +15,7 @@ export const useBreadthContributors = ({
   loadIndex,
   loadDate,
   indexStaleTime = LIVE_INDEX_STALE_TIME_MS,
+  documentStaleTime = LIVE_INDEX_STALE_TIME_MS,
 }) => {
   const [selected, setSelected] = useState(null);
   const indexIdentity = JSON.stringify(indexQueryKey);
@@ -48,7 +49,7 @@ export const useBreadthContributors = ({
     ],
     queryFn: () => loadDate(selectedDate),
     enabled: Boolean(selectedDate && loadDate && availableDates.has(selectedDate)),
-    staleTime: Infinity,
+    staleTime: documentStaleTime,
   });
   const viewState = useMemo(() => {
     if (!dialogQuery.data || !selected) {
