@@ -7,8 +7,8 @@ Revises: 20260825_0032
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 
 revision = "20260829_0033"
 down_revision = "20260825_0032"
@@ -17,6 +17,14 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.add_column(
+        "market_breadth",
+        sa.Column(
+            "contributor_calculation_signature",
+            sa.String(length=64),
+            nullable=True,
+        ),
+    )
     op.create_table(
         "market_breadth_contributor_snapshots",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -86,3 +94,4 @@ def downgrade() -> None:
         table_name="market_breadth_contributor_snapshots",
     )
     op.drop_table("market_breadth_contributor_snapshots")
+    op.drop_column("market_breadth", "contributor_calculation_signature")

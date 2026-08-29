@@ -337,14 +337,18 @@ in every breadth-enabled market:
 1. load the same point-in-time universe, local-currency policy, OHLCV, and
    date-effective metadata required by revision 3;
 2. run the canonical engine for the target sessions;
-3. compare all 11 reconstructed contributor counts with the existing aggregate
-   rows; and
-4. commit a market's 20 snapshots only when every target date reconciles.
+3. compare the exact contributor calculation signature and all 11 reconstructed
+   contributor counts with the existing aggregate rows; and
+4. commit snapshots only for dates whose aggregate already carries matching
+   provenance.
 
-If any date fails, leave that market's contributor feature unavailable and
-produce an operator report identifying the market, date, signal, aggregate
-count, and reconstructed count. Never alter existing aggregate history merely
-to make a contributor backfill reconcile.
+Pre-migration and aggregate-only rows have no contributor calculation signature
+and must be skipped by contributor-only backfill. Populate those sessions only
+through a normal canonical breadth backfill that writes the aggregate,
+provenance, and contributor snapshot atomically. If any verified date fails,
+leave that date's contributor feature unavailable and produce an operator report
+identifying the market, date, and mismatch. Never overwrite an existing
+aggregate merely to force a contributor-only backfill to reconcile.
 
 After backfill, the normal breadth writer stores aggregate and contributor data
 for each new session in one transaction. The static deployment remains

@@ -4,6 +4,8 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.market_breadth import MarketBreadth
@@ -14,8 +16,6 @@ from app.services.breadth_contributor_backfill import (
 from app.services.derived_data_execution_policy import (
     DerivedDataExecutionMode,
 )
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 
 def _db_session():
@@ -24,11 +24,18 @@ def _db_session():
     return sessionmaker(bind=engine)()
 
 
-def _aggregate(market: str, calculation_date: date, *, revision: int = 3):
+def _aggregate(
+    market: str,
+    calculation_date: date,
+    *,
+    revision: int = 3,
+    contributor_signature: str | None = "verified",
+):
     return MarketBreadth(
         market=market,
         date=calculation_date,
         calculation_revision=revision,
+        contributor_calculation_signature=contributor_signature,
         stocks_up_4pct=0,
         stocks_down_4pct=0,
         stocks_up_25pct_quarter=0,
@@ -102,6 +109,33 @@ def test_service_with_no_revision_three_aggregates_is_a_noop():
     executor.execute.assert_not_called()
 
 
+def test_service_skips_legacy_aggregates_without_contributor_provenance():
+    db = _db_session()
+    db.add(
+        _aggregate(
+            "US",
+            date(2026, 8, 1),
+            contributor_signature=None,
+        )
+    )
+    db.commit()
+    executor = MagicMock()
+
+    report = BreadthContributorBackfillService(
+        db,
+        calculator=MagicMock(market="US"),
+        executor=executor,
+    ).run(limit=20)
+
+    assert report == {
+        "market": "US",
+        "requested_dates": 1,
+        "committed_dates": 0,
+        "skipped_unverifiable_dates": 1,
+    }
+    executor.execute.assert_not_called()
+
+
 def test_cli_runs_each_requested_market_and_reports_json(capsys):
     calls = []
 
@@ -150,3 +184,18 @@ def test_cli_returns_nonzero_when_any_market_fails(capsys):
     assert exit_code == 1
     output = capsys.readouterr().out
     assert "CA,2026-08-28,stocks_up_4pct,2,1" in output
+
+
+def test_cli_returns_nonzero_when_legacy_dates_are_skipped(capsys):
+    exit_code = main(
+        ["--markets", "US", "--limit", "20"],
+        run_market=lambda _market, _limit: {
+            "market": "US",
+            "requested_dates": 20,
+            "committed_dates": 0,
+            "skipped_unverifiable_dates": 20,
+        },
+    )
+
+    assert exit_code == 1
+    assert '"skipped_unverifiable_dates": 20' in capsys.readouterr().out

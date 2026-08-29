@@ -38,21 +38,34 @@ class BreadthContributorBackfillService:
         if limit < 1:
             raise ValueError("Contributor backfill limit must be positive")
         market = self._calculator.market.upper()
-        newest_dates = [
-            row.date
-            for row in (
-                breadth_query(self._db, market=market)
-                .with_entities(MarketBreadth.date)
-                .order_by(MarketBreadth.date.desc())
-                .limit(limit)
-                .all()
+        newest_rows = (
+            breadth_query(self._db, market=market)
+            .with_entities(
+                MarketBreadth.date,
+                MarketBreadth.contributor_calculation_signature,
             )
-        ]
-        if not newest_dates:
+            .order_by(MarketBreadth.date.desc())
+            .limit(limit)
+            .all()
+        )
+        if not newest_rows:
             return {
                 "market": market,
                 "requested_dates": 0,
                 "committed_dates": 0,
+            }
+        newest_dates = [
+            row.date
+            for row in newest_rows
+            if row.contributor_calculation_signature is not None
+        ]
+        skipped_unverifiable_dates = len(newest_rows) - len(newest_dates)
+        if not newest_dates:
+            return {
+                "market": market,
+                "requested_dates": len(newest_rows),
+                "committed_dates": 0,
+                "skipped_unverifiable_dates": skipped_unverifiable_dates,
             }
 
         policy = DerivedDataExecutionPolicy(
@@ -65,8 +78,11 @@ class BreadthContributorBackfillService:
             require_complete_cache_coverage=True,
             contributor_only=True,
         ).to_legacy_dict()
-        return {
+        report: dict[str, int | str] = {
             "market": market,
-            "requested_dates": len(newest_dates),
+            "requested_dates": len(newest_rows),
             "committed_dates": int(result["processed"]),
         }
+        if skipped_unverifiable_dates:
+            report["skipped_unverifiable_dates"] = skipped_unverifiable_dates
+        return report

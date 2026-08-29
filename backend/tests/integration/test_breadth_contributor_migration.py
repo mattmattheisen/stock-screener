@@ -10,7 +10,6 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = (
     BACKEND_ROOT
@@ -73,6 +72,11 @@ def test_contributor_migration_creates_and_removes_parent_child_contract(tmp_pat
         column["name"]: column
         for column in inspector.get_columns("market_breadth_contributor_snapshots")
     }
+    aggregate_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("market_breadth")
+    }
+    assert aggregate_columns["contributor_calculation_signature"]["nullable"] is True
     child_columns = {
         column["name"]: column
         for column in inspector.get_columns("market_breadth_contributors")
@@ -97,4 +101,8 @@ def test_contributor_migration_creates_and_removes_parent_child_contract(tmp_pat
         "market_breadth_contributors",
     }.isdisjoint(sa.inspect(engine).get_table_names())
     assert "market_breadth" in sa.inspect(engine).get_table_names()
+    assert "contributor_calculation_signature" not in {
+        column["name"]
+        for column in sa.inspect(engine).get_columns("market_breadth")
+    }
     engine.dispose()

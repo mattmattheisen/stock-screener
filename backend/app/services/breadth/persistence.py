@@ -16,6 +16,7 @@ from app.models.market_breadth import MarketBreadth
 from .contributors import (
     BREADTH_CONTRIBUTOR_SIGNALS,
     CONTRIBUTOR_RETENTION_SESSIONS,
+    contributor_calculation_signature,
     reconcile_contributor_counts,
 )
 from .types import (
@@ -96,6 +97,11 @@ class BreadthPersistence:
                 result,
                 duration_seconds=duration_seconds,
             )
+            record.contributor_calculation_signature = (
+                contributor_calculation_signature(contributor_snapshot.contributors)
+                if contributor_snapshot is not None
+                else None
+            )
             self._db.flush()
             if contributor_snapshot is not None:
                 self._replace_snapshot_without_commit(contributor_snapshot)
@@ -116,9 +122,8 @@ class BreadthPersistence:
         self,
         results: Iterable[BreadthDailyResult],
         *,
-        contributor_snapshots_by_date: Mapping[
-            date, BreadthContributorSnapshotResult
-        ] | None = None,
+        contributor_snapshots_by_date: Mapping[date, BreadthContributorSnapshotResult]
+        | None = None,
         duration_seconds_by_date: Mapping[date, float] | None = None,
     ) -> tuple[MarketBreadth, ...]:
         ordered_results = tuple(results)
@@ -145,6 +150,17 @@ class BreadthPersistence:
                 )
                 for result in ordered_results
             )
+            for record, result in zip(records, ordered_results, strict=True):
+                snapshot = (
+                    contributor_snapshots_by_date[result.calculation_date]
+                    if contributor_snapshots_by_date is not None
+                    else None
+                )
+                record.contributor_calculation_signature = (
+                    contributor_calculation_signature(snapshot.contributors)
+                    if snapshot is not None
+                    else None
+                )
             self._db.flush()
             if contributor_snapshots_by_date is not None:
                 for result in ordered_results:
@@ -209,6 +225,19 @@ class BreadthPersistence:
                 )
             if stored.calculation_revision != expected.calculation_revision:
                 raise ValueError("Stored aggregate calculation revision mismatch")
+            expected_signature = contributor_calculation_signature(
+                snapshot.contributors
+            )
+            if stored.contributor_calculation_signature is None:
+                raise ValueError(
+                    "Stored aggregate contributor provenance is unavailable for "
+                    f"{snapshot.market}/{snapshot.calculation_date.isoformat()}"
+                )
+            if stored.contributor_calculation_signature != expected_signature:
+                raise ValueError(
+                    "Stored aggregate contributor provenance mismatch for "
+                    f"{snapshot.market}/{snapshot.calculation_date.isoformat()}"
+                )
             for definition in BREADTH_CONTRIBUTOR_SIGNALS.values():
                 if getattr(stored, definition.aggregate_field) != getattr(
                     expected.values,

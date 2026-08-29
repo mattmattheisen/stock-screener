@@ -3,9 +3,12 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import MagicMock
 
-import app.services.breadth_backfill as breadth_backfill_module
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+import app.services.breadth_backfill as breadth_backfill_module
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.breadth_contributor import (
@@ -14,6 +17,7 @@ from app.models.breadth_contributor import (
 )
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
+from app.services.breadth.contributors import contributor_calculation_signature
 from app.services.breadth.types import BreadthUniverseMember, BreadthUniverseSnapshot
 from app.services.breadth.universe import breadth_eligibility_signature
 from app.services.breadth_backfill import (
@@ -30,8 +34,6 @@ from app.services.derived_data_execution_policy import (
 from app.services.static_breadth_eligibility import (
     static_breadth_eligibility_signature,
 )
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 
 def _flat_price_df(
@@ -283,6 +285,9 @@ def test_contributor_only_backfill_never_updates_aggregate_rows():
             stocks_up_13pct_34days=0,
             stocks_down_13pct_34days=0,
             atr_10x_extension_count=0,
+            contributor_calculation_signature=(
+                contributor_calculation_signature(())
+            ),
             total_stocks_scanned=1,
         )
     )

@@ -72,7 +72,10 @@ def main(
     failed = False
     for market in markets:
         try:
-            reports.append(dict(run_market(market, args.limit)))
+            report = dict(run_market(market, args.limit))
+            reports.append(report)
+            if int(report.get("skipped_unverifiable_dates", 0)) > 0:
+                failed = True
         except Exception as exc:
             failed = True
             reports.append({"market": market, "error": str(exc)})

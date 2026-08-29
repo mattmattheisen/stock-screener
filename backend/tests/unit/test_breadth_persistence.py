@@ -12,6 +12,7 @@ from app.models.breadth_contributor import (
     MarketBreadthContributorSnapshot,
 )
 from app.models.market_breadth import MarketBreadth
+from app.services.breadth.contributors import contributor_calculation_signature
 from app.services.breadth.persistence import BreadthPersistence
 from app.services.breadth.types import (
     BreadthContributor,
@@ -100,7 +101,7 @@ def _snapshot(
 
 
 def test_persistence_upserts_every_current_field_in_one_market_partition():
-    engine, db = _database()
+    _engine, db = _database()
     persistence = BreadthPersistence(db)
 
     persistence.upsert_daily(_result(), duration_seconds=1.25)
@@ -141,6 +142,22 @@ def test_persistence_rolls_back_aggregate_when_contributor_counts_disagree():
     assert db.query(MarketBreadthContributor).count() == 4
 
 
+def test_persistence_stores_contributor_provenance_with_aggregate():
+    _engine, db = _database()
+    snapshot = _snapshot()
+
+    BreadthPersistence(db).upsert_daily(
+        _result(),
+        contributor_snapshot=snapshot,
+        duration_seconds=1.0,
+    )
+
+    assert (
+        db.query(MarketBreadth).one().contributor_calculation_signature
+        == contributor_calculation_signature(snapshot.contributors)
+    )
+
+
 def test_daily_upsert_deletes_stale_snapshot_when_fresh_snapshot_is_missing():
     """Catches serving stale drilldown rows after aggregate-only recalculation."""
     _engine, db = _database()
@@ -160,6 +177,7 @@ def test_daily_upsert_deletes_stale_snapshot_when_fresh_snapshot_is_missing():
     assert db.query(MarketBreadth).one().advancing_count == 9
     assert db.query(MarketBreadthContributorSnapshot).count() == 0
     assert db.query(MarketBreadthContributor).count() == 0
+    assert db.query(MarketBreadth).one().contributor_calculation_signature is None
 
 
 def test_bulk_upsert_deletes_stale_snapshot_when_fresh_snapshots_are_missing():
@@ -204,3 +222,32 @@ def test_contributor_retention_keeps_twenty_dates_and_all_aggregate_history():
     }
     assert first_date not in retained_dates
     assert first_date + timedelta(days=20) in retained_dates
+
+
+def test_contributor_only_replacement_rejects_equal_count_identity_drift():
+    _engine, db = _database()
+    persistence = BreadthPersistence(db)
+    original = _snapshot()
+    persistence.upsert_daily(
+        _result(),
+        contributor_snapshot=original,
+        duration_seconds=0.1,
+    )
+    changed = replace(
+        original,
+        contributors=(
+            replace(original.contributors[0], symbol="ZZZ"),
+            *original.contributors[1:],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="provenance"):
+        persistence.replace_contributor_snapshots(
+            (changed,),
+            expected_aggregates={changed.calculation_date: _result()},
+        )
+
+    stored_symbols = {
+        row.symbol for row in db.query(MarketBreadthContributor).all()
+    }
+    assert stored_symbols == {"AAA", "BBB", "CCC", "DDD"}

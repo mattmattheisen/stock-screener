@@ -2,8 +2,11 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import app.services.breadth.rebuild as rebuild_module
 import pandas as pd
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+
+import app.services.breadth.rebuild as rebuild_module
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.breadth_contributor import (
@@ -23,8 +26,6 @@ from app.services.point_in_time_universe_service import (
     PointInTimeUniverseMember,
     hash_point_in_time_universe_symbols,
 )
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 
 
 class _FakeRebuildService:
@@ -251,6 +252,14 @@ def test_rebuild_reads_delisted_history_at_its_last_membership_date():
         db.execute(text("SELECT COUNT(*) FROM market_breadth_rebuild")).scalar_one()
         == 1
     )
+    assert len(
+        db.execute(
+            text(
+                "SELECT contributor_calculation_signature "
+                "FROM market_breadth_rebuild"
+            )
+        ).scalar_one()
+    ) == 64
     price_cache.get_many_cached_only_fresh.assert_called_once_with(
         ["DELISTED"],
         period="2y",

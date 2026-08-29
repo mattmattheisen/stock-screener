@@ -36,6 +36,7 @@ from .contributors import (
     CONTRIBUTOR_RETENTION_SESSIONS,
     CONTRIBUTOR_SCHEMA_ID,
     BreadthContributorContractError,
+    contributor_calculation_signature,
     parse_contributor_rows,
     reconcile_contributor_aggregate,
     reconcile_contributor_counts,
@@ -250,6 +251,9 @@ class BreadthRebuildService:
             snapshot = contributor_snapshots_by_date[result.calculation_date]
             reconcile_contributor_counts(snapshot, result)
             values = result.to_record_mapping()
+            values["contributor_calculation_signature"] = (
+                contributor_calculation_signature(snapshot.contributors)
+            )
             values["calculation_duration_seconds"] = (
                 duration_seconds_by_date.get(result.calculation_date)
                 if duration_seconds_by_date is not None
@@ -508,6 +512,7 @@ class BreadthRebuildService:
             if (
                 not row["eligibility_signature"]
                 or not row["stockbee_eligibility_signature"]
+                or not row["contributor_calculation_signature"]
             ):
                 errors.append(f"missing_signature:{key[0]}:{key[1]}")
             broad = row["broad_universe_count"]
