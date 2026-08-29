@@ -210,6 +210,16 @@ async def test_contributor_index_and_document_are_additive_endpoints(client, ses
         }
     ]
 
+    openapi = app.openapi()
+    for model_name in (
+        "BreadthContributorIndexResponse",
+        "BreadthContributorDocumentResponse",
+    ):
+        schema = openapi["components"]["schemas"][model_name]
+        assert "schema" in schema["properties"]
+        assert "schema_id" not in schema["properties"]
+        assert "schema" in schema["required"]
+
 
 @pytest.mark.asyncio
 async def test_contributor_document_returns_404_or_409(client, session):

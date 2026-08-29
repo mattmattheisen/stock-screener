@@ -18,6 +18,7 @@ EXTRACTED_MODULES = (
     "app/services/group_ranking_repository.py",
     "app/services/static_chart_bundle_exporter.py",
     "app/services/static_breadth_section_builder.py",
+    "app/services/static_breadth_contributor_asset_validator.py",
     "app/services/static_group_section_builder.py",
     "app/services/static_artifact_combiner.py",
     "app/services/feature_run_group_enrichment.py",

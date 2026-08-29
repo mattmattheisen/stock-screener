@@ -58,6 +58,10 @@ Breadth-capable static market artifacts must contain a revision-3 `breadth.json`
 
 Revision 3 uses the same fixed local-market StockBee thresholds as the live app and has no historical-FX input. Markets whose catalog capability disables breadth (currently AU, SG, and MY) publish their other supported static sections without requiring breadth or breadth-derived exposure.
 
+Contributor drilldowns are optional additive assets. When available, a market entry advertises `assets.breadth_contributors.index_path`; the index uses `breadth-contributors-v1` and references at most 20 newest-first per-session documents under `markets/<market>/breadth/contributors/`. Each stock is stored once with all qualifying signals plus its frozen company name and IBD group. The combiner validates every document and reconciles its 11 supported signal counts to `breadth.json`. Missing legacy assets remain valid, while an invalid contributor asset is omitted without removing the market or its aggregate breadth page.
+
+The static frontend loads the small index with the market bundle and fetches a date document only after a user clicks an advertised nonzero Recent History count. The live and static dialogs therefore use the same schema and do not recalculate breadth formulas in the browser.
+
 ## Maintaining Static Assets
 
 - Keep the static page tour GIF aligned with the exported static routes.
