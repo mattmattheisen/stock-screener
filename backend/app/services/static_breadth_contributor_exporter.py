@@ -20,6 +20,7 @@ from .breadth.contributor_query import (
 )
 from .breadth.contributors import (
     BreadthContributorContractError,
+    contributor_calculation_signature,
     parse_contributor_rows,
     reconcile_contributor_aggregate,
 )
@@ -51,6 +52,7 @@ class StaticBreadthContributorExporter:
         output_dir: Path,
         path_prefix: Path,
         breadth_payload: dict[str, Any],
+        expected_calculation_signatures: dict[str, str] | None = None,
     ) -> dict[str, str] | None:
         if not breadth_payload.get("available", False):
             return None
@@ -133,6 +135,7 @@ class StaticBreadthContributorExporter:
                 market=market,
                 dates=dates,
                 aggregates_by_date=aggregates_by_date,
+                expected_calculation_signatures=expected_calculation_signatures,
             )
             self._replace_directory(staging, destination)
         finally:
@@ -148,6 +151,7 @@ class StaticBreadthContributorExporter:
         market: str,
         dates: tuple,
         aggregates_by_date: dict[str, dict[str, Any]],
+        expected_calculation_signatures: dict[str, str] | None,
     ) -> None:
         expected_names = {"index.json"} | {
             f"{value.isoformat()}.json" for value in dates
@@ -174,6 +178,22 @@ class StaticBreadthContributorExporter:
                 contributors = parse_contributor_rows(
                     document.get("contributors") or ()
                 )
+                expected_signature = None
+                if expected_calculation_signatures is not None:
+                    expected_signature = expected_calculation_signatures.get(
+                        calculation_date.isoformat()
+                    )
+                    if expected_signature is None:
+                        raise BreadthContributorContractError(
+                            "Static breadth engine did not provide a contributor "
+                            "calculation signature"
+                        )
+                    actual_signature = contributor_calculation_signature(contributors)
+                    if actual_signature != expected_signature:
+                        raise BreadthContributorContractError(
+                            "Contributor calculation signature does not match "
+                            "the static breadth engine"
+                        )
                 reconcile_contributor_aggregate(
                     contributors,
                     aggregates_by_date[calculation_date.isoformat()],

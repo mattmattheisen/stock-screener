@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from .types import (
     BreadthContributor,
@@ -97,6 +99,12 @@ class BreadthContributorContractError(ValueError):
     """Contributor rows or counts violate the shared transport contract."""
 
 
+class CalculationContributor(Protocol):
+    symbol: str
+    daily_change_pct: float | None
+    signals: Mapping[str, float]
+
+
 def parse_contributor_rows(
     rows: Iterable[Mapping[str, Any]],
 ) -> tuple[BreadthContributor, ...]:
@@ -183,6 +191,42 @@ def contributor_signal_counts(
         for signal_key in contributor.signals:
             counts[signal_key] += 1
     return MappingProxyType(counts)
+
+
+def contributor_calculation_signature(
+    contributors: Iterable[CalculationContributor],
+) -> str:
+    """Identify the calculation-derived portion of a contributor snapshot.
+
+    Company and group metadata are deliberately excluded: those values are frozen
+    when the snapshot is created, while this signature proves that its symbols and
+    qualifying values came from the same price calculation as the aggregate.
+    """
+
+    def normalized_number(value: float) -> str:
+        return format(float(value), ".12g")
+
+    payload = [
+        {
+            "symbol": contributor.symbol,
+            "daily_change_pct": (
+                normalized_number(contributor.daily_change_pct)
+                if contributor.daily_change_pct is not None
+                else None
+            ),
+            "signals": {
+                key: normalized_number(value)
+                for key, value in sorted(contributor.signals.items())
+            },
+        }
+        for contributor in sorted(contributors, key=lambda item: item.symbol)
+    ]
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def reconcile_contributor_aggregate(

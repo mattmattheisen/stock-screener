@@ -434,6 +434,10 @@ class StaticSiteExportService:
             breadth_payload=breadth_payload,
             groups_payload=groups_payload,
         )
+        contributor_calculation_signatures = breadth_payload.pop(
+            "_contributor_calculation_signatures",
+            None,
+        )
 
         scan_manifest["charts"] = {
             "path": chart_manifest["path"],
@@ -475,6 +479,7 @@ class StaticSiteExportService:
             output_dir=output_dir,
             path_prefix=path_prefix,
             breadth_payload=breadth_payload,
+            expected_calculation_signatures=contributor_calculation_signatures,
             market=market,
             warnings=warnings,
         )
@@ -534,6 +539,7 @@ class StaticSiteExportService:
         breadth_payload: dict[str, Any],
         market: str,
         warnings: list[str],
+        expected_calculation_signatures: dict[str, str] | None = None,
     ) -> dict[str, str] | None:
         try:
             return self._breadth_contributor_exporter.export(
@@ -541,6 +547,7 @@ class StaticSiteExportService:
                 output_dir,
                 path_prefix,
                 breadth_payload,
+                expected_calculation_signatures,
             )
         except StaticBreadthContributorUnavailable as exc:
             warning = f"Static breadth contributor data unavailable for {market}: {exc}"

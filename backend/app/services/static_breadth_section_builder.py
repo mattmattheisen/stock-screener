@@ -16,11 +16,13 @@ from app.services.breadth.contributor_query import (
     get_contributor_document,
     list_contributor_dates,
 )
+from app.services.breadth.contributors import contributor_calculation_signature
 from app.services.breadth.engine import BreadthEngine, BreadthEngineRequest
 from app.services.breadth.formulas import prices_for_feature_window
 from app.services.breadth.market_policy import get_breadth_market_policy
 from app.services.breadth.types import (
     CURRENT_BREADTH_CALCULATION_REVISION,
+    BreadthEngineBatchResult,
     BreadthUniverseMember,
     BreadthUniverseSnapshot,
 )
@@ -256,12 +258,25 @@ class StaticBreadthSectionBuilder:
             currencies_by_symbol=currencies_by_symbol,
             universes_by_date=universes_by_date,
         )
-        metrics_by_date = self._compute_breadth_metrics_by_date(
+        engine_batch = self._calculate_breadth_batch(
             canonical_dates,
             price_data,
             market=market,
             engine_inputs=engine_inputs,
         )
+        metrics_by_date = {
+            item_date: {
+                **result.to_record_mapping(),
+                "date": item_date.isoformat(),
+            }
+            for item_date, result in engine_batch.daily_results.items()
+        }
+        contributor_calculation_signatures = {
+            item_date.isoformat(): contributor_calculation_signature(
+                snapshot.contributors
+            )
+            for item_date, snapshot in engine_batch.contributor_snapshots.items()
+        }
         current = metrics_by_date.get(expected_as_of_date)
         if current is None:
             raise StaticSiteSectionUnavailableError(
@@ -286,6 +301,7 @@ class StaticBreadthSectionBuilder:
             market=market,
             ordered_dates=ordered_dates,
             metrics_by_date=metrics_by_date,
+            expected_calculation_signatures=contributor_calculation_signatures,
         )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
@@ -296,6 +312,7 @@ class StaticBreadthSectionBuilder:
                 f"feature-run:{market}:{expected_as_of_date.isoformat()}"
                 f"|breadth-r{CURRENT_BREADTH_CALCULATION_REVISION}"
             ),
+            "_contributor_calculation_signatures": (contributor_calculation_signatures),
             "market": market,
             "payload": {
                 "current": current,
@@ -329,6 +346,7 @@ class StaticBreadthSectionBuilder:
         market: str,
         ordered_dates: list[date],
         metrics_by_date: Mapping[date, Mapping[str, Any]],
+        expected_calculation_signatures: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Attribute ±4% movers to IBD industry groups for the most recent sessions.
 
@@ -367,6 +385,22 @@ class StaticBreadthSectionBuilder:
             for calculation_date in index.dates
             if calculation_date in attribution_dates
         )
+        mismatched_provenance = [
+            document.date.isoformat()
+            for document in documents
+            if expected_calculation_signatures is not None
+            and contributor_calculation_signature(document.contributors)
+            != expected_calculation_signatures.get(document.date.isoformat())
+        ]
+        if mismatched_provenance:
+            return {
+                "available": False,
+                "reason": (
+                    "Contributor snapshots do not match the generated breadth "
+                    "calculation for: "
+                    f"{', '.join(mismatched_provenance)}."
+                ),
+            }
         history = BreadthAttributionService().compute(documents=documents)
         attribution_by_date = {day["date"]: day for day in history}
         mismatched_dates: list[str] = []
@@ -466,12 +500,12 @@ class StaticBreadthSectionBuilder:
     ) -> dict[date, dict[str, Any]]:
         if not canonical_dates:
             return {}
-        inputs = engine_inputs or self._engine_input_factory.build(
+        calculated = self._calculate_breadth_batch(
+            canonical_dates,
+            price_data,
             market=market,
-            canonical_dates=canonical_dates,
-            price_data=price_data,
-        )
-        calculated = self._engine.calculate(inputs.request)
+            engine_inputs=engine_inputs,
+        ).daily_results
         return {
             item_date: {
                 **result.to_record_mapping(),
@@ -479,6 +513,21 @@ class StaticBreadthSectionBuilder:
             }
             for item_date, result in calculated.items()
         }
+
+    def _calculate_breadth_batch(
+        self,
+        canonical_dates: list[date],
+        price_data: dict[str, pd.DataFrame | None],
+        *,
+        market: str = STATIC_DEFAULT_MARKET,
+        engine_inputs: StaticBreadthEngineInputs | None = None,
+    ) -> BreadthEngineBatchResult:
+        inputs = engine_inputs or self._engine_input_factory.build(
+            market=market,
+            canonical_dates=canonical_dates,
+            price_data=price_data,
+        )
+        return self._engine.calculate_with_contributors(inputs.request)
 
     @staticmethod
     def _serialize_close_history(

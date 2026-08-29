@@ -3,21 +3,25 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from app.database import Base
 from app.models.breadth_contributor import (
     MarketBreadthContributor,
     MarketBreadthContributorSnapshot,
 )
 from app.models.market_breadth import MarketBreadth
+from app.services.breadth.contributors import contributor_calculation_signature
+from app.services.breadth.types import BreadthContributor
+from app.services.static_artifact_combiner import StaticArtifactCombiner
 from app.services.static_breadth_contributor_exporter import (
     StaticBreadthContributorExporter,
     StaticBreadthContributorUnavailable,
 )
-from app.services.static_artifact_combiner import StaticArtifactCombiner
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 
 def _db_session():
@@ -240,3 +244,34 @@ def test_export_rejects_shards_that_disagree_with_static_breadth_history(
         "previous": True
     }
     assert not (destination / f"{calculation_date.isoformat()}.json").exists()
+
+
+def test_export_rejects_equal_counts_from_different_static_contributors(
+    tmp_path: Path,
+):
+    db = _db_session()
+    calculation_date = date(2026, 8, 28)
+    _seed(db, "DE", calculation_date)
+    expected_signature = contributor_calculation_signature(
+        (
+            BreadthContributor(
+                symbol="BBB",
+                company_name=None,
+                ibd_industry_group="No Group",
+                daily_change_pct=5.0,
+                signals=MappingProxyType({"up_4pct": 5.0}),
+            ),
+        )
+    )
+
+    with pytest.raises(
+        StaticBreadthContributorUnavailable,
+        match="calculation signature",
+    ):
+        StaticBreadthContributorExporter().export(
+            db,
+            tmp_path,
+            Path("markets/de"),
+            _breadth_payload("DE", [calculation_date]),
+            {calculation_date.isoformat(): expected_signature},
+        )

@@ -9,9 +9,13 @@ from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from unittest.mock import MagicMock
 
-import app.services.static_site_export_service as export_module
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
+
+import app.services.static_site_export_service as export_module
 from app.database import Base
 from app.domain.relative_strength import (
     BALANCED_RS_FORMULA_VERSION,
@@ -22,17 +26,19 @@ from app.domain.relative_strength import (
 from app.domain.scanning.filter_expression_model import FilterExpression
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.models.relative_strength import MarketRsFormulaPointer, MarketRsRun
-from app.models.industry import IBDGroupRank
 from app.models.breadth_contributor import (
     MarketBreadthContributor,
     MarketBreadthContributorSnapshot,
 )
+from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.market_exposure import MarketExposure
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
-from app.services.breadth.universe import breadth_eligibility_signature
-from app.services.breadth.contributors import BREADTH_CONTRIBUTOR_SIGNALS
+from app.services.breadth.contributors import (
+    BREADTH_CONTRIBUTOR_SIGNALS,
+    contributor_calculation_signature,
+)
 from app.services.breadth.persistence import BreadthPersistence
 from app.services.breadth.types import (
     BreadthContributor,
@@ -41,15 +47,16 @@ from app.services.breadth.types import (
     BreadthEligibilityCounts,
     BreadthIndicatorValues,
 )
+from app.services.breadth.universe import breadth_eligibility_signature
 from app.services.group_ranking_history import select_market_run_series
 from app.services.key_market_history import build_key_market_entries
 from app.services.static_artifact_combiner import StaticArtifactFormulaError
+from app.services.static_breadth_contributor_exporter import (
+    StaticBreadthContributorUnavailable,
+)
 from app.services.static_breadth_section_builder import (
     StaticBreadthEngineInputFactory,
     StaticBreadthSectionBuilder,
-)
-from app.services.static_breadth_contributor_exporter import (
-    StaticBreadthContributorUnavailable,
 )
 from app.services.static_chart_bundle_exporter import StaticChartBundleConfig
 from app.services.static_groups_rrg_export import (
@@ -65,9 +72,6 @@ from app.services.static_site_export_service import (
     StaticSiteExportService,
     StaticSiteSectionUnavailableError,
 )
-from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -644,6 +648,7 @@ def test_export_writes_serializable_manifest_and_page_bundles(
         "schema_version": STATIC_SITE_SCHEMA_VERSION,
         "generated_at": "2026-03-31T22:00:00Z",
         "available": True,
+        "_contributor_calculation_signatures": {"2026-03-31": "signature"},
         "payload": {"current": {"date": "2026-03-31"}},
     }
     groups_payload = {
@@ -682,10 +687,16 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: (scan_manifest, []))
     monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
     monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
-    service._breadth_contributor_exporter = SimpleNamespace(
-        export=lambda *_args: {
+    exported_signatures = {}
+
+    def export_contributors(*args):
+        exported_signatures.update(args[4])
+        return {
             "index_path": "markets/us/breadth/contributors/index.json"
         }
+
+    service._breadth_contributor_exporter = SimpleNamespace(
+        export=export_contributors
     )
     source_calls: dict[str, str] = {}
 
@@ -744,6 +755,8 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert manifest["warnings"] == []
     assert scan["charts"]["path"] == "charts/index.json"
     assert breadth["payload"]["current"]["date"] == "2026-03-31"
+    assert "_contributor_calculation_signatures" not in breadth
+    assert exported_signatures == {"2026-03-31": "signature"}
     assert groups["payload"]["rankings"]["rankings"][0]["industry_group"] == "Semiconductors"
     assert not (output_dir / "themes").exists()
     assert result.manifest == manifest
@@ -2323,6 +2336,8 @@ def test_build_breadth_payload_uses_full_common_stock_universe_not_scan_rows(
         ("AAA", "BBB")
     )
     assert (("AAA", "BBB"), "2y") in requested_periods
+    signatures = payload["_contributor_calculation_signatures"]
+    assert len(signatures["2026-04-24"]) == 64
 
 
 def test_build_breadth_payload_uses_builder_cache_dependencies_without_rebinding(
@@ -2489,7 +2504,7 @@ def test_build_breadth_payload_includes_us_group_attribution(
     )
 
     attribution = payload["payload"]["group_attribution"]
-    assert attribution["available"] is True
+    assert attribution["available"] is True, attribution
     assert attribution["market"] == "US"
     assert attribution["threshold_pct"] == 4.0
     assert attribution["latest_date"] == "2026-04-24"
@@ -2570,6 +2585,45 @@ def test_group_attribution_is_unavailable_when_snapshot_counts_drift_from_static
 
     assert attribution["available"] is False
     assert "generated breadth history" in attribution["reason"].lower()
+
+
+def test_group_attribution_rejects_equal_counts_from_different_contributors(
+    service_and_session_factory,
+):
+    service, session_factory = service_and_session_factory
+    target_date = date(2026, 4, 1)
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=target_date,
+        contributors=(("AAA", "Software", 8.0, "up_4pct"),),
+    )
+    expected_signature = contributor_calculation_signature(
+        (
+            BreadthContributor(
+                symbol="BBB",
+                company_name=None,
+                ibd_industry_group="No Group",
+                daily_change_pct=8.0,
+                signals=MappingProxyType({"up_4pct": 8.0}),
+            ),
+        )
+    )
+
+    with session_factory() as db:
+        attribution = service._breadth_builder._build_group_attribution(  # noqa: SLF001
+            db=db,
+            market="US",
+            ordered_dates=[target_date],
+            metrics_by_date={
+                target_date: {"stocks_up_4pct": 1, "stocks_down_4pct": 0}
+            },
+            expected_calculation_signatures={
+                target_date.isoformat(): expected_signature
+            },
+        )
+
+    assert attribution["available"] is False
+    assert "generated breadth calculation" in attribution["reason"].lower()
 
 
 def test_group_attribution_preserves_missing_zero_mover_dates(
