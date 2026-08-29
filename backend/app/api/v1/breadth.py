@@ -19,6 +19,8 @@ from ...models.market_breadth import MarketBreadth
 from ...schemas.breadth import (
     BackfillRequest,
     BackfillResponse,
+    BreadthContributorDocumentResponse,
+    BreadthContributorIndexResponse,
     BreadthResponse,
     BreadthSummary,
     CalculationRequest,
@@ -28,6 +30,12 @@ from ...schemas.breadth import (
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...services.breadth.query import breadth_query, latest_breadth
+from ...services.breadth.contributor_query import (
+    BreadthContributorSnapshotInconsistent,
+    BreadthContributorSnapshotUnavailable,
+    get_contributor_document,
+    list_contributor_dates,
+)
 from ...wiring.bootstrap import get_ui_snapshot_service
 
 logger = logging.getLogger(__name__)
@@ -61,6 +69,38 @@ def _require_task_controls() -> None:
             status_code=403,
             detail="Manual task controls are disabled in desktop mode.",
         )
+
+
+@router.get(
+    "/contributors/index",
+    response_model=BreadthContributorIndexResponse,
+)
+async def get_breadth_contributor_index(
+    market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
+    db: Session = Depends(get_db),
+):
+    """List dates with complete, validated contributor snapshots."""
+    normalized_market = _normalize_market_param(market)
+    return list_contributor_dates(db, normalized_market)
+
+
+@router.get(
+    "/contributors",
+    response_model=BreadthContributorDocumentResponse,
+)
+async def get_breadth_contributors(
+    date: date = Query(..., description="Trading date (YYYY-MM-DD)"),
+    market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
+    db: Session = Depends(get_db),
+):
+    """Return the frozen contributor snapshot for one market session."""
+    normalized_market = _normalize_market_param(market)
+    try:
+        return get_contributor_document(db, normalized_market, date)
+    except BreadthContributorSnapshotUnavailable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BreadthContributorSnapshotInconsistent as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/current", response_model=BreadthResponse)

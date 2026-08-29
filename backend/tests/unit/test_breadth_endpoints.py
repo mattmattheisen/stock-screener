@@ -13,6 +13,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
+from app.models.breadth_contributor import (
+    MarketBreadthContributor,
+    MarketBreadthContributorSnapshot,
+)
 from app.models.market_breadth import MarketBreadth
 from app.services import server_auth
 
@@ -33,13 +37,18 @@ def session():
         poolclass=StaticPool,
     )
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    tables = [
+        MarketBreadth.__table__,
+        MarketBreadthContributorSnapshot.__table__,
+        MarketBreadthContributor.__table__,
+    ]
+    Base.metadata.create_all(engine, tables=tables)
     db = TestingSessionLocal()
     try:
         yield db
     finally:
         db.close()
-        Base.metadata.drop_all(engine, tables=[MarketBreadth.__table__])
+        Base.metadata.drop_all(engine, tables=tables)
         app.dependency_overrides.clear()
 
 
@@ -100,6 +109,39 @@ def _revision_3_values() -> dict:
     }
 
 
+def _add_contributor_snapshot(session, row: MarketBreadth):
+    session.add(row)
+    session.add(
+        MarketBreadthContributorSnapshot(
+            market=row.market,
+            date=row.date,
+            calculation_revision=3,
+            schema_id="breadth-contributors-v1",
+            contributors=[
+                MarketBreadthContributor(
+                    symbol="AAA",
+                    company_name="Alpha",
+                    ibd_industry_group="Semiconductors",
+                    daily_change_pct=5.5,
+                    signals_json={"up_4pct": 5.5},
+                )
+            ],
+        )
+    )
+    row.stocks_up_4pct = 1
+    row.stocks_down_4pct = 0
+    row.stocks_up_25pct_quarter = 0
+    row.stocks_down_25pct_quarter = 0
+    row.stocks_up_25pct_month = 0
+    row.stocks_down_25pct_month = 0
+    row.stocks_up_50pct_month = 0
+    row.stocks_down_50pct_month = 0
+    row.stocks_up_13pct_34days = 0
+    row.stocks_down_13pct_34days = 0
+    row.atr_10x_extension_count = 0
+    session.commit()
+
+
 def test_market_query_description_excludes_unsupported_singapore_breadth():
     from app.api.v1 import breadth as breadth_module
 
@@ -127,6 +169,68 @@ async def test_current_breadth_filters_by_market(client, session):
     assert payload["stocks_down_4pct"] == 8
     assert payload["broad_universe_count"] is None
     assert payload["calculation_revision"] == 3
+
+
+@pytest.mark.asyncio
+async def test_contributor_index_and_document_are_additive_endpoints(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    calculation_date = date(2026, 8, 28)
+    _add_contributor_snapshot(
+        session,
+        _breadth_row("US", calculation_date, up=1, down=0),
+    )
+
+    index_response = await client.get(
+        "/api/v1/breadth/contributors/index",
+        params={"market": "US"},
+    )
+    document_response = await client.get(
+        "/api/v1/breadth/contributors",
+        params={"market": "US", "date": calculation_date.isoformat()},
+    )
+
+    assert index_response.status_code == 200
+    assert index_response.json() == {
+        "schema": "breadth-contributors-v1",
+        "market": "US",
+        "calculation_revision": 3,
+        "dates": [calculation_date.isoformat()],
+    }
+    assert document_response.status_code == 200
+    payload = document_response.json()
+    assert payload["schema"] == "breadth-contributors-v1"
+    assert payload["date"] == calculation_date.isoformat()
+    assert payload["contributors"] == [
+        {
+            "symbol": "AAA",
+            "company_name": "Alpha",
+            "ibd_industry_group": "Semiconductors",
+            "daily_change_pct": 5.5,
+            "signals": {"up_4pct": 5.5},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_contributor_document_returns_404_or_409(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    calculation_date = date(2026, 8, 28)
+
+    unavailable = await client.get(
+        "/api/v1/breadth/contributors",
+        params={"market": "US", "date": calculation_date.isoformat()},
+    )
+    assert unavailable.status_code == 404
+
+    row = _breadth_row("US", calculation_date, up=1, down=0)
+    _add_contributor_snapshot(session, row)
+    row.stocks_up_4pct = 2
+    session.commit()
+    inconsistent = await client.get(
+        "/api/v1/breadth/contributors",
+        params={"market": "US", "date": calculation_date.isoformat()},
+    )
+    assert inconsistent.status_code == 409
 
 
 @pytest.mark.asyncio
