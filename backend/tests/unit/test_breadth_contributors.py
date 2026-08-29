@@ -173,6 +173,7 @@ def test_shared_parser_normalizes_and_reconciles_transport_rows():
         {"symbol": "AAA", "signals": {"unknown": 5}},
         {"symbol": "AAA", "signals": {"up_4pct": True}},
         {"symbol": "AAA", "signals": {}},
+        {"symbol": "AAA", "company_name": {}, "signals": {"up_4pct": 5}},
     ],
 )
 def test_shared_parser_rejects_invalid_transport_rows(row):

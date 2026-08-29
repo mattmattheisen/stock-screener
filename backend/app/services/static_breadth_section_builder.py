@@ -387,6 +387,15 @@ class StaticBreadthSectionBuilder:
             )
             if generated_counts != attributed_counts:
                 mismatched_dates.append(calculation_date.isoformat())
+            elif attributed is None:
+                empty_day = {
+                    "date": calculation_date.isoformat(),
+                    "stocks_up_4pct": 0,
+                    "stocks_down_4pct": 0,
+                    "groups": [],
+                }
+                history.append(empty_day)
+                attribution_by_date[calculation_date.isoformat()] = empty_day
         if mismatched_dates:
             return {
                 "available": False,
@@ -395,6 +404,7 @@ class StaticBreadthSectionBuilder:
                     f"for: {', '.join(mismatched_dates)}."
                 ),
             }
+        history.sort(key=lambda day: day["date"])
         has_any_mover = any(
             (day.get("stocks_up_4pct", 0) + day.get("stocks_down_4pct", 0)) > 0
             for day in history

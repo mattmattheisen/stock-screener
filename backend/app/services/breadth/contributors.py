@@ -109,6 +109,14 @@ def parse_contributor_rows(
                 f"Duplicate or blank contributor symbol {symbol!r}"
             )
         symbols.add(symbol)
+        company_name = row.get("company_name")
+        if company_name is not None and not isinstance(company_name, str):
+            raise BreadthContributorContractError(
+                f"Invalid company name for contributor {symbol}"
+            )
+        normalized_company_name = (
+            company_name.strip() if company_name is not None else None
+        ) or None
         daily_change = row.get("daily_change_pct")
         if isinstance(daily_change, bool):
             raise BreadthContributorContractError(
@@ -158,7 +166,7 @@ def parse_contributor_rows(
         contributors.append(
             BreadthContributor(
                 symbol=symbol,
-                company_name=row.get("company_name"),
+                company_name=normalized_company_name,
                 ibd_industry_group=group,
                 daily_change_pct=normalized_daily_change,
                 signals=MappingProxyType(signals),

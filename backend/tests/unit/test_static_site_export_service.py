@@ -2572,6 +2572,43 @@ def test_group_attribution_is_unavailable_when_snapshot_counts_drift_from_static
     assert "generated breadth history" in attribution["reason"].lower()
 
 
+def test_group_attribution_preserves_missing_zero_mover_dates(
+    service_and_session_factory,
+):
+    service, session_factory = service_and_session_factory
+    mover_date = date(2026, 4, 1)
+    zero_mover_date = date(2026, 4, 2)
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=mover_date,
+        contributors=(("AAPL", "Computer Software-Database", 8.0, "up_4pct"),),
+    )
+
+    with session_factory() as db:
+        attribution = service._breadth_builder._build_group_attribution(  # noqa: SLF001
+            db=db,
+            market="US",
+            ordered_dates=[mover_date, zero_mover_date],
+            metrics_by_date={
+                mover_date: {"stocks_up_4pct": 1, "stocks_down_4pct": 0},
+                zero_mover_date: {"stocks_up_4pct": 0, "stocks_down_4pct": 0},
+            },
+        )
+
+    assert attribution["available"] is True
+    assert attribution["latest_date"] == zero_mover_date.isoformat()
+    assert [day["date"] for day in attribution["history"]] == [
+        zero_mover_date.isoformat(),
+        mover_date.isoformat(),
+    ]
+    assert attribution["history"][0] == {
+        "date": zero_mover_date.isoformat(),
+        "stocks_up_4pct": 0,
+        "stocks_down_4pct": 0,
+        "groups": [],
+    }
+
+
 def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(
     service_and_session_factory,
 ):

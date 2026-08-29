@@ -108,3 +108,30 @@ def test_validator_rejects_non_object_contributor_rows(tmp_path):
             market_dir=market_dir,
             descriptor=descriptor,
         )
+
+
+def test_validator_rejects_non_string_contributor_company_names(tmp_path):
+    market_dir, descriptor, paths, _index = _valid_asset(tmp_path)
+    document = json.loads(paths["document"].read_text(encoding="utf-8"))
+    document["contributors"] = [
+        {
+            "symbol": "AAA",
+            "company_name": {"unexpected": "object"},
+            "daily_change_pct": 5,
+            "signals": {"up_4pct": 5},
+        }
+    ]
+    breadth = json.loads(paths["breadth"].read_text(encoding="utf-8"))
+    breadth["payload"]["history_90d"][0]["stocks_up_4pct"] = 1
+    paths["document"].write_text(json.dumps(document), encoding="utf-8")
+    paths["breadth"].write_text(json.dumps(breadth), encoding="utf-8")
+
+    with pytest.raises(
+        StaticBreadthContributorAssetError,
+        match="invalid contributors",
+    ):
+        validate_static_breadth_contributor_asset(
+            market="US",
+            market_dir=market_dir,
+            descriptor=descriptor,
+        )
