@@ -58,4 +58,12 @@ describe('BreadthContributorDialog', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText(message)).toBeInTheDocument();
   });
+
+  it('keeps a cached contributor view visible when a background refresh fails', () => {
+    renderDialog({ error: new Error('network') });
+
+    expect(screen.getByText('AEHR')).toBeInTheDocument();
+    expect(screen.getByText(/Showing cached contributors/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+  });
 });

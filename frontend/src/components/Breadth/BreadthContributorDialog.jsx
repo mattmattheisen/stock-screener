@@ -170,13 +170,14 @@ const BreadthContributorDialog = ({
         )}
         {!isLoading && !inconsistent && !unavailable && error && (
           <Alert
-            severity="error"
+            severity={view ? 'warning' : 'error'}
             action={<Button color="inherit" size="small" onClick={onRetry}>Retry</Button>}
+            sx={view ? { mb: 1.5 } : undefined}
           >
-            Could not load contributors.
+            {view ? 'Showing cached contributors because the latest refresh failed.' : 'Could not load contributors.'}
           </Alert>
         )}
-        {!isLoading && !inconsistent && !unavailable && !error && view && (
+        {!isLoading && !inconsistent && !unavailable && view && (
           tab === 0
             ? <StockTable stocks={view.stocks} definition={view.definition} />
             : <GroupList groups={view.groups} definition={view.definition} />
