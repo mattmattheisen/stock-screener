@@ -7,9 +7,22 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
+from app.models.breadth_contributor import (
+    MarketBreadthContributor,
+    MarketBreadthContributorSnapshot,
+)
 from app.models.market_breadth import MarketBreadth
 
-from .types import CURRENT_BREADTH_CALCULATION_REVISION, BreadthDailyResult
+from .contributors import (
+    BREADTH_CONTRIBUTOR_SIGNALS,
+    CONTRIBUTOR_RETENTION_SESSIONS,
+    reconcile_contributor_counts,
+)
+from .types import (
+    CURRENT_BREADTH_CALCULATION_REVISION,
+    BreadthContributorSnapshotResult,
+    BreadthDailyResult,
+)
 
 
 class BreadthPersistence:
@@ -73,32 +86,191 @@ class BreadthPersistence:
         self,
         result: BreadthDailyResult,
         *,
+        contributor_snapshot: BreadthContributorSnapshotResult | None = None,
         duration_seconds: float | None,
     ) -> MarketBreadth:
-        record = self._upsert_without_commit(
-            result,
-            duration_seconds=duration_seconds,
-        )
-        self._db.commit()
+        if contributor_snapshot is not None:
+            reconcile_contributor_counts(contributor_snapshot, result)
+        try:
+            record = self._upsert_without_commit(
+                result,
+                duration_seconds=duration_seconds,
+            )
+            self._db.flush()
+            if contributor_snapshot is not None:
+                self._replace_snapshot_without_commit(contributor_snapshot)
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        if contributor_snapshot is not None:
+            self._prune_market(contributor_snapshot.market)
         return record
 
     def upsert_many(
         self,
         results: Iterable[BreadthDailyResult],
         *,
+        contributor_snapshots_by_date: Mapping[
+            date, BreadthContributorSnapshotResult
+        ] | None = None,
         duration_seconds_by_date: Mapping[date, float] | None = None,
     ) -> tuple[MarketBreadth, ...]:
-        records = tuple(
-            self._upsert_without_commit(
-                result,
-                duration_seconds=(
-                    duration_seconds_by_date.get(result.calculation_date)
-                    if duration_seconds_by_date is not None
-                    else None
-                ),
+        ordered_results = tuple(results)
+        if contributor_snapshots_by_date is not None:
+            expected_dates = {result.calculation_date for result in ordered_results}
+            if set(contributor_snapshots_by_date) != expected_dates:
+                raise ValueError(
+                    "Contributor snapshot dates must match breadth result dates"
+                )
+            for result in ordered_results:
+                reconcile_contributor_counts(
+                    contributor_snapshots_by_date[result.calculation_date],
+                    result,
+                )
+        try:
+            records = tuple(
+                self._upsert_without_commit(
+                    result,
+                    duration_seconds=(
+                        duration_seconds_by_date.get(result.calculation_date)
+                        if duration_seconds_by_date is not None
+                        else None
+                    ),
+                )
+                for result in ordered_results
             )
-            for result in results
-        )
-        if records:
-            self._db.commit()
+            self._db.flush()
+            if contributor_snapshots_by_date is not None:
+                for result in ordered_results:
+                    self._replace_snapshot_without_commit(
+                        contributor_snapshots_by_date[result.calculation_date]
+                    )
+            if records:
+                self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        if contributor_snapshots_by_date is not None:
+            for market in sorted(
+                {snapshot.market for snapshot in contributor_snapshots_by_date.values()}
+            ):
+                self._prune_market(market)
         return records
+
+    def replace_contributor_snapshots(
+        self,
+        snapshots: Iterable[BreadthContributorSnapshotResult],
+        *,
+        expected_aggregates: Mapping[date, BreadthDailyResult],
+    ) -> tuple[MarketBreadthContributorSnapshot, ...]:
+        """Atomically replace snapshots without mutating aggregate rows."""
+        ordered_snapshots = tuple(
+            sorted(snapshots, key=lambda item: item.calculation_date)
+        )
+        if not ordered_snapshots:
+            return ()
+        if {item.calculation_date for item in ordered_snapshots} != set(
+            expected_aggregates
+        ):
+            raise ValueError(
+                "Expected aggregate dates must match contributor snapshot dates"
+            )
+        markets = {item.market for item in ordered_snapshots}
+        if len(markets) != 1:
+            raise ValueError("Contributor-only replacement must target one market")
+
+        for snapshot in ordered_snapshots:
+            expected = expected_aggregates[snapshot.calculation_date]
+            reconcile_contributor_counts(snapshot, expected)
+            stored = (
+                self._db.query(MarketBreadth)
+                .filter(
+                    MarketBreadth.market == snapshot.market,
+                    MarketBreadth.date == snapshot.calculation_date,
+                )
+                .one_or_none()
+            )
+            if stored is None:
+                raise ValueError(
+                    "Missing aggregate breadth row for contributor snapshot "
+                    f"{snapshot.market}/{snapshot.calculation_date.isoformat()}"
+                )
+            if stored.calculation_revision != expected.calculation_revision:
+                raise ValueError("Stored aggregate calculation revision mismatch")
+            for definition in BREADTH_CONTRIBUTOR_SIGNALS.values():
+                if getattr(stored, definition.aggregate_field) != getattr(
+                    expected.values,
+                    definition.aggregate_field,
+                ):
+                    raise ValueError(
+                        "Stored aggregate mismatch for "
+                        f"{definition.aggregate_field} on "
+                        f"{snapshot.market}/{snapshot.calculation_date.isoformat()}"
+                    )
+
+        try:
+            records = tuple(
+                self._replace_snapshot_without_commit(snapshot)
+                for snapshot in ordered_snapshots
+            )
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        self._prune_market(next(iter(markets)))
+        return records
+
+    def _replace_snapshot_without_commit(
+        self,
+        snapshot: BreadthContributorSnapshotResult,
+    ) -> MarketBreadthContributorSnapshot:
+        existing = (
+            self._db.query(MarketBreadthContributorSnapshot)
+            .filter(
+                MarketBreadthContributorSnapshot.market == snapshot.market,
+                MarketBreadthContributorSnapshot.date == snapshot.calculation_date,
+            )
+            .one_or_none()
+        )
+        if existing is not None:
+            self._db.delete(existing)
+            self._db.flush()
+
+        record = MarketBreadthContributorSnapshot(
+            market=snapshot.market,
+            date=snapshot.calculation_date,
+            calculation_revision=snapshot.calculation_revision,
+            schema_id=snapshot.schema_id,
+        )
+        record.contributors = [
+            MarketBreadthContributor(
+                symbol=contributor.symbol,
+                company_name=contributor.company_name,
+                ibd_industry_group=contributor.ibd_industry_group,
+                daily_change_pct=contributor.daily_change_pct,
+                signals_json=dict(contributor.signals),
+            )
+            for contributor in snapshot.contributors
+        ]
+        self._db.add(record)
+        self._db.flush()
+        return record
+
+    def _prune_market(self, market: str) -> None:
+        stale = (
+            self._db.query(MarketBreadthContributorSnapshot)
+            .filter(MarketBreadthContributorSnapshot.market == market)
+            .order_by(MarketBreadthContributorSnapshot.date.desc())
+            .offset(CONTRIBUTOR_RETENTION_SESSIONS)
+            .all()
+        )
+        if not stale:
+            return
+        try:
+            for record in stale:
+                self._db.delete(record)
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
