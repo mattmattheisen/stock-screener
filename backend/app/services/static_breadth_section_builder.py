@@ -358,6 +358,7 @@ class StaticBreadthSectionBuilder:
             db,
             market,
             limit=STATIC_BREADTH_ATTRIBUTION_LOOKBACK_DAYS,
+            dates=attribution_dates,
         )
         documents = tuple(
             get_contributor_document(db, market, calculation_date)

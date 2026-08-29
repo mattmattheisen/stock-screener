@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 
@@ -167,18 +167,30 @@ def list_contributor_dates(
     market: str,
     *,
     limit: int = 20,
+    dates: Iterable[date] | None = None,
 ) -> BreadthContributorIndexPayload:
     if limit < 1:
         raise ValueError("Contributor index limit must be positive")
     normalized_market = market.upper()
-    snapshots = (
+    query = (
         db.query(MarketBreadthContributorSnapshot)
         .options(joinedload(MarketBreadthContributorSnapshot.contributors))
         .filter(MarketBreadthContributorSnapshot.market == normalized_market)
-        .order_by(MarketBreadthContributorSnapshot.date.desc())
-        .all()
     )
-    dates: list[date] = []
+    if dates is not None:
+        requested_dates = tuple(sorted(set(dates)))
+        if not requested_dates:
+            return BreadthContributorIndexPayload(
+                schema=CONTRIBUTOR_SCHEMA_ID,
+                market=normalized_market,
+                calculation_revision=CURRENT_BREADTH_CALCULATION_REVISION,
+                dates=(),
+            )
+        query = query.filter(
+            MarketBreadthContributorSnapshot.date.in_(requested_dates)
+        )
+    snapshots = query.order_by(MarketBreadthContributorSnapshot.date.desc()).all()
+    available_dates: list[date] = []
     for snapshot in snapshots:
         try:
             _document_from_snapshot(db, snapshot)
@@ -190,12 +202,12 @@ def list_contributor_dates(
                 exc,
             )
             continue
-        dates.append(snapshot.date)
-        if len(dates) == limit:
+        available_dates.append(snapshot.date)
+        if len(available_dates) == limit:
             break
     return BreadthContributorIndexPayload(
         schema=CONTRIBUTOR_SCHEMA_ID,
         market=normalized_market,
         calculation_revision=CURRENT_BREADTH_CALCULATION_REVISION,
-        dates=tuple(dates),
+        dates=tuple(available_dates),
     )

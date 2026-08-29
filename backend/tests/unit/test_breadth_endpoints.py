@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from inspect import iscoroutinefunction
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -149,6 +150,15 @@ def test_market_query_description_excludes_unsupported_singapore_breadth():
         "Market code: US, HK, IN, JP, KR, TW, CN, CA, DE"
     )
     assert "SG" not in breadth_module.MARKET_QUERY_DESCRIPTION
+
+
+def test_sync_contributor_queries_run_in_fastapi_threadpool():
+    from app.api.v1 import breadth as breadth_module
+
+    assert not iscoroutinefunction(
+        breadth_module.get_breadth_contributor_index
+    )
+    assert not iscoroutinefunction(breadth_module.get_breadth_contributors)
 
 
 @pytest.mark.asyncio

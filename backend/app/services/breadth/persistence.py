@@ -99,6 +99,11 @@ class BreadthPersistence:
             self._db.flush()
             if contributor_snapshot is not None:
                 self._replace_snapshot_without_commit(contributor_snapshot)
+            else:
+                self._delete_snapshot_without_commit(
+                    result.market,
+                    result.calculation_date,
+                )
             self._db.commit()
         except Exception:
             self._db.rollback()
@@ -145,6 +150,12 @@ class BreadthPersistence:
                 for result in ordered_results:
                     self._replace_snapshot_without_commit(
                         contributor_snapshots_by_date[result.calculation_date]
+                    )
+            else:
+                for result in ordered_results:
+                    self._delete_snapshot_without_commit(
+                        result.market,
+                        result.calculation_date,
                     )
             if records:
                 self._db.commit()
@@ -231,17 +242,10 @@ class BreadthPersistence:
         self,
         snapshot: BreadthContributorSnapshotResult,
     ) -> MarketBreadthContributorSnapshot:
-        existing = (
-            self._db.query(MarketBreadthContributorSnapshot)
-            .filter(
-                MarketBreadthContributorSnapshot.market == snapshot.market,
-                MarketBreadthContributorSnapshot.date == snapshot.calculation_date,
-            )
-            .one_or_none()
+        self._delete_snapshot_without_commit(
+            snapshot.market,
+            snapshot.calculation_date,
         )
-        if existing is not None:
-            self._db.delete(existing)
-            self._db.flush()
 
         record = MarketBreadthContributorSnapshot(
             market=snapshot.market,
@@ -262,6 +266,23 @@ class BreadthPersistence:
         self._db.add(record)
         self._db.flush()
         return record
+
+    def _delete_snapshot_without_commit(
+        self,
+        market: str,
+        calculation_date: date,
+    ) -> None:
+        existing = (
+            self._db.query(MarketBreadthContributorSnapshot)
+            .filter(
+                MarketBreadthContributorSnapshot.market == market,
+                MarketBreadthContributorSnapshot.date == calculation_date,
+            )
+            .one_or_none()
+        )
+        if existing is not None:
+            self._db.delete(existing)
+            self._db.flush()
 
     def _prune_market(self, market: str) -> None:
         stale = (

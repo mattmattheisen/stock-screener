@@ -1,7 +1,7 @@
-import { ThemeProvider, createTheme } from '@mui/material/styles';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { renderWithProviders } from '../../test/renderWithProviders';
 import BreadthContributorDialog from './BreadthContributorDialog';
 import { buildBreadthContributorView } from './breadthContributorView';
 
@@ -23,18 +23,16 @@ const document = {
   ],
 };
 const view = buildBreadthContributorView(document, 'stocks_up_4pct', 2);
-const renderDialog = (props = {}) => render(
-  <ThemeProvider theme={createTheme()}>
-    <BreadthContributorDialog
-      open
-      metric="stocks_up_4pct"
-      row={row}
-      view={view}
-      onClose={vi.fn()}
-      onRetry={vi.fn()}
-      {...props}
-    />
-  </ThemeProvider>,
+const renderDialog = (props = {}) => renderWithProviders(
+  <BreadthContributorDialog
+    open
+    metric="stocks_up_4pct"
+    row={row}
+    view={view}
+    onClose={vi.fn()}
+    onRetry={vi.fn()}
+    {...props}
+  />,
 );
 
 describe('BreadthContributorDialog', () => {

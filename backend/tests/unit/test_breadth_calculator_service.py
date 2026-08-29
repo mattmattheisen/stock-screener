@@ -24,6 +24,9 @@ from app.services.breadth.types import (
 from app.services.breadth.universe import breadth_eligibility_signature
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.derived_data_execution_policy import (
+    DerivedDataExecutionMode,
+    DerivedDataExecutionPolicy,
+    DerivedDataTargetKind,
     resolve_derived_data_execution_policy,
 )
 from app.services.fx_service import default_currency_for_market
@@ -335,6 +338,69 @@ def test_calculate_daily_omits_snapshot_when_metadata_source_fails(monkeypatch):
     assert result.contributor_snapshot is None
 
 
+def test_historical_daily_breadth_uses_metadata_frozen_for_requested_date(
+    monkeypatch,
+):
+    """Catches current group classifications leaking into historical snapshots."""
+    calculation_date = date(2026, 3, 20)
+    db = _make_db_session()
+    db.add(
+        StockUniverse(
+            symbol="AAA",
+            name="Alpha",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=True,
+        )
+    )
+    db.commit()
+    prices = _flat_price_df(calculation_date)
+    prices.loc[prices.index[-2], ["Close", "Adj Close"]] = 90.0
+    prices.loc[prices.index[-1], "Volume"] = 1_100_000
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": prices,
+    }
+    historical = MagicMock(
+        return_value={
+            calculation_date: {
+                "AAA": BreadthContributorMetadata(
+                    company_name="Alpha then",
+                    ibd_industry_group="Historical Group",
+                )
+            }
+        }
+    )
+    current = MagicMock(side_effect=AssertionError("current metadata is look-ahead"))
+    monkeypatch.setattr(
+        breadth_calculator_module.BreadthContributorMetadataLoader,
+        "historical",
+        historical,
+    )
+    monkeypatch.setattr(
+        breadth_calculator_module.BreadthContributorMetadataLoader,
+        "current",
+        current,
+    )
+
+    result = BreadthCalculatorService(db, price_cache).calculate_daily_breadth(
+        calculation_date,
+        policy=DerivedDataExecutionPolicy(
+            mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
+            target_kind=DerivedDataTargetKind.HISTORICAL,
+        ),
+    )
+
+    assert result.contributor_snapshot is not None
+    assert result.contributor_snapshot.contributors[0].ibd_industry_group == (
+        "Historical Group"
+    )
+    historical.assert_called_once_with(db, "US", {calculation_date: ["AAA"]})
+    current.assert_not_called()
+
+
 def test_historical_daily_breadth_uses_the_requested_dates_universe(monkeypatch):
     db = _make_db_session()
     db.add(
@@ -405,13 +471,16 @@ def test_daily_breadth_preserves_month_eligibility_without_prior_close(monkeypat
     service = BreadthCalculatorService(db, price_cache)
     monkeypatch.setattr(
         breadth_calculator_module.BreadthContributorMetadataLoader,
-        "current",
-        lambda _db, _market, symbols: {
-            symbol: BreadthContributorMetadata(
-                company_name=symbol,
-                ibd_industry_group="Test Group",
-            )
-            for symbol in symbols
+        "historical",
+        lambda _db, _market, symbols_by_date: {
+            snapshot_date: {
+                symbol: BreadthContributorMetadata(
+                    company_name=symbol,
+                    ibd_industry_group="Test Group",
+                )
+                for symbol in symbols
+            }
+            for snapshot_date, symbols in symbols_by_date.items()
         },
     )
 

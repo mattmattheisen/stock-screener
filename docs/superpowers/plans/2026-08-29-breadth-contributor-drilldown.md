@@ -691,7 +691,7 @@ git commit -m "feat: wire breadth contributor drilldowns"
 
 **Files:**
 - Create: `docs/runbooks/breadth-contributor-backfill.md`
-- Modify: `docs/static_site.md`
+- Modify: `docs/STATIC_SITE.md`
 - Test: `backend/tests/unit/test_breadth_workflow_parity.py`
 
 **Interfaces:**
@@ -729,7 +729,7 @@ cd backend
 ./venv/bin/pytest tests/unit/test_breadth_contributor_query.py tests/unit/test_static_breadth_contributor_exporter.py -q
 ```
 
-Add the new optional `assets.breadth_contributors.index_path` layout to `docs/static_site.md` and explicitly state that bundles without it remain supported.
+Add the new optional `assets.breadth_contributors.index_path` layout to `docs/STATIC_SITE.md` and explicitly state that bundles without it remain supported.
 
 - [ ] **Step 4: Run the backend and frontend verification suites**
 
@@ -742,7 +742,7 @@ Expected: all backend and frontend tests PASS, ESLint exits 0, and the productio
 - [ ] **Step 5: Commit rollout documentation and final parity coverage**
 
 ```bash
-git add docs/runbooks/breadth-contributor-backfill.md docs/static_site.md backend/tests/unit/test_breadth_workflow_parity.py
+git add docs/runbooks/breadth-contributor-backfill.md docs/STATIC_SITE.md backend/tests/unit/test_breadth_workflow_parity.py
 git commit -m "docs: add breadth contributor rollout runbook"
 ```
 

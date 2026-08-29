@@ -50,7 +50,7 @@ def main(
 
     catalog = get_market_catalog()
     breadth_markets = set(catalog.market_codes_with_capability("breadth"))
-    if args.markets:
+    if args.markets is not None:
         markets = tuple(
             dict.fromkeys(
                 item.strip().upper()
@@ -58,6 +58,8 @@ def main(
                 if item.strip()
             )
         )
+        if not markets:
+            parser.error("--markets must include at least one market code")
     else:
         markets = tuple(catalog.market_codes_with_capability("breadth"))
     invalid = sorted(set(markets) - breadth_markets)

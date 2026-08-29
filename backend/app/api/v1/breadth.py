@@ -75,7 +75,7 @@ def _require_task_controls() -> None:
     "/contributors/index",
     response_model=BreadthContributorIndexResponse,
 )
-async def get_breadth_contributor_index(
+def get_breadth_contributor_index(
     market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
     db: Session = Depends(get_db),
 ):
@@ -88,7 +88,7 @@ async def get_breadth_contributor_index(
     "/contributors",
     response_model=BreadthContributorDocumentResponse,
 )
-async def get_breadth_contributors(
+def get_breadth_contributors(
     date: date = Query(..., description="Trading date (YYYY-MM-DD)"),
     market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
     db: Session = Depends(get_db),

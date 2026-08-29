@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from inspect import Parameter, getsource, signature
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -2512,6 +2512,36 @@ def test_build_breadth_payload_includes_us_group_attribution(
     assert groups_by_name["No Group"]["up_stocks"][0]["symbol"] == "NOGRP"
     # FLAT didn't move 4%, so Retail-Apparel should not appear.
     assert "Retail-Apparel" not in groups_by_name
+
+
+def test_group_attribution_queries_snapshots_for_the_exported_date_window(
+    service_and_session_factory,
+):
+    """Catches newer snapshots hiding valid attribution for an older export."""
+    service, session_factory = service_and_session_factory
+    target_date = date(2026, 4, 1)
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=target_date,
+        contributors=(("AAPL", "Computer Software-Database", 8.0, "up_4pct"),),
+    )
+    for offset in range(1, 11):
+        _insert_breadth_contributors(
+            session_factory,
+            calculation_date=target_date + timedelta(days=offset),
+            contributors=(),
+        )
+
+    with session_factory() as db:
+        attribution = service._breadth_builder._build_group_attribution(  # noqa: SLF001
+            db=db,
+            market="US",
+            ordered_dates=[target_date],
+        )
+
+    assert attribution["available"] is True
+    assert attribution["latest_date"] == target_date.isoformat()
+    assert attribution["history"][0]["stocks_up_4pct"] == 1
 
 
 def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(

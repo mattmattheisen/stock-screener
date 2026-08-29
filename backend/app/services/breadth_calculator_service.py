@@ -163,11 +163,18 @@ class BreadthCalculatorService:
         seeds = self._load_ratio_seed_counts(calculation_date, limit=9)
         contributor_metadata_available = True
         try:
-            contributor_metadata = BreadthContributorMetadataLoader.current(
-                self.db,
-                self.market,
-                symbols,
-            )
+            if policy.target_kind is DerivedDataTargetKind.HISTORICAL:
+                contributor_metadata = BreadthContributorMetadataLoader.historical(
+                    self.db,
+                    self.market,
+                    {calculation_date: symbols},
+                )[calculation_date]
+            else:
+                contributor_metadata = BreadthContributorMetadataLoader.current(
+                    self.db,
+                    self.market,
+                    symbols,
+                )
         except Exception as exc:  # noqa: BLE001 - metadata is optional for aggregate breadth.
             logger.warning(
                 "Breadth contributor metadata unavailable for %s: %s",

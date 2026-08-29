@@ -52,6 +52,7 @@ function StaticBreadthPage() {
     loadDate: contributorIndexPath
       ? (date) => fetchStaticBreadthContributors(contributorIndexPath, date)
       : null,
+    indexStaleTime: Infinity,
   });
   const [timeRange, setTimeRange] = useState('1M');
   const [selectedTab, setSelectedTab] = useState(0);

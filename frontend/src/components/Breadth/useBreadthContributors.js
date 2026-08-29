@@ -7,11 +7,14 @@ import {
 } from './breadthContributorContract';
 import { buildBreadthContributorView } from './breadthContributorView';
 
+const LIVE_INDEX_STALE_TIME_MS = 60_000;
+
 export const useBreadthContributors = ({
   market,
   indexQueryKey,
   loadIndex,
   loadDate,
+  indexStaleTime = LIVE_INDEX_STALE_TIME_MS,
 }) => {
   const [selected, setSelected] = useState(null);
   const indexIdentity = JSON.stringify(indexQueryKey);
@@ -20,7 +23,7 @@ export const useBreadthContributors = ({
     queryKey: indexQueryKey,
     queryFn: async () => validateBreadthContributorIndex(await loadIndex(), market),
     enabled: Boolean(loadIndex && indexQueryKey),
-    staleTime: Infinity,
+    staleTime: indexStaleTime,
   });
   const availableDates = useMemo(
     () => new Set(indexQuery.data?.dates || []),

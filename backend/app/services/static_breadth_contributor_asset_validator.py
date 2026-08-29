@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 from app.services.breadth.contributors import (
@@ -15,6 +16,18 @@ from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
 
 class StaticBreadthContributorAssetError(RuntimeError):
     """A static breadth contributor asset is incomplete or inconsistent."""
+
+
+def _load_json_object(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise StaticBreadthContributorAssetError(
+            f"{label} is not readable JSON"
+        ) from exc
+    if not isinstance(value, dict):
+        raise StaticBreadthContributorAssetError(f"{label} is not an object")
+    return value
 
 
 def validate_static_breadth_contributor_asset(
@@ -44,7 +57,7 @@ def validate_static_breadth_contributor_asset(
         ) from exc
     if not index_path.is_file():
         raise StaticBreadthContributorAssetError("advertised index file is absent")
-    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index = _load_json_object(index_path, "contributor index")
     if (
         index.get("schema") != CONTRIBUTOR_SCHEMA_ID
         or index.get("market") != market
@@ -55,17 +68,32 @@ def validate_static_breadth_contributor_asset(
     if (
         not isinstance(dates, list)
         or not dates
+        or not all(isinstance(value, str) for value in dates)
         or len(dates) > 20
         or len(set(dates)) != len(dates)
-        or dates != sorted(dates, reverse=True)
     ):
+        raise StaticBreadthContributorAssetError("index dates are invalid")
+    try:
+        parsed_dates = [date.fromisoformat(value) for value in dates]
+    except ValueError as exc:
+        raise StaticBreadthContributorAssetError("index dates are invalid") from exc
+    if parsed_dates != sorted(parsed_dates, reverse=True):
         raise StaticBreadthContributorAssetError("index dates are invalid")
 
     breadth_path = market_dir / "breadth.json"
     if not breadth_path.is_file():
         raise StaticBreadthContributorAssetError("breadth.json is absent")
-    breadth = json.loads(breadth_path.read_text(encoding="utf-8"))
-    rows = (breadth.get("payload") or {}).get("history_90d") or []
+    breadth = _load_json_object(breadth_path, "breadth.json")
+    payload = breadth.get("payload")
+    if not isinstance(payload, dict):
+        raise StaticBreadthContributorAssetError(
+            "breadth.json payload is not an object"
+        )
+    rows = payload.get("history_90d")
+    if not isinstance(rows, list):
+        raise StaticBreadthContributorAssetError(
+            "breadth.json history_90d is not a list"
+        )
     aggregates_by_date = {
         str(row.get("date")): row
         for row in rows
@@ -77,7 +105,10 @@ def validate_static_breadth_contributor_asset(
             raise StaticBreadthContributorAssetError(
                 f"contributor document is absent for {date_value}"
             )
-        document = json.loads(document_path.read_text(encoding="utf-8"))
+        document = _load_json_object(
+            document_path,
+            f"contributor document for {date_value}",
+        )
         if (
             document.get("schema") != CONTRIBUTOR_SCHEMA_ID
             or document.get("market") != market

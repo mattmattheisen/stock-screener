@@ -141,6 +141,48 @@ def test_persistence_rolls_back_aggregate_when_contributor_counts_disagree():
     assert db.query(MarketBreadthContributor).count() == 4
 
 
+def test_daily_upsert_deletes_stale_snapshot_when_fresh_snapshot_is_missing():
+    """Catches serving stale drilldown rows after aggregate-only recalculation."""
+    _engine, db = _database()
+    persistence = BreadthPersistence(db)
+    persistence.upsert_daily(
+        _result(advancing=8),
+        contributor_snapshot=_snapshot(),
+        duration_seconds=1.0,
+    )
+
+    persistence.upsert_daily(
+        _result(advancing=9),
+        contributor_snapshot=None,
+        duration_seconds=0.5,
+    )
+
+    assert db.query(MarketBreadth).one().advancing_count == 9
+    assert db.query(MarketBreadthContributorSnapshot).count() == 0
+    assert db.query(MarketBreadthContributor).count() == 0
+
+
+def test_bulk_upsert_deletes_stale_snapshot_when_fresh_snapshots_are_missing():
+    """Catches normal backfills retaining stale contributor documents."""
+    _engine, db = _database()
+    persistence = BreadthPersistence(db)
+    persistence.upsert_daily(
+        _result(advancing=8),
+        contributor_snapshot=_snapshot(),
+        duration_seconds=1.0,
+    )
+
+    persistence.upsert_many(
+        (_result(advancing=9),),
+        contributor_snapshots_by_date=None,
+        duration_seconds_by_date={date(2026, 8, 21): 0.5},
+    )
+
+    assert db.query(MarketBreadth).one().advancing_count == 9
+    assert db.query(MarketBreadthContributorSnapshot).count() == 0
+    assert db.query(MarketBreadthContributor).count() == 0
+
+
 def test_contributor_retention_keeps_twenty_dates_and_all_aggregate_history():
     """Catches pruning aggregate history or retaining stale contributor dates."""
     _engine, db = _database()

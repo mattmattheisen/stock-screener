@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.database import Base
 from app.models.market_breadth import MarketBreadth
 from app.scripts.backfill_breadth_contributors import main
@@ -121,6 +123,13 @@ def test_cli_runs_each_requested_market_and_reports_json(capsys):
     output = capsys.readouterr().out
     assert '"market": "US"' in output
     assert '"market": "CA"' in output
+
+
+def test_cli_rejects_an_explicit_empty_market_selection():
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--markets", ", ,"])
+
+    assert exc_info.value.code == 2
 
 
 def test_cli_returns_nonzero_when_any_market_fails(capsys):

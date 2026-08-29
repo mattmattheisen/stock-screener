@@ -1,6 +1,7 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { focusManager } from '@tanstack/react-query';
+import { act, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderHookWithProviders } from '../../test/renderWithProviders';
 import { useBreadthContributors } from './useBreadthContributors';
 
 const index = {
@@ -10,19 +11,15 @@ const index = {
   dates: ['2026-08-28'],
 };
 
-const wrapper = ({ children }) => (
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    {children}
-  </QueryClientProvider>
-);
+afterEach(() => focusManager.setFocused(undefined));
 
 describe('useBreadthContributors', () => {
   it('loads the index immediately and one advertised date lazily', async () => {
     const loadIndex = vi.fn().mockResolvedValue(index);
     const loadDate = vi.fn().mockResolvedValue({ ...index, date: '2026-08-28', contributors: [] });
-    const { result } = renderHook(() => useBreadthContributors({
+    const { result } = renderHookWithProviders(() => useBreadthContributors({
       market: 'US', indexQueryKey: ['contributors', 'US'], loadIndex, loadDate,
-    }), { wrapper });
+    }));
 
     await waitFor(() => expect(result.current.availableDates.has('2026-08-28')).toBe(true));
     expect(loadDate).not.toHaveBeenCalled();
@@ -34,17 +31,38 @@ describe('useBreadthContributors', () => {
 
   it('does not open a date omitted by the validated index', async () => {
     const loadDate = vi.fn();
-    const { result } = renderHook(() => useBreadthContributors({
+    const { result } = renderHookWithProviders(() => useBreadthContributors({
       market: 'US',
       indexQueryKey: ['contributors', 'US'],
       loadIndex: () => Promise.resolve(index),
       loadDate,
-    }), { wrapper });
+    }));
     await waitFor(() => expect(result.current.availableDates.size).toBe(1));
 
     act(() => result.current.open('stocks_up_4pct', { date: '2026-08-27', stocks_up_4pct: 1 }));
 
     expect(result.current.selected).toBeNull();
     expect(loadDate).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a stale live index when the window regains focus', async () => {
+    const updatedIndex = { ...index, dates: ['2026-08-29', ...index.dates] };
+    const loadIndex = vi.fn()
+      .mockResolvedValueOnce(index)
+      .mockResolvedValueOnce(updatedIndex);
+    const { result } = renderHookWithProviders(() => useBreadthContributors({
+      market: 'US',
+      indexQueryKey: ['contributors', 'US'],
+      loadIndex,
+      loadDate: vi.fn(),
+      indexStaleTime: 0,
+    }));
+    await waitFor(() => expect(result.current.availableDates.has('2026-08-28')).toBe(true));
+
+    act(() => focusManager.setFocused(false));
+    act(() => focusManager.setFocused(true));
+
+    await waitFor(() => expect(result.current.availableDates.has('2026-08-29')).toBe(true));
+    expect(loadIndex).toHaveBeenCalledTimes(2);
   });
 });
