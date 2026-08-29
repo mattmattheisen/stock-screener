@@ -66,6 +66,37 @@ describe('useBreadthContributors', () => {
     expect(loadIndex).toHaveBeenCalledTimes(2);
   });
 
+  it('clears an open selection when an index refresh removes its date', async () => {
+    const loadIndex = vi.fn()
+      .mockResolvedValueOnce(index)
+      .mockResolvedValueOnce({ ...index, dates: [] });
+    const loadDate = vi.fn().mockResolvedValue({
+      ...index,
+      date: '2026-08-28',
+      contributors: [],
+    });
+    const { result } = renderHookWithProviders(() => useBreadthContributors({
+      market: 'US',
+      indexQueryKey: ['contributors', 'US'],
+      loadIndex,
+      loadDate,
+      indexStaleTime: 0,
+    }));
+    await waitFor(() => expect(result.current.availableDates.has('2026-08-28')).toBe(true));
+    act(() => result.current.open(
+      'stocks_up_4pct',
+      { date: '2026-08-28', stocks_up_4pct: 0 },
+    ));
+    await waitFor(() => expect(result.current.dialogQuery.data?.date).toBe('2026-08-28'));
+
+    act(() => focusManager.setFocused(false));
+    act(() => focusManager.setFocused(true));
+
+    await waitFor(() => expect(result.current.availableDates.size).toBe(0));
+    expect(result.current.selected).toBeNull();
+    expect(result.current.viewState.view).toBeNull();
+  });
+
   it('reloads a stale live date document when its cell is reopened', async () => {
     const loadDate = vi.fn()
       .mockResolvedValueOnce({ ...index, date: '2026-08-28', marker: 'first', contributors: [] })

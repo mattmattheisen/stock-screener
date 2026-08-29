@@ -2537,11 +2537,39 @@ def test_group_attribution_queries_snapshots_for_the_exported_date_window(
             db=db,
             market="US",
             ordered_dates=[target_date],
+            metrics_by_date={
+                target_date: {"stocks_up_4pct": 1, "stocks_down_4pct": 0}
+            },
         )
 
     assert attribution["available"] is True
     assert attribution["latest_date"] == target_date.isoformat()
     assert attribution["history"][0]["stocks_up_4pct"] == 1
+
+
+def test_group_attribution_is_unavailable_when_snapshot_counts_drift_from_static_history(
+    service_and_session_factory,
+):
+    service, session_factory = service_and_session_factory
+    target_date = date(2026, 4, 1)
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=target_date,
+        contributors=(("AAPL", "Computer Software-Database", 8.0, "up_4pct"),),
+    )
+
+    with session_factory() as db:
+        attribution = service._breadth_builder._build_group_attribution(  # noqa: SLF001
+            db=db,
+            market="US",
+            ordered_dates=[target_date],
+            metrics_by_date={
+                target_date: {"stocks_up_4pct": 2, "stocks_down_4pct": 0}
+            },
+        )
+
+    assert attribution["available"] is False
+    assert "generated breadth history" in attribution["reason"].lower()
 
 
 def test_build_breadth_payload_marks_attribution_unavailable_when_no_movers(

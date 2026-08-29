@@ -285,6 +285,7 @@ class StaticBreadthSectionBuilder:
             db=db,
             market=market,
             ordered_dates=ordered_dates,
+            metrics_by_date=metrics_by_date,
         )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
@@ -327,6 +328,7 @@ class StaticBreadthSectionBuilder:
         db: Session | None,
         market: str,
         ordered_dates: list[date],
+        metrics_by_date: Mapping[date, Mapping[str, Any]],
     ) -> dict[str, Any]:
         """Attribute ±4% movers to IBD industry groups for the most recent sessions.
 
@@ -366,6 +368,33 @@ class StaticBreadthSectionBuilder:
             if calculation_date in attribution_dates
         )
         history = BreadthAttributionService().compute(documents=documents)
+        attribution_by_date = {day["date"]: day for day in history}
+        mismatched_dates: list[str] = []
+        for calculation_date in sorted(attribution_dates):
+            generated = metrics_by_date[calculation_date]
+            attributed = attribution_by_date.get(calculation_date.isoformat())
+            generated_counts = (
+                int(generated.get("stocks_up_4pct", 0)),
+                int(generated.get("stocks_down_4pct", 0)),
+            )
+            attributed_counts = (
+                (
+                    int(attributed.get("stocks_up_4pct", 0)),
+                    int(attributed.get("stocks_down_4pct", 0)),
+                )
+                if attributed is not None
+                else (0, 0)
+            )
+            if generated_counts != attributed_counts:
+                mismatched_dates.append(calculation_date.isoformat())
+        if mismatched_dates:
+            return {
+                "available": False,
+                "reason": (
+                    "Contributor snapshots do not match the generated breadth history "
+                    f"for: {', '.join(mismatched_dates)}."
+                ),
+            }
         has_any_mover = any(
             (day.get("stocks_up_4pct", 0) + day.get("stocks_down_4pct", 0)) > 0
             for day in history

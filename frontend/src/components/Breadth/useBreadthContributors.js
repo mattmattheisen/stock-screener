@@ -30,6 +30,17 @@ export const useBreadthContributors = ({
     () => new Set(indexQuery.data?.dates || []),
     [indexQuery.data],
   );
+  const selectedDate = selected?.row?.date || null;
+  useEffect(() => {
+    if (
+      selectedDate
+      && indexQuery.isSuccess
+      && !availableDates.has(selectedDate)
+    ) {
+      selected?.anchor?.focus?.();
+      setSelected(null);
+    }
+  }, [availableDates, indexQuery.isSuccess, selected, selectedDate]);
   const open = useCallback((metric, row, anchor = null) => {
     if (!availableDates.has(row?.date)) return;
     setSelected({ metric, row, anchor });
@@ -38,7 +49,6 @@ export const useBreadthContributors = ({
     selected?.anchor?.focus?.();
     setSelected(null);
   }, [selected]);
-  const selectedDate = selected?.row?.date || null;
   const dialogQuery = useQuery({
     queryKey: [
       'breadthContributors',
