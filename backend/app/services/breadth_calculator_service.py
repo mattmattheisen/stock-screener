@@ -176,6 +176,7 @@ class BreadthCalculatorService:
                     symbols,
                 )
         except Exception as exc:  # noqa: BLE001 - metadata is optional for aggregate breadth.
+            self.db.rollback()
             logger.warning(
                 "Breadth contributor metadata unavailable for %s: %s",
                 self.market,

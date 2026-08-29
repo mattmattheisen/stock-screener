@@ -323,19 +323,41 @@ def test_calculate_daily_omits_snapshot_when_metadata_source_fails(monkeypatch):
     price_cache.get_many_cached_only_fresh.return_value = {
         "AAA": _flat_price_df(calculation_date),
     }
+    transaction = {"aborted": False, "rollbacks": 0}
+    original_rollback = db.rollback
+
+    def fail_metadata(*_args, **_kwargs):
+        transaction["aborted"] = True
+        raise RuntimeError("metadata database unavailable")
+
+    def recover_session():
+        transaction["rollbacks"] += 1
+        transaction["aborted"] = False
+        original_rollback()
+
     monkeypatch.setattr(
         breadth_calculator_module.BreadthContributorMetadataLoader,
         "current",
-        MagicMock(side_effect=RuntimeError("metadata database unavailable")),
+        fail_metadata,
     )
+    monkeypatch.setattr(db, "rollback", recover_session)
 
-    result = BreadthCalculatorService(db, price_cache).calculate_daily_breadth(
+    calculator = BreadthCalculatorService(db, price_cache)
+    result = calculator.calculate_daily_breadth(
         calculation_date,
         policy=_policy("refresh_guarded", calculation_date),
     )
 
     assert result.daily_result is not None
     assert result.contributor_snapshot is None
+    assert transaction == {"aborted": False, "rollbacks": 1}
+
+    calculator.store_daily_result(
+        result.daily_result,
+        contributor_snapshot=result.contributor_snapshot,
+        duration_seconds=1.0,
+    )
+    assert db.query(MarketBreadth).count() == 1
 
 
 def test_historical_daily_breadth_uses_metadata_frozen_for_requested_date(
