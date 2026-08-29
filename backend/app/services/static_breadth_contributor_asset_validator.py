@@ -120,7 +120,9 @@ def validate_static_breadth_contributor_asset(
                 f"contributor document identity is invalid for {date_value}"
             )
         contributors = document.get("contributors")
-        if not isinstance(contributors, list):
+        if not isinstance(contributors, list) or not all(
+            isinstance(row, dict) for row in contributors
+        ):
             raise StaticBreadthContributorAssetError(
                 f"contributors are invalid for {date_value}"
             )

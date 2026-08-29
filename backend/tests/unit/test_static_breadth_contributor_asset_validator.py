@@ -91,3 +91,20 @@ def test_validator_normalizes_mixed_type_index_dates(tmp_path):
             market_dir=market_dir,
             descriptor=descriptor,
         )
+
+
+def test_validator_rejects_non_object_contributor_rows(tmp_path):
+    market_dir, descriptor, paths, _index = _valid_asset(tmp_path)
+    document = json.loads(paths["document"].read_text(encoding="utf-8"))
+    document["contributors"] = [1]
+    paths["document"].write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(
+        StaticBreadthContributorAssetError,
+        match="contributors are invalid",
+    ):
+        validate_static_breadth_contributor_asset(
+            market="US",
+            market_dir=market_dir,
+            descriptor=descriptor,
+        )
