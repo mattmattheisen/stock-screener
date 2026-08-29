@@ -351,6 +351,7 @@ class BreadthBackfillExecutor:
                 },
             )
         except Exception as exc:
+            calculator.db.rollback()
             logger.warning(
                 "Historical breadth contributor metadata unavailable for %s: %s",
                 calculator.market,

@@ -384,6 +384,69 @@ def test_contributor_only_backfill_fails_when_metadata_source_is_unavailable(
     assert db.query(MarketBreadthContributorSnapshot).count() == 0
 
 
+def test_aggregate_backfill_recovers_session_after_metadata_failure(monkeypatch):
+    db = _make_db_session()
+    calculation_date = date(2026, 3, 20)
+    db.add(
+        StockUniverse(
+            symbol="AAA",
+            name="Alpha",
+            market="US",
+            currency="USD",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            is_common_stock=True,
+        )
+    )
+    db.commit()
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": _flat_price_df(calculation_date),
+    }
+    calculator = BreadthCalculatorService(db, price_cache, market="US")
+    transaction = {"aborted": False, "rollbacks": 0}
+    original_rollback = db.rollback
+
+    def fail_metadata(*_args, **_kwargs):
+        transaction["aborted"] = True
+        raise RuntimeError("metadata database unavailable")
+
+    def recover_session():
+        transaction["rollbacks"] += 1
+        transaction["aborted"] = False
+        original_rollback()
+
+    def load_ratio_context(_processed_dates):
+        assert transaction["aborted"] is False, "session was not recovered"
+        return []
+
+    monkeypatch.setattr(
+        breadth_backfill_module.BreadthContributorMetadataLoader,
+        "historical",
+        fail_metadata,
+    )
+    monkeypatch.setattr(db, "rollback", recover_session)
+    monkeypatch.setattr(
+        calculator,
+        "_load_ratio_context_counts",
+        load_ratio_context,
+    )
+
+    result = BreadthBackfillExecutor(calculator).execute(
+        BreadthBackfillPlan(dates=(calculation_date,)),
+        policy=DerivedDataExecutionPolicy(
+            mode=DerivedDataExecutionMode.STRICT_CACHE_ONLY,
+            target_kind=DerivedDataTargetKind.HISTORICAL,
+        ),
+        require_complete_cache_coverage=True,
+    )
+
+    assert result.to_legacy_dict()["processed"] == 1
+    assert transaction["rollbacks"] == 1
+    assert db.query(MarketBreadth).count() == 1
+    assert db.query(MarketBreadthContributorSnapshot).count() == 0
+
+
 def test_implicit_backfill_loads_members_at_final_requested_membership_date(
     monkeypatch,
 ):
