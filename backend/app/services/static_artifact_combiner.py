@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import tempfile
 from collections.abc import Iterable, Mapping
@@ -16,6 +17,10 @@ from app.services.static_market_artifact_contract import (
 )
 from app.services.static_site_errors import NoPublishedStaticMarketArtifact
 from app.services.breadth.types import CURRENT_BREADTH_CALCULATION_REVISION
+from app.services.breadth.contributors import (
+    BREADTH_CONTRIBUTOR_SIGNALS,
+    CONTRIBUTOR_SCHEMA_ID,
+)
 
 
 @dataclass(frozen=True)
@@ -336,12 +341,18 @@ class StaticArtifactCombiner:
                     market_dir=market_dir,
                     expected_formula=expected,
                 )
-            self._validate_advertised_assets(
+            asset_warnings = self._validate_advertised_assets(
                 market=market,
                 source_label=source_label,
                 entry=entry,
                 market_dir=market_dir,
             )
+            if asset_warnings:
+                metadata["warnings"] = [
+                    *metadata.get("warnings", []),
+                    *asset_warnings,
+                ]
+                metadata["entry"] = entry
             discovered[market] = {
                 "entry": entry,
                 "metadata": metadata,
@@ -353,7 +364,8 @@ class StaticArtifactCombiner:
     @staticmethod
     def _validate_advertised_assets(
         *, market: str, source_label: str, entry: dict, market_dir: Path
-    ) -> None:
+    ) -> list[str]:
+        warnings: list[str] = []
         features = entry.get("features") if isinstance(entry.get("features"), dict) else {}
         for feature, filename in (("groups", "groups.json"), ("rrg", "groups_rrg.json")):
             if features.get(feature) and not (market_dir / filename).is_file():
@@ -361,6 +373,149 @@ class StaticArtifactCombiner:
                     f"{market} {source_label} artifact advertises "
                     f"{feature.upper()} but {filename} is absent"
                 )
+        assets = entry.get("assets")
+        contributor_asset = (
+            assets.get("breadth_contributors")
+            if isinstance(assets, dict)
+            else None
+        )
+        if contributor_asset is not None:
+            try:
+                StaticArtifactCombiner._validate_breadth_contributor_asset(
+                    market=market,
+                    market_dir=market_dir,
+                    descriptor=contributor_asset,
+                )
+            except (OSError, TypeError, ValueError, StaticArtifactFormulaError) as exc:
+                entry["assets"] = dict(assets)
+                entry["assets"].pop("breadth_contributors", None)
+                warnings.append(
+                    f"{market} breadth contributor asset ignored: {exc}"
+                )
+        return warnings
+
+    @staticmethod
+    def _validate_breadth_contributor_asset(
+        *,
+        market: str,
+        market_dir: Path,
+        descriptor: object,
+    ) -> None:
+        if not isinstance(descriptor, dict):
+            raise StaticArtifactFormulaError("descriptor is not an object")
+        advertised_path = str(descriptor.get("index_path") or "").strip()
+        if not advertised_path:
+            raise StaticArtifactFormulaError("index_path is missing")
+        relative = Path(advertised_path)
+        published_prefix = Path("markets") / market.lower()
+        try:
+            relative = relative.relative_to(published_prefix)
+        except ValueError:
+            pass
+        artifact_root = market_dir.resolve()
+        index_path = (artifact_root / relative).resolve()
+        try:
+            index_path.relative_to(artifact_root)
+        except ValueError as exc:
+            raise StaticArtifactFormulaError("index_path escapes its artifact") from exc
+        if not index_path.is_file():
+            raise StaticArtifactFormulaError("advertised index file is absent")
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        if (
+            index.get("schema") != CONTRIBUTOR_SCHEMA_ID
+            or index.get("market") != market
+            or index.get("calculation_revision")
+            != CURRENT_BREADTH_CALCULATION_REVISION
+        ):
+            raise StaticArtifactFormulaError("index identity is invalid")
+        dates = index.get("dates")
+        if (
+            not isinstance(dates, list)
+            or not dates
+            or len(dates) > 20
+            or len(set(dates)) != len(dates)
+            or dates != sorted(dates, reverse=True)
+        ):
+            raise StaticArtifactFormulaError("index dates are invalid")
+
+        breadth_path = market_dir / "breadth.json"
+        if not breadth_path.is_file():
+            raise StaticArtifactFormulaError("breadth.json is absent")
+        breadth = json.loads(breadth_path.read_text(encoding="utf-8"))
+        rows = (breadth.get("payload") or {}).get("history_90d") or []
+        aggregates_by_date = {
+            str(row.get("date")): row
+            for row in rows
+            if isinstance(row, dict) and row.get("date")
+        }
+        for date_value in dates:
+            document_path = index_path.parent / f"{date_value}.json"
+            if not document_path.is_file():
+                raise StaticArtifactFormulaError(
+                    f"contributor document is absent for {date_value}"
+                )
+            document = json.loads(document_path.read_text(encoding="utf-8"))
+            if (
+                document.get("schema") != CONTRIBUTOR_SCHEMA_ID
+                or document.get("market") != market
+                or document.get("date") != date_value
+                or document.get("calculation_revision")
+                != CURRENT_BREADTH_CALCULATION_REVISION
+            ):
+                raise StaticArtifactFormulaError(
+                    f"contributor document identity is invalid for {date_value}"
+                )
+            contributors = document.get("contributors")
+            if not isinstance(contributors, list):
+                raise StaticArtifactFormulaError(
+                    f"contributors are invalid for {date_value}"
+                )
+            counts = {key: 0 for key in BREADTH_CONTRIBUTOR_SIGNALS}
+            symbols: set[str] = set()
+            for contributor in contributors:
+                if not isinstance(contributor, dict):
+                    raise StaticArtifactFormulaError(
+                        f"contributor row is invalid for {date_value}"
+                    )
+                symbol = str(contributor.get("symbol") or "").strip()
+                if not symbol or symbol in symbols:
+                    raise StaticArtifactFormulaError(
+                        f"contributor symbols are invalid for {date_value}"
+                    )
+                symbols.add(symbol)
+                daily_change = contributor.get("daily_change_pct")
+                if daily_change is not None and (
+                    isinstance(daily_change, bool)
+                    or not math.isfinite(float(daily_change))
+                ):
+                    raise StaticArtifactFormulaError(
+                        f"daily change is invalid for {symbol}/{date_value}"
+                    )
+                signals = contributor.get("signals")
+                if not isinstance(signals, dict) or not signals:
+                    raise StaticArtifactFormulaError(
+                        f"signals are invalid for {symbol}/{date_value}"
+                    )
+                for signal_key, value in signals.items():
+                    if (
+                        signal_key not in counts
+                        or isinstance(value, bool)
+                        or not math.isfinite(float(value))
+                    ):
+                        raise StaticArtifactFormulaError(
+                            f"signal is invalid for {symbol}/{date_value}"
+                        )
+                    counts[signal_key] += 1
+            aggregate = aggregates_by_date.get(date_value)
+            if aggregate is None:
+                raise StaticArtifactFormulaError(
+                    f"aggregate breadth row is absent for {date_value}"
+                )
+            for signal_key, definition in BREADTH_CONTRIBUTOR_SIGNALS.items():
+                if counts[signal_key] != aggregate.get(definition.aggregate_field):
+                    raise StaticArtifactFormulaError(
+                        f"count mismatch for {definition.aggregate_field}/{date_value}"
+                    )
 
     @classmethod
     def _validate_formula(

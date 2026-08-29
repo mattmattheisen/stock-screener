@@ -611,6 +611,11 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: (scan_manifest, []))
     monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
     monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
+    service._breadth_contributor_exporter = SimpleNamespace(
+        export=lambda *_args: {
+            "index_path": "markets/us/breadth/contributors/index.json"
+        }
+    )
     source_calls: dict[str, str] = {}
 
     def fake_groups(**kwargs):
@@ -645,10 +650,16 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert manifest["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["assets"]["charts"]["path"] == "charts/index.json"
     assert manifest["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
+    assert manifest["assets"]["breadth_contributors"]["index_path"] == (
+        "markets/us/breadth/contributors/index.json"
+    )
     assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["markets"]["US"]["features"]["opportunity_state"] is True
     assert manifest["markets"]["US"]["assets"]["charts"]["path"] == "charts/index.json"
     assert manifest["markets"]["US"]["assets"]["groups_rrg"]["path"] == "markets/us/groups_rrg.json"
+    assert manifest["markets"]["US"]["assets"]["breadth_contributors"] == {
+        "index_path": "markets/us/breadth/contributors/index.json"
+    }
     assert manifest["markets"]["US"]["rs_formula_version"] == BALANCED_RS_FORMULA_VERSION
     assert manifest["markets"]["US"]["market_rs_run_id"] == 42
     assert manifest["markets"]["US"]["rs_as_of_date"] == "2026-03-31"
@@ -1433,6 +1444,74 @@ def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     assert "US local warning" in manifest["warnings"]
     assert any("JP" in warning for warning in manifest["warnings"])
     assert any("TW" in warning for warning in manifest["warnings"])
+
+
+def test_combiner_drops_invalid_optional_contributors_without_dropping_market(
+    tmp_path,
+):
+    artifacts_dir = tmp_path / "artifacts"
+    market_dir = artifacts_dir / "job-de" / "markets" / "de"
+    (market_dir / "scan").mkdir(parents=True)
+    (market_dir / "scan" / "manifest.json").write_text(
+        '{"ok": true}\n', encoding="utf-8"
+    )
+    entry = {
+        "market": "DE",
+        "display_name": "Germany",
+        "as_of_date": "2026-08-28",
+        "features": {
+            "scan": True,
+            "breadth": True,
+            "groups": False,
+            "charts": False,
+        },
+        "pages": {
+            "scan": {"path": "markets/de/scan/manifest.json"},
+            "breadth": {"path": "markets/de/breadth.json"},
+        },
+        "assets": {
+            "charts": {"path": "markets/de/charts/index.json"},
+            "breadth_contributors": {
+                "index_path": "markets/de/breadth/contributors/index.json"
+            },
+        },
+    }
+    (market_dir / "breadth.json").write_text(
+        json.dumps(
+            {
+                "source_revision": "feature-run:DE:2026-08-28|breadth-r3",
+                "payload": {
+                    "current": {"calculation_revision": 3},
+                    "history_90d": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (market_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-08-28T22:00:00Z",
+                "market": "DE",
+                "entry": entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = StaticSiteExportService.combine_market_artifacts(
+        artifacts_dir,
+        tmp_path / "combined",
+    )
+
+    assert "DE" in result.manifest["supported_markets"]
+    assert "breadth_contributors" not in result.manifest["markets"]["DE"]["assets"]
+    assert any(
+        "DE breadth contributor asset ignored" in warning
+        for warning in result.warnings
+    )
 
 
 def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_path):

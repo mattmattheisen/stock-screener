@@ -44,6 +44,9 @@ from app.services.static_breadth_section_builder import (
     StaticBreadthEngineInputFactory,
     StaticBreadthSectionBuilder,
 )
+from app.services.static_breadth_contributor_exporter import (
+    StaticBreadthContributorExporter,
+)
 from app.services.static_chart_bundle_exporter import (
     StaticChartBundleConfig,
     StaticChartBundleExporter,
@@ -129,6 +132,7 @@ class StaticSiteExportService:
         benchmark_cache=None,
         chart_config: StaticChartBundleConfig | None = None,
         breadth_engine_input_factory: StaticBreadthEngineInputFactory | None = None,
+        breadth_contributor_exporter: StaticBreadthContributorExporter | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._rrg_payload_source = (
@@ -169,6 +173,10 @@ class StaticSiteExportService:
             price_cache=self._price_cache,
             benchmark_cache=self._benchmark_cache,
             engine_input_factory=breadth_engine_input_factory,
+        )
+        self._breadth_contributor_exporter = (
+            breadth_contributor_exporter
+            or StaticBreadthContributorExporter(json_writer=self._write_json)
         )
 
     def export(
@@ -448,6 +456,22 @@ class StaticSiteExportService:
                 "symbols_total": chart_manifest["symbols_total"],
             },
         }
+        try:
+            breadth_contributor_asset = self._breadth_contributor_exporter.export(
+                db,
+                output_dir,
+                path_prefix,
+                breadth_payload,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Static breadth contributor export unavailable for %s: %s",
+                market,
+                exc,
+            )
+            breadth_contributor_asset = None
+        if breadth_contributor_asset is not None:
+            assets["breadth_contributors"] = breadth_contributor_asset
         # Only publish the RRG asset/file for markets that actually have it, so
         # the static page hides the RRG toggle (gated on assets.groups_rrg.path)
         # instead of offering an empty view that triggers a wasted fetch.
