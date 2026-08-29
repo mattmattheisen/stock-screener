@@ -11,10 +11,19 @@ import {
 } from '@mui/material';
 
 import BreadthContextStrip from '../../components/Breadth/BreadthContextStrip';
+import BreadthContributorDialog from '../../components/Breadth/BreadthContributorDialog';
 import BreadthHistoryTable from '../../components/Breadth/BreadthHistoryTable';
+import { buildBreadthContributorView } from '../../components/Breadth/breadthContributorView';
+import { useBreadthContributors } from '../../components/Breadth/useBreadthContributors';
 import BreadthChart from '../../components/Charts/BreadthChart';
 import BreadthGroupAttribution from '../components/BreadthGroupAttribution';
-import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
+import {
+  fetchStaticBreadthContributorIndex,
+  fetchStaticBreadthContributors,
+  fetchStaticJson,
+  resolveStaticMarketEntry,
+  useStaticManifest,
+} from '../dataClient';
 import { useStaticMarket } from '../StaticMarketContext';
 
 const RANGE_DAYS = { '1M': 31, '3M': 90 };
@@ -31,6 +40,19 @@ function StaticBreadthPage() {
     queryFn: () => fetchStaticJson(marketEntry.pages.breadth.path),
     enabled: Boolean(marketEntry.pages?.breadth?.path),
     staleTime: Infinity,
+  });
+  const contributorIndexPath = marketEntry.assets?.breadth_contributors?.index_path;
+  const contributorDrilldown = useBreadthContributors({
+    market: marketEntry.market,
+    indexQueryKey: contributorIndexPath
+      ? ['staticBreadthContributors', 'index', marketEntry.market, contributorIndexPath]
+      : null,
+    loadIndex: contributorIndexPath
+      ? () => fetchStaticBreadthContributorIndex(contributorIndexPath)
+      : null,
+    loadDate: contributorIndexPath
+      ? (date) => fetchStaticBreadthContributors(contributorIndexPath, date)
+      : null,
   });
   const [timeRange, setTimeRange] = useState('1M');
   const [selectedTab, setSelectedTab] = useState(0);
@@ -49,6 +71,24 @@ function StaticBreadthPage() {
   }, [payload.benchmark_overlay, payload.spy_overlay, timeRange]);
   const benchmarkLabel = payload.benchmark_symbol
     || (marketEntry.market === 'US' ? 'SPY' : 'Benchmark');
+  const contributorViewState = useMemo(() => {
+    if (!contributorDrilldown.dialogQuery.data || !contributorDrilldown.selected) {
+      return { view: null, inconsistent: null };
+    }
+    const { metric, row } = contributorDrilldown.selected;
+    try {
+      return {
+        view: buildBreadthContributorView(
+          contributorDrilldown.dialogQuery.data,
+          metric,
+          row[metric],
+        ),
+        inconsistent: null,
+      };
+    } catch (error) {
+      return { view: null, inconsistent: error.message };
+    }
+  }, [contributorDrilldown.dialogQuery.data, contributorDrilldown.selected]);
 
   if (manifestQuery.isLoading || breadthQuery.isLoading) {
     return (
@@ -117,13 +157,29 @@ function StaticBreadthPage() {
                   Recent Sessions
                 </Typography>
               </Box>
-              <BreadthHistoryTable rows={history} maxRows={20} />
+              <BreadthHistoryTable
+                rows={history}
+                maxRows={20}
+                contributorDates={contributorDrilldown.availableDates}
+                onContributorCellClick={contributorDrilldown.open}
+              />
             </Paper>
           )}
         </>
       )}
 
       {selectedTab === 1 && <BreadthGroupAttribution attribution={groupAttribution} />}
+      <BreadthContributorDialog
+        open={Boolean(contributorDrilldown.selected)}
+        metric={contributorDrilldown.selected?.metric}
+        row={contributorDrilldown.selected?.row}
+        view={contributorViewState.view}
+        isLoading={contributorDrilldown.dialogQuery.isLoading}
+        error={contributorDrilldown.dialogQuery.error}
+        inconsistent={contributorViewState.inconsistent}
+        onRetry={() => contributorDrilldown.dialogQuery.refetch()}
+        onClose={contributorDrilldown.close}
+      />
     </Box>
   );
 }

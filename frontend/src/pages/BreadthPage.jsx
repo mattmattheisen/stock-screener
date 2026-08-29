@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -13,13 +13,18 @@ import { format, parseISO } from 'date-fns';
 
 import {
   getBreadthBootstrap,
+  getBreadthContributorIndex,
+  getBreadthContributors,
   getBreadthSummary,
   getCurrentBreadth,
   getHistoricalBreadth,
 } from '../api/breadth';
 import { getPriceHistory } from '../api/stocks';
 import BreadthContextStrip from '../components/Breadth/BreadthContextStrip';
+import BreadthContributorDialog from '../components/Breadth/BreadthContributorDialog';
 import BreadthHistoryTable from '../components/Breadth/BreadthHistoryTable';
+import { buildBreadthContributorView } from '../components/Breadth/breadthContributorView';
+import { useBreadthContributors } from '../components/Breadth/useBreadthContributors';
 import BreadthChart from '../components/Charts/BreadthChart';
 import { useMarketForCapability } from '../contexts/MarketContext';
 import { useRuntime } from '../contexts/RuntimeContext';
@@ -119,6 +124,16 @@ function BreadthPage() {
   const liveQueriesEnabled = runtimeReady && (
     !snapshotEnabled || breadthBootstrapQuery.isSuccess || breadthBootstrapQuery.isError
   );
+  const contributorDrilldown = useBreadthContributors({
+    market: selectedMarket,
+    indexQueryKey: liveQueriesEnabled
+      ? ['breadthContributors', 'index', selectedMarket]
+      : null,
+    loadIndex: liveQueriesEnabled
+      ? () => getBreadthContributorIndex(selectedMarket)
+      : null,
+    loadDate: (date) => getBreadthContributors(selectedMarket, date),
+  });
 
   const {
     data: currentBreadth,
@@ -176,6 +191,24 @@ function BreadthPage() {
     enabled: liveQueriesEnabled && Boolean(benchmarkSymbol),
     staleTime: 60_000,
   });
+  const contributorViewState = useMemo(() => {
+    if (!contributorDrilldown.dialogQuery.data || !contributorDrilldown.selected) {
+      return { view: null, inconsistent: null };
+    }
+    const { metric, row } = contributorDrilldown.selected;
+    try {
+      return {
+        view: buildBreadthContributorView(
+          contributorDrilldown.dialogQuery.data,
+          metric,
+          row[metric],
+        ),
+        inconsistent: null,
+      };
+    } catch (error) {
+      return { view: null, inconsistent: error.message };
+    }
+  }, [contributorDrilldown.dialogQuery.data, contributorDrilldown.selected]);
 
   if (!runtimeReady || isLoadingCurrent) {
     return (
@@ -245,9 +278,28 @@ function BreadthPage() {
               Primary tracks daily movers and ratios; secondary tracks trend windows; context adds T2108, ATR extension, and universe size.
             </Typography>
           </Box>
-          <BreadthHistoryTable rows={historicalBreadth} />
+          <BreadthHistoryTable
+            rows={historicalBreadth}
+            contributorDates={contributorDrilldown.availableDates}
+            onContributorCellClick={contributorDrilldown.open}
+          />
         </Paper>
       )}
+
+      <BreadthContributorDialog
+        open={Boolean(contributorDrilldown.selected)}
+        metric={contributorDrilldown.selected?.metric}
+        row={contributorDrilldown.selected?.row}
+        view={contributorViewState.view}
+        isLoading={contributorDrilldown.dialogQuery.isLoading}
+        error={contributorDrilldown.dialogQuery.error?.response?.status === 404
+          ? null
+          : contributorDrilldown.dialogQuery.error}
+        unavailable={contributorDrilldown.dialogQuery.error?.response?.status === 404}
+        inconsistent={contributorViewState.inconsistent}
+        onRetry={() => contributorDrilldown.dialogQuery.refetch()}
+        onClose={contributorDrilldown.close}
+      />
 
       {currentBreadth && (
         <Typography

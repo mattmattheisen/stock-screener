@@ -65,6 +65,8 @@ vi.mock('../components/Charts/BreadthChart', () => ({
 
 vi.mock('../api/breadth', () => ({
   getBreadthBootstrap: vi.fn(),
+  getBreadthContributorIndex: vi.fn(),
+  getBreadthContributors: vi.fn(),
   getCurrentBreadth: vi.fn(),
   getHistoricalBreadth: vi.fn(),
   getBreadthSummary: vi.fn(),
@@ -130,10 +132,55 @@ beforeEach(() => {
     date_range_end: '2026-04-24',
   }));
   breadthApi.getBreadthBootstrap.mockRejectedValue(new Error('no snapshot'));
+  breadthApi.getBreadthContributorIndex.mockImplementation((market = 'US') => Promise.resolve({
+    schema: 'breadth-contributors-v1',
+    market,
+    calculation_revision: 3,
+    dates: [],
+  }));
+  breadthApi.getBreadthContributors.mockResolvedValue(null);
   stocksApi.getPriceHistory.mockResolvedValue([]);
 });
 
 describe('BreadthPage', () => {
+  it('loads one contributor date lazily and opens the shared dialog', async () => {
+    const user = userEvent.setup();
+    breadthApi.getHistoricalBreadth.mockImplementation((startDate, endDate, limit, market = 'US') => (
+      Promise.resolve([{ ...breadthRow(market), stocks_up_4pct: 1 }])
+    ));
+    breadthApi.getBreadthContributorIndex.mockResolvedValue({
+      schema: 'breadth-contributors-v1',
+      market: 'HK',
+      calculation_revision: 3,
+      dates: ['2026-04-24'],
+    });
+    breadthApi.getBreadthContributors.mockResolvedValue({
+      schema: 'breadth-contributors-v1',
+      market: 'HK',
+      date: '2026-04-24',
+      calculation_revision: 3,
+      contributors: [{
+        symbol: '0700',
+        company_name: 'Tencent',
+        ibd_industry_group: 'Internet Content',
+        daily_change_pct: 5,
+        signals: { up_4pct: 5 },
+      }],
+    });
+
+    renderBreadthPage();
+    const button = await screen.findByRole('button', {
+      name: 'View 1 contributing stocks for Stocks Up 4%+',
+    });
+    expect(breadthApi.getBreadthContributors).not.toHaveBeenCalled();
+    await user.click(button);
+
+    expect(await screen.findByRole('dialog', { name: /Stocks Up 4%\+.*1 stocks/i })).toBeInTheDocument();
+    expect(await screen.findByText('Tencent')).toBeInTheDocument();
+    expect(breadthApi.getBreadthContributors).toHaveBeenCalledTimes(1);
+    expect(breadthApi.getBreadthContributors).toHaveBeenCalledWith('HK', '2026-04-24');
+  });
+
   it('explains the purpose of each recent-history indicator group', async () => {
     renderBreadthPage();
 

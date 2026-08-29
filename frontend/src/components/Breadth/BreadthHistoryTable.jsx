@@ -1,5 +1,6 @@
 import {
   Box,
+  ButtonBase,
   Table,
   TableBody,
   TableCell,
@@ -97,6 +98,7 @@ const groupStartMetrics = new Set(GROUPS.map((group) => group.metrics[0]));
 const metricGroupColors = Object.fromEntries(
   GROUPS.map((group) => [group.metrics[0], group.color]),
 );
+const EMPTY_CONTRIBUTOR_DATES = new Set();
 
 function MetricHeader({ metric }) {
   const lines = metricHeaderLines[metric] ?? [breadthMetricDefinitions[metric].label];
@@ -131,7 +133,12 @@ function MetricHeader({ metric }) {
   );
 }
 
-function BreadthHistoryTable({ rows = [], maxRows = 90 }) {
+function BreadthHistoryTable({
+  rows = [],
+  maxRows = 90,
+  contributorDates = EMPTY_CONTRIBUTOR_DATES,
+  onContributorCellClick,
+}) {
   const metrics = [
     ...primaryBreadthMetrics,
     ...secondaryBreadthMetrics,
@@ -228,15 +235,47 @@ function BreadthHistoryTable({ rows = [], maxRows = 90 }) {
               </TableCell>
               {metrics.map((metric) => {
                 const tone = metricTone(row, metric, toneThresholds);
+                const definition = breadthMetricDefinitions[metric];
+                const value = Number(row?.[metric]);
+                const interactive = Boolean(
+                  definition?.contributor
+                  && contributorDates.has(row.date)
+                  && Number.isFinite(value)
+                  && value > 0
+                  && onContributorCellClick,
+                );
                 return (
                   <TableCell
                     key={metric}
                     align="right"
                     data-testid={`breadth-cell-${metric}`}
                     data-tone={tone}
-                    sx={metricCellSx(metric, tone)}
+                    sx={{
+                      ...metricCellSx(metric, tone),
+                      ...(interactive ? { p: 0 } : {}),
+                    }}
                   >
-                    {formatValue(row, metric)}
+                    {interactive ? (
+                      <ButtonBase
+                        aria-label={`View ${value} contributing stocks for ${definition.label}`}
+                        onClick={(event) => onContributorCellClick(metric, row, event.currentTarget)}
+                        sx={{
+                          width: '100%',
+                          minHeight: 33,
+                          justifyContent: 'flex-end',
+                          px: 0.5,
+                          color: 'inherit',
+                          font: 'inherit',
+                          fontWeight: 'inherit',
+                          '&:focus-visible': {
+                            outline: '2px solid #fff',
+                            outlineOffset: '-3px',
+                          },
+                        }}
+                      >
+                        {formatValue(row, metric)}
+                      </ButtonBase>
+                    ) : formatValue(row, metric)}
                   </TableCell>
                 );
               })}

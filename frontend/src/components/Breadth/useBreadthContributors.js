@@ -1,12 +1,17 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 const validateIndex = (index, market) => {
+  const dates = index?.dates;
   if (
     index?.schema !== 'breadth-contributors-v1'
     || index?.calculation_revision !== 3
     || String(index?.market || '').toUpperCase() !== String(market || '').toUpperCase()
-    || !Array.isArray(index?.dates)
+    || !Array.isArray(dates)
+    || dates.length > 20
+    || new Set(dates).size !== dates.length
+    || dates.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date))
+    || dates.some((date, position) => position > 0 && dates[position - 1] < date)
   ) {
     throw new Error('Invalid breadth contributor index');
   }
@@ -20,6 +25,8 @@ export const useBreadthContributors = ({
   loadDate,
 }) => {
   const [selected, setSelected] = useState(null);
+  const indexIdentity = JSON.stringify(indexQueryKey);
+  useEffect(() => setSelected(null), [market, indexIdentity]);
   const indexQuery = useQuery({
     queryKey: indexQueryKey,
     queryFn: async () => validateIndex(await loadIndex(), market),
