@@ -23,6 +23,20 @@ export const getBreadthBootstrap = async (market = 'US') => {
   return response.data;
 };
 
+export const getBreadthContributorIndex = async (market = 'US') => {
+  const response = await apiClient.get('/v1/breadth/contributors/index', {
+    params: { market }
+  });
+  return response.data;
+};
+
+export const getBreadthContributors = async (market, date) => {
+  const response = await apiClient.get('/v1/breadth/contributors', {
+    params: { market, date }
+  });
+  return response.data;
+};
+
 /**
  * Get historical market breadth data for a date range.
  *

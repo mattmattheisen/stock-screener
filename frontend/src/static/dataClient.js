@@ -16,6 +16,17 @@ export const fetchStaticJson = async (relativePath) => {
   return response.json();
 };
 
+export const fetchStaticBreadthContributorIndex = (indexPath) => (
+  fetchStaticJson(indexPath)
+);
+
+export const fetchStaticBreadthContributors = (indexPath, date) => {
+  if (!/\/index\.json$/.test(indexPath || '') || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+    throw new Error('Invalid static breadth contributor path');
+  }
+  return fetchStaticJson(indexPath.replace(/index\.json$/, `${date}.json`));
+};
+
 export const useStaticManifest = () => useQuery({
   queryKey: ['staticManifest'],
   queryFn: () => fetchStaticJson('manifest.json'),
