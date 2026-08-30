@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy.orm import Session
 
+from app.models.market_breadth import MarketBreadth
 from app.services.bounded_history_universe import (
     CurrentActiveFallbackUniverseResolver,
 )
@@ -32,6 +33,9 @@ from app.services.point_in_time_universe_service import (
     hash_point_in_time_universe_symbols,
 )
 from app.services.static_market_artifact_contract import STATIC_SITE_SCHEMA_VERSION
+from app.services.static_persisted_breadth_payload import (
+    build_persisted_breadth_payload,
+)
 from app.services.static_site_errors import StaticSiteSectionUnavailableError
 
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
@@ -159,9 +163,31 @@ class StaticBreadthSectionBuilder:
             snapshot = self._ui_snapshot_service.publish_breadth_bootstrap(
                 market=market
             ).to_dict()
-            payload = snapshot.get("payload", {})
+            payload = dict(snapshot.get("payload", {}))
+            if db is not None:
+                benchmark_symbol, benchmark = self._get_market_benchmark_history(
+                    market,
+                    period="1y",
+                )
+                if not benchmark.empty:
+                    benchmark_overlay = self._serialize_history_bars(
+                        benchmark,
+                        period_days=31,
+                        end_date=expected_as_of_date,
+                    )
+                    payload.update(
+                        benchmark_symbol=benchmark_symbol,
+                        benchmark_overlay=benchmark_overlay,
+                        spy_overlay=benchmark_overlay,
+                    )
+                payload = build_persisted_breadth_payload(
+                    db=db,
+                    market=market,
+                    expected_as_of_date=expected_as_of_date,
+                    snapshot_payload=payload,
+                )
             current_date = (payload.get("current") or {}).get("date")
-            if current_date != expected_as_of_date.isoformat():
+            if str(current_date) != expected_as_of_date.isoformat():
                 raise StaticSiteSectionUnavailableError(
                     section="breadth",
                     reason=(
@@ -169,14 +195,61 @@ class StaticBreadthSectionBuilder:
                         f"{expected_as_of_date.isoformat()} (latest snapshot date: {current_date or 'none'})."
                     ),
                 )
-            return {
+            result = {
                 "schema_version": STATIC_SITE_SCHEMA_VERSION,
                 "generated_at": generated_at,
                 "available": True,
                 "published_at": _coerce_datetime(snapshot.get("published_at")),
-                "source_revision": snapshot.get("source_revision"),
+                "source_revision": (
+                    f"{expected_as_of_date.isoformat()}"
+                    f"|breadth-r{CURRENT_BREADTH_CALCULATION_REVISION}"
+                    if db is not None
+                    else snapshot.get("source_revision")
+                ),
+                "market": market,
                 "payload": payload,
             }
+            if db is None:
+                return result
+
+            metrics_by_date: dict[date, Mapping[str, Any]] = {}
+            for row in payload.get("history_90d") or ():
+                if not isinstance(row, Mapping) or not row.get("date"):
+                    continue
+                calculation_date = date.fromisoformat(str(row["date"]))
+                metrics_by_date[calculation_date] = row
+            ordered_dates = sorted(metrics_by_date)
+            signature_rows = (
+                db.query(
+                    MarketBreadth.date,
+                    MarketBreadth.contributor_calculation_signature,
+                )
+                .filter(
+                    MarketBreadth.market == market.upper(),
+                    MarketBreadth.date.in_(ordered_dates),
+                    MarketBreadth.calculation_revision
+                    == CURRENT_BREADTH_CALCULATION_REVISION,
+                )
+                .all()
+                if ordered_dates
+                else ()
+            )
+            contributor_calculation_signatures = {
+                calculation_date.isoformat(): signature
+                for calculation_date, signature in signature_rows
+                if signature
+            }
+            payload["group_attribution"] = self._build_group_attribution(
+                db=db,
+                market=market.upper(),
+                ordered_dates=ordered_dates,
+                metrics_by_date=metrics_by_date,
+                expected_calculation_signatures=(contributor_calculation_signatures),
+            )
+            result["_contributor_calculation_signatures"] = (
+                contributor_calculation_signatures
+            )
+            return result
 
         scan_symbols = [
             str(row["symbol"]).upper() for row in serialized_rows if row.get("symbol")

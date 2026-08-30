@@ -142,6 +142,25 @@ def test_export_writes_index_and_twenty_date_shards(tmp_path: Path):
     )
 
 
+def test_export_queries_contributors_for_pinned_history_dates(tmp_path: Path):
+    db = _db_session()
+    pinned_date = date(2026, 7, 1)
+    _seed(db, "CA", pinned_date)
+    for offset in range(1, 22):
+        _seed(db, "CA", pinned_date + timedelta(days=offset))
+
+    asset = StaticBreadthContributorExporter().export(
+        db,
+        tmp_path,
+        Path("markets/ca"),
+        _breadth_payload("CA", [pinned_date]),
+    )
+
+    assert asset == {"index_path": "markets/ca/breadth/contributors/index.json"}
+    index = json.loads((tmp_path / asset["index_path"]).read_text())
+    assert index["dates"] == [pinned_date.isoformat()]
+
+
 def test_export_is_additive_and_omits_asset_when_no_snapshot(tmp_path: Path):
     db = _db_session()
     payload = _breadth_payload("DE", [date(2026, 8, 28)])

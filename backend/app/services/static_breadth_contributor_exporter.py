@@ -6,6 +6,7 @@ import json
 import shutil
 import tempfile
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -68,7 +69,16 @@ class StaticBreadthContributorExporter:
             for row in history
             if isinstance(row, dict) and row.get("date")
         }
-        index = list_contributor_dates(db, market, limit=20)
+        requested_dates = tuple(
+            date.fromisoformat(calculation_date)
+            for calculation_date in aggregates_by_date
+        )
+        index = list_contributor_dates(
+            db,
+            market,
+            limit=20,
+            dates=requested_dates,
+        )
         dates = tuple(
             calculation_date
             for calculation_date in index.dates

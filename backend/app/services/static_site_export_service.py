@@ -422,7 +422,6 @@ class StaticSiteExportService:
                 generated_at=generated_at,
                 expected_as_of_date=latest_run.as_of_date,
                 market=market,
-                serialized_rows=serialized_rows,
             ),
         )
         home_payload = self._build_home_payload(

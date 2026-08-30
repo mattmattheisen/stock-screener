@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from inspect import Parameter, getsource, signature
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -72,6 +72,7 @@ from app.services.static_site_export_service import (
     StaticSiteExportService,
     StaticSiteSectionUnavailableError,
 )
+from app.services.ui_snapshot_service import market_breadth_to_dict
 
 
 @pytest.fixture
@@ -316,6 +317,224 @@ def _static_rrg_payload(market: str, as_of_date: str) -> dict:
             },
         },
     }
+
+
+def test_static_export_uses_persisted_breadth_after_price_cache_changes(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    """Break caught: recalculating static breadth after feature-price hydration."""
+    service, session_factory = service_and_session_factory
+    calculation_date = date(2026, 8, 21)
+    latest_calculation_date = date(2026, 10, 1)
+    run_id = 130
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=run_id,
+            as_of_date=calculation_date,
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 8, 21, 21, 30, 0, tzinfo=UTC),
+            config_json={
+                "universe": {"market": "US"},
+                "rs_formula_version": LEGACY_RS_FORMULA_VERSION,
+            },
+        ),
+        pointer_run_id=run_id,
+        pointer_key="latest_published_market:US",
+    )
+    _insert_common_stock_universe(
+        session_factory,
+        market="US",
+        symbols=("AAPL",),
+    )
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=calculation_date,
+        contributors=(("AAPL", "Computer Software-Database", 8.0, "up_4pct"),),
+    )
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=latest_calculation_date,
+        contributors=(("AAPL", "Computer Software-Database", -6.0, "down_4pct"),),
+    )
+    with session_factory() as db:
+        stored = (
+            db.query(MarketBreadth)
+            .filter(
+                MarketBreadth.market == "US",
+                MarketBreadth.date == calculation_date,
+            )
+            .one()
+        )
+        stored_latest = (
+            db.query(MarketBreadth)
+            .filter(
+                MarketBreadth.market == "US",
+                MarketBreadth.date == latest_calculation_date,
+            )
+            .one()
+        )
+        stored_row = market_breadth_to_dict(stored)
+        stored_latest_row = market_breadth_to_dict(stored_latest)
+        stored_signature = stored.contributor_calculation_signature
+    assert stored_row is not None
+    assert stored_latest_row is not None
+    stored_row["date"] = calculation_date.isoformat()
+    stored_latest_row["date"] = latest_calculation_date.isoformat()
+
+    monkeypatch.setattr(
+        service._ui_snapshot_service,
+        "publish_breadth_bootstrap",
+        lambda market="US": SimpleNamespace(
+            to_dict=lambda: {
+                "published_at": "2026-08-21T22:00:00Z",
+                "source_revision": "2026-10-01|breadth-r3",
+                "payload": {
+                    "current": stored_latest_row,
+                    "summary": {
+                        "market": "US",
+                        "latest_date": latest_calculation_date.isoformat(),
+                        "total_records": 2,
+                        "date_range_start": calculation_date.isoformat(),
+                        "date_range_end": latest_calculation_date.isoformat(),
+                    },
+                    "history_90d": [stored_latest_row, stored_row],
+                    "chart_range": "1M",
+                    "chart_data": [stored_latest_row, stored_row],
+                    "benchmark_symbol": "SPY",
+                    "benchmark_overlay": [
+                        {
+                            "date": latest_calculation_date.isoformat(),
+                            "open": 200.0,
+                            "high": 201.0,
+                            "low": 199.0,
+                            "close": 200.0,
+                            "volume": 1_000_000,
+                        }
+                    ],
+                    "spy_overlay": [],
+                },
+            }
+        ),
+    )
+
+    benchmark_prices = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0, 200.0],
+            "High": [101.0, 102.0, 201.0],
+            "Low": [99.0, 100.0, 199.0],
+            "Close": [100.0, 101.0, 200.0],
+            "Volume": [1_000_000, 1_100_000, 1_200_000],
+        },
+        index=pd.to_datetime(["2026-08-20", "2026-08-21", "2026-10-01"]),
+    )
+
+    def changed_cache(symbols, *, period):
+        if symbols == ["SPY"] and period == "1y":
+            return {"SPY": benchmark_prices}
+        raise AssertionError(
+            "static breadth must not recalculate from the post-hydration price cache"
+        )
+
+    service._breadth_builder = StaticBreadthSectionBuilder(
+        ui_snapshot_service=service._ui_snapshot_service,
+        price_cache=_FakePriceCache(changed_cache),
+        benchmark_cache=_FakeBenchmarkCache(),
+    )
+    scan_manifest = {
+        "schema_version": "static-scan-v1",
+        "generated_at": "2026-08-21T22:00:00Z",
+        "as_of_date": calculation_date.isoformat(),
+        "run_id": run_id,
+        "rs_formula_version": LEGACY_RS_FORMULA_VERSION,
+        "market_rs_run_id": None,
+        "rs_as_of_date": calculation_date.isoformat(),
+        "rs_universe_size": 1,
+        "rows_total": 1,
+        "default_filtered_rows_total": 1,
+        "chunks": [],
+        "preview_rows": [{"symbol": "AAPL"}],
+        "preset_screens": [],
+    }
+    monkeypatch.setattr(
+        service,
+        "_load_scan_export_source",
+        lambda *_args, **_kwargs: ([], SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        service,
+        "_export_scan_bundle",
+        lambda **_kwargs: (scan_manifest, [{"symbol": "AAPL"}]),
+    )
+    monkeypatch.setattr(
+        service,
+        "_export_chart_bundle",
+        lambda **_kwargs: {
+            "path": "markets/us/charts/index.json",
+            "limit": 200,
+            "symbols_total": 0,
+            "available": False,
+            "skipped_symbols": [],
+        },
+    )
+    unavailable = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "available": False,
+        "payload": {},
+    }
+    monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: unavailable)
+    monkeypatch.setattr(
+        service, "_build_groups_rrg_payload", lambda **_kwargs: unavailable
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_home_payload",
+        lambda **_kwargs: {
+            "schema_version": STATIC_SITE_SCHEMA_VERSION,
+            "as_of_date": calculation_date.isoformat(),
+            "freshness": {"scan_run_id": run_id},
+        },
+    )
+
+    result = service.export(
+        tmp_path / "static-data",
+        markets=("US",),
+        rs_formula_version_overrides={"US": LEGACY_RS_FORMULA_VERSION},
+        feature_run_ids_by_market={"US": run_id},
+    )
+
+    contributor_root = (
+        tmp_path / "static-data" / "markets" / "us" / "breadth" / "contributors"
+    )
+    assert json.loads((contributor_root / "index.json").read_text(encoding="utf-8"))[
+        "dates"
+    ] == [calculation_date.isoformat()]
+    breadth = json.loads(
+        (tmp_path / "static-data" / "markets" / "us" / "breadth.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert breadth["payload"]["current"]["date"] == calculation_date.isoformat()
+    assert [row["date"] for row in breadth["payload"]["history_90d"]] == [
+        calculation_date.isoformat()
+    ]
+    assert [row["date"] for row in breadth["payload"]["benchmark_overlay"]] == [
+        "2026-08-20",
+        calculation_date.isoformat(),
+    ]
+    assert breadth["payload"]["group_attribution"]["available"] is True
+    assert (
+        breadth["payload"]["group_attribution"]["history"][0]["groups"][0]["group"]
+        == "Computer Software-Database"
+    )
+    assert not any(
+        "breadth contributor data unavailable" in item.lower()
+        for item in result.warnings
+    )
+    assert stored_signature is not None
 
 
 def _export_zero_row_feature_run(
