@@ -33,6 +33,9 @@ from app.services.point_in_time_universe_service import (
     hash_point_in_time_universe_symbols,
 )
 from app.services.static_market_artifact_contract import STATIC_SITE_SCHEMA_VERSION
+from app.services.static_persisted_breadth_payload import (
+    build_persisted_breadth_payload,
+)
 from app.services.static_site_errors import StaticSiteSectionUnavailableError
 
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
@@ -161,8 +164,15 @@ class StaticBreadthSectionBuilder:
                 market=market
             ).to_dict()
             payload = dict(snapshot.get("payload", {}))
+            if db is not None:
+                payload = build_persisted_breadth_payload(
+                    db=db,
+                    market=market,
+                    expected_as_of_date=expected_as_of_date,
+                    snapshot_payload=payload,
+                )
             current_date = (payload.get("current") or {}).get("date")
-            if current_date != expected_as_of_date.isoformat():
+            if str(current_date) != expected_as_of_date.isoformat():
                 raise StaticSiteSectionUnavailableError(
                     section="breadth",
                     reason=(
@@ -175,7 +185,12 @@ class StaticBreadthSectionBuilder:
                 "generated_at": generated_at,
                 "available": True,
                 "published_at": _coerce_datetime(snapshot.get("published_at")),
-                "source_revision": snapshot.get("source_revision"),
+                "source_revision": (
+                    f"{expected_as_of_date.isoformat()}"
+                    f"|breadth-r{CURRENT_BREADTH_CALCULATION_REVISION}"
+                    if db is not None
+                    else snapshot.get("source_revision")
+                ),
                 "market": market,
                 "payload": payload,
             }

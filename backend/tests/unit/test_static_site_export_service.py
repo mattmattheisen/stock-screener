@@ -327,6 +327,7 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
     """Break caught: recalculating static breadth after feature-price hydration."""
     service, session_factory = service_and_session_factory
     calculation_date = date(2026, 8, 21)
+    latest_calculation_date = date(2026, 8, 24)
     run_id = 130
     _insert_runs(
         session_factory,
@@ -354,6 +355,11 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
         calculation_date=calculation_date,
         contributors=(("AAPL", "Computer Software-Database", 8.0, "up_4pct"),),
     )
+    _insert_breadth_contributors(
+        session_factory,
+        calculation_date=latest_calculation_date,
+        contributors=(("AAPL", "Computer Software-Database", -6.0, "down_4pct"),),
+    )
     with session_factory() as db:
         stored = (
             db.query(MarketBreadth)
@@ -363,10 +369,21 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
             )
             .one()
         )
+        stored_latest = (
+            db.query(MarketBreadth)
+            .filter(
+                MarketBreadth.market == "US",
+                MarketBreadth.date == latest_calculation_date,
+            )
+            .one()
+        )
         stored_row = market_breadth_to_dict(stored)
+        stored_latest_row = market_breadth_to_dict(stored_latest)
         stored_signature = stored.contributor_calculation_signature
     assert stored_row is not None
+    assert stored_latest_row is not None
     stored_row["date"] = calculation_date.isoformat()
+    stored_latest_row["date"] = latest_calculation_date.isoformat()
 
     monkeypatch.setattr(
         service._ui_snapshot_service,
@@ -376,17 +393,17 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
                 "published_at": "2026-08-21T22:00:00Z",
                 "source_revision": "2026-08-21|breadth-r3",
                 "payload": {
-                    "current": stored_row,
+                    "current": stored_latest_row,
                     "summary": {
                         "market": "US",
-                        "latest_date": calculation_date.isoformat(),
-                        "total_records": 1,
+                        "latest_date": latest_calculation_date.isoformat(),
+                        "total_records": 2,
                         "date_range_start": calculation_date.isoformat(),
-                        "date_range_end": calculation_date.isoformat(),
+                        "date_range_end": latest_calculation_date.isoformat(),
                     },
-                    "history_90d": [stored_row],
+                    "history_90d": [stored_latest_row, stored_row],
                     "chart_range": "1M",
-                    "chart_data": [stored_row],
+                    "chart_data": [stored_latest_row, stored_row],
                     "benchmark_symbol": "SPY",
                     "benchmark_overlay": [],
                     "spy_overlay": [],
@@ -478,6 +495,10 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
             encoding="utf-8"
         )
     )
+    assert breadth["payload"]["current"]["date"] == calculation_date.isoformat()
+    assert [row["date"] for row in breadth["payload"]["history_90d"]] == [
+        calculation_date.isoformat()
+    ]
     assert breadth["payload"]["group_attribution"]["available"] is True
     assert (
         breadth["payload"]["group_attribution"]["history"][0]["groups"][0]["group"]
