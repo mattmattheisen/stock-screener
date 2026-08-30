@@ -183,6 +183,7 @@ class StaticBreadthSectionBuilder:
         ]
         currencies_by_symbol: dict[str, str] = {}
         universes_by_date: dict[date, BreadthUniverseSnapshot] | None = None
+        latest_membership_dates_by_symbol: dict[str, date] | None = None
         symbols = scan_symbols
         if db is not None:
             universe = self._universe_resolver.resolve(
@@ -245,12 +246,25 @@ class StaticBreadthSectionBuilder:
                     for member in universe.members
                 }
             )
+            latest_membership_dates_by_symbol = {}
+            for item_date, universe in universes_by_date.items():
+                for member in universe.members:
+                    previous_date = latest_membership_dates_by_symbol.get(
+                        member.symbol
+                    )
+                    if previous_date is None or item_date > previous_date:
+                        latest_membership_dates_by_symbol[member.symbol] = item_date
             currencies_by_symbol = {
                 member.symbol: member.currency
                 for universe in universes_by_date.values()
                 for member in universe.members
             }
-        price_data = self._get_cached_price_histories(symbols, period="2y")
+        price_data = self._get_cached_price_histories(
+            symbols,
+            period="2y",
+            required_as_of_date=expected_as_of_date,
+            required_as_of_dates_by_symbol=latest_membership_dates_by_symbol,
+        )
         engine_inputs = self._engine_input_factory.build(
             market=market,
             canonical_dates=canonical_dates,
@@ -464,13 +478,33 @@ class StaticBreadthSectionBuilder:
         symbols: list[str],
         *,
         period: str,
+        required_as_of_date: date,
+        required_as_of_dates_by_symbol: dict[str, date] | None = None,
     ) -> dict[str, pd.DataFrame | None]:
         results: dict[str, pd.DataFrame | None] = {
             str(symbol).upper(): None for symbol in symbols
         }
+        symbol_dates = {
+            str(symbol).upper(): item_date
+            for symbol, item_date in (required_as_of_dates_by_symbol or {}).items()
+        }
         for start in range(0, len(symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
             batch = symbols[start : start + STATIC_CHART_LOOKUP_BATCH_SIZE]
-            results.update(self._price_cache.get_many_cached_only(batch, period=period))
+            grouped_symbols: dict[date, list[str]] = {}
+            for symbol in batch:
+                symbol_date = symbol_dates.get(
+                    str(symbol).upper(), required_as_of_date
+                )
+                grouped_symbols.setdefault(symbol_date, []).append(symbol)
+            for symbol_date, date_symbols in grouped_symbols.items():
+                results.update(
+                    self._price_cache.get_many_cached_only_fresh(
+                        date_symbols,
+                        period=period,
+                        required_as_of_date=symbol_date,
+                        minimum_rows=1,
+                    )
+                )
         return results
 
     def _get_market_benchmark_history(

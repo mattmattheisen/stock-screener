@@ -120,8 +120,17 @@ def test_static_builder_resolves_and_passes_a_universe_for_each_history_date():
             assert (symbol, period) == ("SPY", "1y")
             return price_frame
 
-        def get_many_cached_only(self, symbols, *, period):
+        def get_many_cached_only_fresh(
+            self,
+            symbols,
+            *,
+            period,
+            required_as_of_date,
+            minimum_rows,
+        ):
             assert period == "2y"
+            assert required_as_of_date == second_date
+            assert minimum_rows == 1
             return {symbol: price_frame for symbol in symbols}
 
     class _BenchmarkCache:
@@ -164,6 +173,168 @@ def test_static_builder_resolves_and_passes_a_universe_for_each_history_date():
         "NEW",
         "OLD",
     )
+
+
+def test_static_builder_keeps_short_history_when_a_formula_can_use_it():
+    calculation_date = date(2026, 8, 28)
+    index = pd.bdate_range(end=calculation_date, periods=34)
+    stock_prices = _price_frame(index)
+    stock_prices.loc[index[-1], ["Open", "High", "Close", "Adj Close"]] = (
+        105.0,
+        106.0,
+        105.0,
+        105.0,
+    )
+    stock_prices.loc[index[-1], "Volume"] = 2_000_000
+    benchmark_prices = _price_frame(index)
+
+    class _Resolver:
+        def resolve(self, _db, *, market, as_of_date):
+            return PointInTimeUniverse(
+                market=market,
+                as_of_date=as_of_date,
+                symbols=("NEW.TO",),
+                universe_hash=hash_point_in_time_universe_symbols(("NEW.TO",)),
+                members=(
+                    PointInTimeUniverseMember(symbol="NEW.TO", currency="CAD"),
+                ),
+            )
+
+    class _PriceCache:
+        def get_cached_only(self, symbol, *, period):
+            assert period == "1y"
+            return benchmark_prices
+
+        def get_many_cached_only(self, symbols, *, period):
+            assert period == "2y"
+            return {symbol: None for symbol in symbols}
+
+        def get_many_cached_only_fresh(
+            self,
+            symbols,
+            *,
+            period,
+            required_as_of_date,
+            minimum_rows,
+        ):
+            assert period == "2y"
+            assert required_as_of_date == calculation_date
+            return {
+                symbol: stock_prices if minimum_rows <= len(stock_prices) else None
+                for symbol in symbols
+            }
+
+    class _BenchmarkCache:
+        def get_benchmark_candidates(self, market):
+            assert market == "CA"
+            return ("^GSPTSE",)
+
+        def get_benchmark_symbol(self, market):
+            return "^GSPTSE"
+
+    payload = StaticBreadthSectionBuilder(
+        ui_snapshot_service=object(),
+        price_cache=_PriceCache(),
+        benchmark_cache=_BenchmarkCache(),
+        universe_resolver=_Resolver(),
+    ).build(
+        generated_at="2026-08-29T22:00:00Z",
+        expected_as_of_date=calculation_date,
+        market="CA",
+        serialized_rows=[{"symbol": "NEW.TO"}],
+        db=object(),
+    )
+
+    assert payload["payload"]["current"]["stocks_up_4pct"] == 1
+    assert calculation_date.isoformat() in payload[
+        "_contributor_calculation_signatures"
+    ]
+
+
+def test_static_builder_keeps_departed_member_through_last_membership_date():
+    benchmark_index = pd.bdate_range(end="2026-08-28", periods=35)
+    departure_date = benchmark_index[-2].date()
+    calculation_date = benchmark_index[-1].date()
+    departed_prices = _price_frame(benchmark_index[:-1])
+    departed_prices.loc[
+        benchmark_index[-2], ["Open", "High", "Close", "Adj Close"]
+    ] = (105.0, 106.0, 105.0, 105.0)
+    departed_prices.loc[benchmark_index[-2], "Volume"] = 2_000_000
+    current_prices = _price_frame(benchmark_index)
+    benchmark_prices = _price_frame(benchmark_index)
+
+    class _Resolver:
+        def resolve(self, _db, *, market, as_of_date):
+            symbols = (
+                ("CURRENT.TO", "DEPARTED.TO")
+                if as_of_date <= departure_date
+                else ("CURRENT.TO",)
+            )
+            return PointInTimeUniverse(
+                market=market,
+                as_of_date=as_of_date,
+                symbols=symbols,
+                universe_hash=hash_point_in_time_universe_symbols(symbols),
+                members=tuple(
+                    PointInTimeUniverseMember(symbol=symbol, currency="CAD")
+                    for symbol in symbols
+                ),
+            )
+
+    class _PriceCache:
+        def get_cached_only(self, symbol, *, period):
+            assert period == "1y"
+            return benchmark_prices
+
+        def get_many_cached_only_fresh(
+            self,
+            symbols,
+            *,
+            period,
+            required_as_of_date,
+            minimum_rows,
+        ):
+            assert period == "2y"
+            assert minimum_rows == 1
+            return {
+                symbol: (
+                    departed_prices
+                    if symbol == "DEPARTED.TO"
+                    and required_as_of_date <= departure_date
+                    else current_prices
+                    if symbol == "CURRENT.TO"
+                    else None
+                )
+                for symbol in symbols
+            }
+
+    class _BenchmarkCache:
+        def get_benchmark_candidates(self, market):
+            assert market == "CA"
+            return ("^GSPTSE",)
+
+        def get_benchmark_symbol(self, market):
+            return "^GSPTSE"
+
+    payload = StaticBreadthSectionBuilder(
+        ui_snapshot_service=object(),
+        price_cache=_PriceCache(),
+        benchmark_cache=_BenchmarkCache(),
+        universe_resolver=_Resolver(),
+    ).build(
+        generated_at="2026-08-29T22:00:00Z",
+        expected_as_of_date=calculation_date,
+        market="CA",
+        serialized_rows=[{"symbol": "CURRENT.TO"}],
+        db=object(),
+    )
+
+    departure_row = next(
+        row
+        for row in payload["payload"]["history_90d"]
+        if row["date"] == departure_date.isoformat()
+    )
+    assert departure_row["stocks_up_4pct"] == 1
 
 
 class _EmptyUniverseResolver:
