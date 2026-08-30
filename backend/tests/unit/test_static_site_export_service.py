@@ -327,7 +327,7 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
     """Break caught: recalculating static breadth after feature-price hydration."""
     service, session_factory = service_and_session_factory
     calculation_date = date(2026, 8, 21)
-    latest_calculation_date = date(2026, 8, 24)
+    latest_calculation_date = date(2026, 10, 1)
     run_id = 130
     _insert_runs(
         session_factory,
@@ -391,7 +391,7 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
         lambda market="US": SimpleNamespace(
             to_dict=lambda: {
                 "published_at": "2026-08-21T22:00:00Z",
-                "source_revision": "2026-08-21|breadth-r3",
+                "source_revision": "2026-10-01|breadth-r3",
                 "payload": {
                     "current": stored_latest_row,
                     "summary": {
@@ -405,14 +405,36 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
                     "chart_range": "1M",
                     "chart_data": [stored_latest_row, stored_row],
                     "benchmark_symbol": "SPY",
-                    "benchmark_overlay": [],
+                    "benchmark_overlay": [
+                        {
+                            "date": latest_calculation_date.isoformat(),
+                            "open": 200.0,
+                            "high": 201.0,
+                            "low": 199.0,
+                            "close": 200.0,
+                            "volume": 1_000_000,
+                        }
+                    ],
                     "spy_overlay": [],
                 },
             }
         ),
     )
 
-    def changed_cache(*_args, **_kwargs):
+    benchmark_prices = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0, 200.0],
+            "High": [101.0, 102.0, 201.0],
+            "Low": [99.0, 100.0, 199.0],
+            "Close": [100.0, 101.0, 200.0],
+            "Volume": [1_000_000, 1_100_000, 1_200_000],
+        },
+        index=pd.to_datetime(["2026-08-20", "2026-08-21", "2026-10-01"]),
+    )
+
+    def changed_cache(symbols, *, period):
+        if symbols == ["SPY"] and period == "1y":
+            return {"SPY": benchmark_prices}
         raise AssertionError(
             "static breadth must not recalculate from the post-hydration price cache"
         )
@@ -498,6 +520,10 @@ def test_static_export_uses_persisted_breadth_after_price_cache_changes(
     assert breadth["payload"]["current"]["date"] == calculation_date.isoformat()
     assert [row["date"] for row in breadth["payload"]["history_90d"]] == [
         calculation_date.isoformat()
+    ]
+    assert [row["date"] for row in breadth["payload"]["benchmark_overlay"]] == [
+        "2026-08-20",
+        calculation_date.isoformat(),
     ]
     assert breadth["payload"]["group_attribution"]["available"] is True
     assert (

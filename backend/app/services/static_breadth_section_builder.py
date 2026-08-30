@@ -165,6 +165,21 @@ class StaticBreadthSectionBuilder:
             ).to_dict()
             payload = dict(snapshot.get("payload", {}))
             if db is not None:
+                benchmark_symbol, benchmark = self._get_market_benchmark_history(
+                    market,
+                    period="1y",
+                )
+                if not benchmark.empty:
+                    benchmark_overlay = self._serialize_history_bars(
+                        benchmark,
+                        period_days=31,
+                        end_date=expected_as_of_date,
+                    )
+                    payload.update(
+                        benchmark_symbol=benchmark_symbol,
+                        benchmark_overlay=benchmark_overlay,
+                        spy_overlay=benchmark_overlay,
+                    )
                 payload = build_persisted_breadth_payload(
                     db=db,
                     market=market,
