@@ -250,7 +250,11 @@ class StaticBreadthSectionBuilder:
                 for universe in universes_by_date.values()
                 for member in universe.members
             }
-        price_data = self._get_cached_price_histories(symbols, period="2y")
+        price_data = self._get_cached_price_histories(
+            symbols,
+            period="2y",
+            required_as_of_date=expected_as_of_date,
+        )
         engine_inputs = self._engine_input_factory.build(
             market=market,
             canonical_dates=canonical_dates,
@@ -464,13 +468,21 @@ class StaticBreadthSectionBuilder:
         symbols: list[str],
         *,
         period: str,
+        required_as_of_date: date,
     ) -> dict[str, pd.DataFrame | None]:
         results: dict[str, pd.DataFrame | None] = {
             str(symbol).upper(): None for symbol in symbols
         }
         for start in range(0, len(symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
             batch = symbols[start : start + STATIC_CHART_LOOKUP_BATCH_SIZE]
-            results.update(self._price_cache.get_many_cached_only(batch, period=period))
+            results.update(
+                self._price_cache.get_many_cached_only_fresh(
+                    batch,
+                    period=period,
+                    required_as_of_date=required_as_of_date,
+                    minimum_rows=1,
+                )
+            )
         return results
 
     def _get_market_benchmark_history(

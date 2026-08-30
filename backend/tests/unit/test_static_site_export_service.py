@@ -192,6 +192,16 @@ class _FakePriceCache:
     def get_many_cached_only(self, symbols, period="2y"):
         return self._get_many_cached_only(symbols, period=period)
 
+    def get_many_cached_only_fresh(
+        self,
+        symbols,
+        period="2y",
+        *,
+        required_as_of_date=None,
+        minimum_rows=50,
+    ):
+        return self._get_many_cached_only(symbols, period=period)
+
     def get_cached_only(self, symbol, period="2y"):
         return self.get_many_cached_only([symbol], period=period).get(symbol.upper())
 
