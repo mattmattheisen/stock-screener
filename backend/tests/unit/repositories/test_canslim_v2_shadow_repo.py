@@ -86,11 +86,15 @@ def test_save_requires_point_in_time_identity(session: Session):
         repo.save(missing_date)
 
 
-def test_save_normalizes_symbol_identity(session: Session):
+def test_save_normalizes_symbol_identity_before_hashing(session: Session):
     repo = SqlCANSLIMV2ShadowRepository(session)
-    lower = _record(symbol="nvda").as_dict()
 
-    row, created = repo.save(lower)
+    first, first_created = repo.save(_record(symbol="nvda").as_dict())
+    second, second_created = repo.save(_record(symbol="NVDA").as_dict())
 
-    assert created is True
-    assert row.symbol == "NVDA"
+    assert first_created is True
+    assert second_created is False
+    assert first.id == second.id
+    assert first.symbol == "NVDA"
+    assert first.evidence_json["symbol"] == "NVDA"
+    assert session.query(CANSLIMV2ShadowComparison).count() == 1
