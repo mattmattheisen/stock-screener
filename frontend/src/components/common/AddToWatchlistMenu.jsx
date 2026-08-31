@@ -80,10 +80,10 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   const watchlists = watchlistsData?.watchlists || [];
   const memberships = membershipData?.memberships || {};
 
-  const recordMembership = (watchlistId) => {
+  const recordMembership = (watchlistId, symbolsToRecord = normalizedSymbols) => {
     queryClient.setQueryData(membershipQueryKey, (current) => {
       const nextMemberships = { ...(current?.memberships || {}) };
-      normalizedSymbols.forEach((symbol) => {
+      symbolsToRecord.forEach((symbol) => {
         nextMemberships[symbol] = [
           ...new Set([...(nextMemberships[symbol] || []), watchlistId]),
         ];
@@ -117,9 +117,12 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   // Bulk add mutation
   const bulkAddMutation = useMutation({
     mutationFn: ({ watchlistId, symbols }) => bulkAddItems(watchlistId, symbols),
-    onSuccess: (_, variables) => {
+    onSuccess: (addedItems, variables) => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
-      recordMembership(variables.watchlistId);
+      recordMembership(
+        variables.watchlistId,
+        addedItems.map((item) => item.symbol),
+      );
       onSuccess?.();
     },
   });

@@ -15,14 +15,16 @@ const api = vi.hoisted(() => ({
 
 vi.mock('../../api/userWatchlists', () => api);
 
-const renderMenu = (symbols = 'MSFT') => {
-  renderWithProviders(
+const renderMenu = (symbols = 'MSFT', props = {}) => {
+  const result = renderWithProviders(
     <AddToWatchlistMenu
       symbols={symbols}
       trigger={<button type="button">Add to Watchlist</button>}
+      {...props}
     />,
   );
   fireEvent.click(screen.getByRole('button', { name: 'Add to Watchlist' }));
+  return result;
 };
 
 describe('AddToWatchlistMenu', () => {
@@ -78,6 +80,24 @@ describe('AddToWatchlistMenu', () => {
       expect(api.addItem).toHaveBeenCalledWith(1, { symbol: 'MSFT' });
     });
     expect(api.bulkAddItems).not.toHaveBeenCalled();
+  });
+
+  it('keeps a watchlist selectable when bulk add returns partial success', async () => {
+    const onSuccess = vi.fn();
+    api.getWatchlistMemberships.mockResolvedValueOnce({
+      memberships: { MSFT: [], MISSING: [] },
+    });
+    api.bulkAddItems.mockResolvedValueOnce([
+      { id: 10, watchlist_id: 1, symbol: 'MSFT' },
+    ]);
+    renderMenu(['MSFT', 'MISSING'], { onSuccess });
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Portfolio' }));
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledOnce());
+    expect(screen.getByRole('menuitem', { name: 'Portfolio' })).toBeEnabled();
+    expect(screen.queryByRole('menuitem', { name: /Portfolio Already added/i }))
+      .not.toBeInTheDocument();
   });
 
   it('shows the backend error when adding fails', async () => {
