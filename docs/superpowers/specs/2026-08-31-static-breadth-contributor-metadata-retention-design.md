@@ -95,11 +95,12 @@ Restore outcomes follow three states:
   The current market artifact and replacement state must not be published, so
   the combine job retains the last-known-good market artifact.
 
-After a successful market artifact upload, publish the finalized metadata asset
-with bounded retries. A state-upload failure is reported but does not retract an
-artifact already uploaded; the next build can recover metadata from the prior
-state, and the market artifact itself still contains its frozen contributor
-documents.
+Publish the finalized metadata asset with bounded retries before uploading the
+corresponding market artifact. The market artifact may advance only after the
+metadata state is durable. If state publication fails, suppress the current
+market artifact and let the combine job retain the last-known-good fallback. If
+the later market-artifact upload fails, the safely advanced metadata state is
+harmless: it already contains the frozen values the next run must preserve.
 
 ## Components
 
@@ -134,7 +135,8 @@ The Static Site workflow will:
 2. restore the selected market's metadata state;
 3. pass the state location and restore status to the market export;
 4. suppress current market publication after a failed restore;
-5. upload the finalized state only for a successfully produced market artifact.
+5. upload finalized state for a successfully produced candidate; and
+6. upload the market artifact only after state publication succeeds.
 
 ## Error Handling and Observability
 
