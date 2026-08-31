@@ -17,16 +17,15 @@ class ShadowEvidenceConflictError(RuntimeError):
     """The same point-in-time identity produced different shadow evidence."""
 
 
-def _canonical_evidence(evidence: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
-    payload = dict(evidence)
+def _hash_evidence(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(
-        payload,
+        dict(payload),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
         allow_nan=False,
     )
-    return payload, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _required_text(evidence: Mapping[str, Any], field: str) -> str:
@@ -54,11 +53,19 @@ class SqlCANSLIMV2ShadowRepository:
         self._session = session
 
     def save(self, evidence: Mapping[str, Any]) -> tuple[CANSLIMV2ShadowComparison, bool]:
-        payload, evidence_hash = _canonical_evidence(evidence)
+        payload = dict(evidence)
         as_of_date = _parse_as_of_date(payload)
         run_ref = _required_text(payload, "run_ref")
         symbol = _required_text(payload, "symbol").upper()
         methodology_version = _required_text(payload, "methodology_version")
+
+        # Normalize identity fields before hashing so equivalent spellings do not
+        # produce false evidence-drift alarms.
+        payload["as_of_date"] = as_of_date.isoformat()
+        payload["run_ref"] = run_ref
+        payload["symbol"] = symbol
+        payload["methodology_version"] = methodology_version
+        evidence_hash = _hash_evidence(payload)
 
         existing = self._find(
             as_of_date=as_of_date,
