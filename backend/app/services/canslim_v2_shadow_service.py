@@ -11,8 +11,6 @@ from datetime import date
 from typing import Any, Mapping, Protocol
 
 from app.scanners.base_screener import BaseStockScreener, StockData
-from app.scanners.canslim_scanner import CANSLIMScanner
-from app.scanners.canslim_v2_scanner import CANSLIMV2Scanner
 from app.scanners.canslim_v2_shadow import CANSLIMV2ShadowRecord, build_shadow_record
 
 
@@ -40,8 +38,16 @@ class CANSLIMV2ShadowEvaluator:
         v2_scanner: BaseStockScreener | None = None,
     ) -> None:
         self._repository = repository
-        self._v1_scanner = v1_scanner or CANSLIMScanner()
-        self._v2_scanner = v2_scanner or CANSLIMV2Scanner()
+        if v1_scanner is None:
+            from app.scanners.canslim_scanner import CANSLIMScanner
+
+            v1_scanner = CANSLIMScanner()
+        if v2_scanner is None:
+            from app.scanners.canslim_v2_scanner import CANSLIMV2Scanner
+
+            v2_scanner = CANSLIMV2Scanner()
+        self._v1_scanner = v1_scanner
+        self._v2_scanner = v2_scanner
 
     def evaluate_and_persist(
         self,
