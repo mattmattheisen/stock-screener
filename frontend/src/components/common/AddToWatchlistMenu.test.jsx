@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -103,13 +103,20 @@ describe('AddToWatchlistMenu', () => {
 
     fireEvent.click(document.querySelector('.MuiBackdrop-root'));
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
-    api.getWatchlistMemberships.mockResolvedValueOnce({
-      memberships: { MSFT: [1] },
+    let resolveRefresh;
+    const refreshPromise = new Promise((resolve) => {
+      resolveRefresh = resolve;
     });
+    api.getWatchlistMemberships.mockImplementationOnce(() => refreshPromise);
 
     fireEvent.click(screen.getByRole('button', { name: 'Add to Watchlist' }));
 
     await waitFor(() => expect(api.getWatchlistMemberships).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Portfolio' })).not.toBeInTheDocument();
+    await act(async () => {
+      resolveRefresh({ memberships: { MSFT: [1] } });
+    });
     expect(await screen.findByRole('menuitem', { name: /Portfolio Already added/i }))
       .toHaveAttribute('aria-disabled', 'true');
   });

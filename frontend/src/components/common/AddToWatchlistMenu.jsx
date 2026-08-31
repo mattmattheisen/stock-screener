@@ -67,7 +67,7 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
 
   const {
     data: membershipData,
-    isLoading: isMembershipLoading,
+    isFetching: isMembershipFetching,
     error: membershipError,
   } = useQuery({
     queryKey: membershipQueryKey,
@@ -158,7 +158,7 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   };
 
   const isPending = addItemMutation.isPending || bulkAddMutation.isPending || createMutation.isPending;
-  const isLoading = isWatchlistsLoading || isMembershipLoading;
+  const isLoading = isWatchlistsLoading || isMembershipFetching;
   const visibleError = watchlistsError
     || membershipError
     || addItemMutation.error
