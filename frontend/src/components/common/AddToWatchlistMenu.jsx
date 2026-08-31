@@ -51,7 +51,9 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
 
   // Normalize symbols to array
   const symbolList = Array.isArray(symbols) ? symbols : [symbols];
-  const normalizedSymbols = [...new Set(symbolList.map((symbol) => symbol.toUpperCase()))];
+  const normalizedSymbols = [...new Set(symbolList.map(
+    (symbol) => symbol.trim().replace(/^\$+/, '').toUpperCase(),
+  ))];
   const membershipQueryKey = ['userWatchlistMemberships', normalizedSymbols];
 
   // Fetch watchlists
@@ -138,15 +140,15 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   };
 
   const handleAddToWatchlist = async (watchlistId) => {
-    if (symbolList.length === 1) {
+    if (normalizedSymbols.length === 1) {
       addItemMutation.mutate({
         watchlistId,
-        data: { symbol: symbolList[0].toUpperCase() },
+        data: { symbol: normalizedSymbols[0] },
       });
     } else {
       bulkAddMutation.mutate({
         watchlistId,
-        symbols: symbolList.map((s) => s.toUpperCase()),
+        symbols: normalizedSymbols,
       });
     }
   };

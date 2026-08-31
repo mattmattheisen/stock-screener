@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { QueryClient } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
@@ -15,10 +15,10 @@ const api = vi.hoisted(() => ({
 
 vi.mock('../../api/userWatchlists', () => api);
 
-const renderMenu = () => {
+const renderMenu = (symbols = 'MSFT') => {
   renderWithProviders(
     <AddToWatchlistMenu
-      symbols="MSFT"
+      symbols={symbols}
       trigger={<button type="button">Add to Watchlist</button>}
     />,
   );
@@ -65,6 +65,21 @@ describe('AddToWatchlistMenu', () => {
     });
   });
 
+  it('uses canonical deduplicated symbols for membership checks and additions', async () => {
+    api.getWatchlistMemberships.mockResolvedValueOnce({
+      memberships: { MSFT: [] },
+    });
+    renderMenu([' $msft ', 'MSFT']);
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Portfolio' }));
+
+    expect(api.getWatchlistMemberships).toHaveBeenCalledWith(['MSFT']);
+    await waitFor(() => {
+      expect(api.addItem).toHaveBeenCalledWith(1, { symbol: 'MSFT' });
+    });
+    expect(api.bulkAddItems).not.toHaveBeenCalled();
+  });
+
   it('shows the backend error when adding fails', async () => {
     api.addItem.mockRejectedValueOnce({
       response: { data: { detail: 'Stock already exists in watchlist' } },
@@ -88,13 +103,12 @@ describe('AddToWatchlistMenu', () => {
     api.getWatchlistMemberships.mockResolvedValueOnce({
       memberships: { MSFT: [] },
     });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <AddToWatchlistMenu
-          symbols="MSFT"
-          trigger={<button type="button">Add to Watchlist</button>}
-        />
-      </QueryClientProvider>,
+    renderWithProviders(
+      <AddToWatchlistMenu
+        symbols="MSFT"
+        trigger={<button type="button">Add to Watchlist</button>}
+      />,
+      { queryClient },
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Add to Watchlist' }));

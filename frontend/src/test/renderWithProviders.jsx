@@ -34,8 +34,7 @@ function createWrapper(queryClient) {
   };
 }
 
-export function renderWithProviders(ui, options = {}) {
-  const queryClient = createTestQueryClient();
+export function renderWithProviders(ui, { queryClient = createTestQueryClient(), ...options } = {}) {
   const Wrapper = createWrapper(queryClient);
 
   return {
