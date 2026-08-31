@@ -7,14 +7,40 @@ usable and returns explicit diagnostics for callers that need failure context.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+_REMOTE_BENCHMARK_FETCH_ALLOWED: ContextVar[bool] = ContextVar(
+    "remote_benchmark_fetch_allowed",
+    default=True,
+)
+
+
+def benchmark_remote_fetch_allowed() -> bool:
+    """Return whether benchmark resolution may call a remote provider."""
+    return _REMOTE_BENCHMARK_FETCH_ALLOWED.get()
+
+
+@contextmanager
+def benchmark_remote_fetch_disabled() -> Iterator[None]:
+    """Temporarily make benchmark resolution cache-only for this execution context.
+
+    ContextVar scoping keeps the guard safe across awaits and nested calls while
+    ensuring unrelated scans retain the normal remote-fetch behavior.
+    """
+    token = _REMOTE_BENCHMARK_FETCH_ALLOWED.set(False)
+    try:
+        yield
+    finally:
+        _REMOTE_BENCHMARK_FETCH_ALLOWED.reset(token)
 
 
 def latest_benchmark_data_date(
@@ -214,6 +240,14 @@ class BenchmarkResolver:
             bundle = self._resolve_cached_candidates(context=context, statuses=statuses)
             if bundle is not None:
                 return self._resolution_for_bundle(bundle)
+
+        if not benchmark_remote_fetch_allowed():
+            logger.info(
+                "Remote benchmark fetch disabled for market=%s period=%s; failing closed on cache miss",
+                context.normalized_market,
+                context.period,
+            )
+            return self._missing_benchmark_resolution(context, statuses)
 
         bundle = self._resolve_fetched_candidates(
             context=context,
