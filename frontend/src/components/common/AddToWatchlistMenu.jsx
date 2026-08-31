@@ -124,6 +124,10 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
 
   const handleClick = (event) => {
     event.stopPropagation();
+    queryClient.invalidateQueries({
+      queryKey: membershipQueryKey,
+      refetchType: 'none',
+    });
     setAnchorEl(event.currentTarget);
   };
 

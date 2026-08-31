@@ -1,4 +1,5 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
@@ -76,5 +77,40 @@ describe('AddToWatchlistMenu', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Portfolio' }));
 
     expect(await screen.findByText('Stock already exists in watchlist')).toBeInTheDocument();
+  });
+
+  it('refreshes membership whenever the menu reopens despite the app cache window', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 300_000 },
+      },
+    });
+    api.getWatchlistMemberships.mockResolvedValueOnce({
+      memberships: { MSFT: [] },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddToWatchlistMenu
+          symbols="MSFT"
+          trigger={<button type="button">Add to Watchlist</button>}
+        />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Watchlist' }));
+    expect(await screen.findByRole('menuitem', { name: 'Portfolio' })).toBeEnabled();
+    expect(api.getWatchlistMemberships).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(document.querySelector('.MuiBackdrop-root'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    api.getWatchlistMemberships.mockResolvedValueOnce({
+      memberships: { MSFT: [1] },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Watchlist' }));
+
+    await waitFor(() => expect(api.getWatchlistMemberships).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('menuitem', { name: /Portfolio Already added/i }))
+      .toHaveAttribute('aria-disabled', 'true');
   });
 });
