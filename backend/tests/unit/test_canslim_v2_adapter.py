@@ -1,5 +1,7 @@
 """Tests for mapping the existing scan data contract into CAN SLIM V2."""
 
+from types import SimpleNamespace
+
 import pandas as pd
 
 from app.scanners.base_screener import StockData
@@ -123,6 +125,28 @@ def test_adapter_uses_trailing_252_sessions_for_52_week_high() -> None:
     closes = [200.0] + [100.0] * 47 + [110.0] * 252
     volumes = [100.0] * len(closes)
     data = _stock_data(closes=closes, volumes=volumes)
+
+    inputs = extract_v2_inputs(
+        data,
+        rs_rating=85.0,
+        market_exposure_score=70.0,
+    )
+
+    assert inputs.distance_from_52w_high_pct == 0.0
+
+
+def test_adapter_ignores_contaminated_precomputed_two_year_high() -> None:
+    closes = [200.0] + [100.0] * 47 + [110.0] * 252
+    volumes = [100.0] * len(closes)
+    data = _stock_data(closes=closes, volumes=volumes)
+    close = data.price_data["Close"].reset_index(drop=True)
+    volume = data.price_data["Volume"].reset_index(drop=True)
+    data.precomputed_scan_context = SimpleNamespace(
+        close_chrono=close,
+        volume_chrono=volume,
+        current_price=110.0,
+        high_52w=200.0,
+    )
 
     inputs = extract_v2_inputs(
         data,
