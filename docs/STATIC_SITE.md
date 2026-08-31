@@ -60,7 +60,11 @@ Revision 3 uses the same fixed local-market StockBee thresholds as the live app 
 
 Contributor drilldowns are optional additive assets. When available, a market entry advertises `assets.breadth_contributors.index_path`; the index uses `breadth-contributors-v1` and references at most 20 newest-first per-session documents under `markets/<market>/breadth/contributors/`. Each stock is stored once with all qualifying signals plus its frozen company name and IBD group. The combiner validates every document and reconciles its 11 supported signal counts to `breadth.json`. Missing legacy assets remain valid, while an invalid contributor asset is omitted without removing the market or its aggregate breadth page.
 
+Static builds preserve contributor display metadata in the dedicated `breadth-contributor-metadata-data` release. Each breadth-enabled market owns one `breadth-contributor-metadata-<market>.json.gz` asset containing only company names and IBD groups for its newest 20 contributor sessions. On the first run, all retained sessions are bootstrapped from the current enriched universe and classification data. Later runs restore that state, keep existing date/symbol metadata frozen, and bootstrap only newly encountered sessions or symbols. The new state must pass non-empty name and group coverage checks and publish successfully before the corresponding market artifact can replace its last-good fallback. A missing first-run asset is safe; an uncertain restore or failed state upload suppresses the current market artifact.
+
 The static frontend loads the small index with the market bundle and fetches a date document only after a user clicks an advertised nonzero Recent History count. The live and static dialogs therefore use the same schema and do not recalculate breadth formulas in the browser.
+
+This rolling release is a static-build continuity mechanism only. The live app continues to read contributor metadata from its own PostgreSQL snapshots and does not depend on GitHub Releases.
 
 ## Maintaining Static Assets
 
@@ -73,6 +77,11 @@ The static frontend loads the small index with the market bundle and fetches a d
   `rrg-history-data` release. Each successful Market build replaces its one
   asset; a missing asset is rebuilt, while a schema/formula-mismatched fallback
   is rejected instead of being merged into the active history.
+- Breadth-enabled markets carry compact
+  `breadth-contributor-metadata-<market>.json.gz` state on the dedicated
+  `breadth-contributor-metadata-data` release. Keep state publication ahead of
+  market-artifact upload so a published drilldown always has its retained
+  company and IBD-group metadata available to the next build.
 
 ## Related Docs
 
