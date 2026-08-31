@@ -186,6 +186,13 @@ def test_static_workflow_publishes_breadth_metadata_before_market_artifact():
     assert "--breadth-contributor-metadata-dir" in export_run
     assert "--breadth-contributor-metadata-restore-status" in export_run
 
+    breadth_plan_run = step_by_name["Plan breadth contributor metadata"]["run"]
+    rrg_plan_run = step_by_name["Plan rolling RRG history"]["run"]
+    assert "previous_asset_name=$(jq" in breadth_plan_run
+    assert "previous_path=$(jq" in breadth_plan_run
+    assert "previous_asset_name=$(jq" not in rrg_plan_run
+    assert "previous_path=$(jq" not in rrg_plan_run
+
     publish = step_by_name["Publish breadth contributor metadata"]
     assert publish["id"] == "publish-breadth-contributor-metadata"
     assert "for attempt in 1 2 3" in publish["run"]

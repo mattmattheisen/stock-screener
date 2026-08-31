@@ -221,9 +221,7 @@ jobs:
             --directory /tmp/rrg-history)"
           echo "enabled=$(jq -r '.enabled' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "asset_name=$(jq -r '.asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
-          echo "previous_asset_name=$(jq -r '.previous_asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "source_path=$(jq -r '.source_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
-          echo "previous_path=$(jq -r '.previous_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "output_path=$(jq -r '.output_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "RRG_HISTORY_DIR=/tmp/rrg-history" >> "$GITHUB_ENV"
 
@@ -264,7 +262,9 @@ jobs:
             --directory /tmp/breadth-contributor-metadata)"
           echo "enabled=$(jq -r '.enabled' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "asset_name=$(jq -r '.asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "previous_asset_name=$(jq -r '.previous_asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "source_path=$(jq -r '.source_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "previous_path=$(jq -r '.previous_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "output_path=$(jq -r '.output_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
 
       - name: Restore breadth contributor metadata
