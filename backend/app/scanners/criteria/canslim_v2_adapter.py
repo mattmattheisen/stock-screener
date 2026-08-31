@@ -173,7 +173,13 @@ def _distance_from_52w_high(
     data: StockData,
     close_chrono: pd.Series,
 ) -> float | None:
-    """Calculate distance from the trailing 252-session closing high."""
+    """Calculate distance from the trailing 252-session closing high.
+
+    V2 deliberately recomputes the high from the chronological price series.
+    The shared precomputed context can be built from a longer fetch window, so
+    using its generic ``high_52w`` field here could accidentally make N a
+    two-year-high test instead of a trailing-52-week test.
+    """
 
     if close_chrono is None or close_chrono.empty:
         return None
@@ -187,13 +193,9 @@ def _distance_from_52w_high(
     if current_price is None:
         current_price = _number(close_chrono.iloc[-1])
 
-    high_52w = (
-        _number(precomputed.high_52w)
-        if precomputed is not None
-        else None
+    high_52w = _number(
+        pd.to_numeric(close_chrono, errors="coerce").dropna().tail(252).max()
     )
-    if high_52w is None:
-        high_52w = _number(pd.to_numeric(close_chrono, errors="coerce").tail(252).max())
 
     if current_price is None or high_52w is None or high_52w <= 0:
         return None
