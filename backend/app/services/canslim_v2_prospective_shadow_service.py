@@ -30,7 +30,6 @@ from app.scanners.canslim_scanner import CANSLIMScanner
 from app.scanners.canslim_v2_scanner import CANSLIMV2Scanner
 from app.services.benchmark_resolution import benchmark_remote_fetch_disabled
 from app.services.canslim_v2_shadow_batch_service import (
-    CANSLIMV2ShadowBatchEvaluator,
     CANSLIMV2ShadowBatchResult,
     CANSLIMV2ShadowContext,
 )
@@ -337,9 +336,9 @@ class CANSLIMV2ProspectiveShadowCollector:
                     f"{canonical_symbol} resolved to market {stock_market}, expected {market}"
                 )
             if stock_data.fetch_errors:
+                error_summary = stock_data.get_error_summary() or "unknown fetch error"
                 raise ProspectiveShadowIntegrityError(
-                    f"{canonical_symbol} contains fetch errors: "
-                    + stock_data.get_error_summary()
+                    f"{canonical_symbol} contains fetch errors: {error_summary}"
                 )
 
             stock_latest = cls._latest_frame_date(stock_data.price_data)
