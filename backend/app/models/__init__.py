@@ -8,6 +8,7 @@ from .breadth_contributor import (
     MarketBreadthContributor,
     MarketBreadthContributorSnapshot,
 )
+from .canslim_v2_shadow import CANSLIMV2ShadowComparison
 from .market_exposure import MarketExposure
 from .industry import Industry, IndustryPerformance, SectorRotation, IBDIndustryGroup, IBDGroupPeerCache, IBDGroupRank
 from .stock_universe import (
@@ -67,6 +68,7 @@ __all__ = [
     "MarketBreadth",
     "MarketBreadthContributor",
     "MarketBreadthContributorSnapshot",
+    "CANSLIMV2ShadowComparison",
     "MarketExposure",
     "Industry",
     "IndustryPerformance",
