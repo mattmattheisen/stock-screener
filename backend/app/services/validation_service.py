@@ -64,6 +64,9 @@ class EvaluatedValidationEvent:
     mfe_5s_pct: float | None
     mae_5s_pct: float | None
     missing_horizons: frozenset[int]
+    return_20s_pct: float | None = None
+    mfe_20s_pct: float | None = None
+    mae_20s_pct: float | None = None
 
     def to_response(self) -> ValidationEvent:
         return ValidationEvent(
@@ -76,6 +79,9 @@ class EvaluatedValidationEvent:
             return_5s_pct=_round_or_none(self.return_5s_pct),
             mfe_5s_pct=_round_or_none(self.mfe_5s_pct),
             mae_5s_pct=_round_or_none(self.mae_5s_pct),
+            return_20s_pct=_round_or_none(self.return_20s_pct),
+            mfe_20s_pct=_round_or_none(self.mfe_20s_pct),
+            mae_20s_pct=_round_or_none(self.mae_20s_pct),
             attributes=self.raw.attributes,
         )
 
@@ -320,7 +326,7 @@ class PriceOutcomeCalculator:
                 return_5s_pct=None,
                 mfe_5s_pct=None,
                 mae_5s_pct=None,
-                missing_horizons=frozenset({1, 5}),
+                missing_horizons=frozenset({1, 5, 20}),
             )
 
         if isinstance(event.event_at, datetime):
@@ -347,7 +353,7 @@ class PriceOutcomeCalculator:
                 return_5s_pct=None,
                 mfe_5s_pct=None,
                 mae_5s_pct=None,
-                missing_horizons=frozenset({1, 5}),
+                missing_horizons=frozenset({1, 5, 20}),
             )
 
         entry_day = trading_days[0]
@@ -362,7 +368,7 @@ class PriceOutcomeCalculator:
                 return_5s_pct=None,
                 mfe_5s_pct=None,
                 mae_5s_pct=None,
-                missing_horizons=frozenset({1, 5}),
+                missing_horizons=frozenset({1, 5, 20}),
             )
         close_1s = float(entry_row["Close"])
         return_1s_pct = ((close_1s / entry_price) - 1.0) * 100.0
@@ -380,6 +386,18 @@ class PriceOutcomeCalculator:
         else:
             missing_horizons.add(5)
 
+        return_20s_pct: float | None = None
+        mfe_20s_pct: float | None = None
+        mae_20s_pct: float | None = None
+        if len(trading_days) >= 20:
+            window_days = trading_days[:20]
+            window = history.loc[window_days]
+            return_20s_pct = ((float(window.iloc[-1]["Close"]) / entry_price) - 1.0) * 100.0
+            mfe_20s_pct = ((float(window["High"].max()) / entry_price) - 1.0) * 100.0
+            mae_20s_pct = ((float(window["Low"].min()) / entry_price) - 1.0) * 100.0
+        else:
+            missing_horizons.add(20)
+
         return EvaluatedValidationEvent(
             raw=event,
             entry_at=entry_day.date(),
@@ -389,6 +407,9 @@ class PriceOutcomeCalculator:
             mfe_5s_pct=mfe_5s_pct,
             mae_5s_pct=mae_5s_pct,
             missing_horizons=frozenset(missing_horizons),
+            return_20s_pct=return_20s_pct,
+            mfe_20s_pct=mfe_20s_pct,
+            mae_20s_pct=mae_20s_pct,
         )
 
 
@@ -616,6 +637,7 @@ class ValidationService:
         return [
             self._summarize_horizon(events, horizon_sessions=1),
             self._summarize_horizon(events, horizon_sessions=5),
+            self._summarize_horizon(events, horizon_sessions=20),
         ]
 
     def _summarize_horizon(
@@ -641,14 +663,29 @@ class ValidationService:
                 returns.append(event.return_1s_pct)
                 continue
 
-            if event.return_5s_pct is None:
-                skipped_missing_history += 1
+            if horizon_sessions == 5:
+                if event.return_5s_pct is None:
+                    skipped_missing_history += 1
+                    continue
+                returns.append(event.return_5s_pct)
+                if event.mfe_5s_pct is not None:
+                    mfe_values.append(event.mfe_5s_pct)
+                if event.mae_5s_pct is not None:
+                    mae_values.append(event.mae_5s_pct)
                 continue
-            returns.append(event.return_5s_pct)
-            if event.mfe_5s_pct is not None:
-                mfe_values.append(event.mfe_5s_pct)
-            if event.mae_5s_pct is not None:
-                mae_values.append(event.mae_5s_pct)
+
+            if horizon_sessions == 20:
+                if event.return_20s_pct is None:
+                    skipped_missing_history += 1
+                    continue
+                returns.append(event.return_20s_pct)
+                if event.mfe_20s_pct is not None:
+                    mfe_values.append(event.mfe_20s_pct)
+                if event.mae_20s_pct is not None:
+                    mae_values.append(event.mae_20s_pct)
+                continue
+
+            raise ValueError(f"Unsupported validation horizon: {horizon_sessions}")
 
         sample_size = len(returns)
         positive_rate = None

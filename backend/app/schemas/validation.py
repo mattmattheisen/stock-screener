@@ -48,6 +48,9 @@ class ValidationEvent(BaseModel):
     return_5s_pct: float | None = None
     mfe_5s_pct: float | None = None
     mae_5s_pct: float | None = None
+    return_20s_pct: float | None = None
+    mfe_20s_pct: float | None = None
+    mae_20s_pct: float | None = None
     attributes: dict[str, Any]
 
 

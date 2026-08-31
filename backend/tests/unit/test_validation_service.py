@@ -323,7 +323,8 @@ def test_price_outcome_calculator_rolls_to_next_trading_session_and_computes_win
     assert event.return_5s_pct == pytest.approx(12.0)
     assert event.mfe_5s_pct == pytest.approx(14.0)
     assert event.mae_5s_pct == pytest.approx(-2.0)
-    assert event.missing_horizons == frozenset()
+    assert event.return_20s_pct is None
+    assert event.missing_horizons == frozenset({20})
 
 
 def test_price_outcome_calculator_marks_missing_five_session_history():
@@ -348,7 +349,8 @@ def test_price_outcome_calculator_marks_missing_five_session_history():
 
     assert evaluated[0].return_1s_pct == pytest.approx(1.0)
     assert evaluated[0].return_5s_pct is None
-    assert evaluated[0].missing_horizons == frozenset({5})
+    assert evaluated[0].return_20s_pct is None
+    assert evaluated[0].missing_horizons == frozenset({5, 20})
 
 
 def test_price_outcome_calculator_degrades_zero_open_entry_prices():
@@ -380,7 +382,10 @@ def test_price_outcome_calculator_degrades_zero_open_entry_prices():
     assert evaluated[0].return_5s_pct is None
     assert evaluated[0].mfe_5s_pct is None
     assert evaluated[0].mae_5s_pct is None
-    assert evaluated[0].missing_horizons == frozenset({1, 5})
+    assert evaluated[0].return_20s_pct is None
+    assert evaluated[0].mfe_20s_pct is None
+    assert evaluated[0].mae_20s_pct is None
+    assert evaluated[0].missing_horizons == frozenset({1, 5, 20})
 
 
 def test_price_outcome_calculator_uses_same_day_entry_for_premarket_alerts_only():
