@@ -100,6 +100,41 @@ describe('AddToWatchlistMenu', () => {
       .not.toBeInTheDocument();
   });
 
+  it('records a pending single add under the submitted symbol after props change', async () => {
+    const onSuccess = vi.fn();
+    let resolveAdd;
+    api.getWatchlistMemberships
+      .mockResolvedValueOnce({ memberships: { MSFT: [] } })
+      .mockResolvedValueOnce({ memberships: { AAPL: [] } });
+    api.addItem.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAdd = resolve;
+    }));
+    const { queryClient, rerender } = renderMenu('MSFT', { onSuccess });
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Portfolio' }));
+    await waitFor(() => expect(api.addItem).toHaveBeenCalledWith(1, { symbol: 'MSFT' }));
+
+    rerender(
+      <AddToWatchlistMenu
+        symbols="AAPL"
+        trigger={<button type="button">Add to Watchlist</button>}
+        onSuccess={onSuccess}
+      />,
+    );
+    await waitFor(() => expect(api.getWatchlistMemberships).toHaveBeenCalledWith(['AAPL']));
+
+    await act(async () => {
+      resolveAdd({ id: 10, watchlist_id: 1, symbol: 'MSFT' });
+    });
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledOnce());
+    expect(queryClient.getQueryData(['userWatchlistMemberships', ['MSFT']]))
+      .toEqual({ memberships: { MSFT: [1] } });
+    expect(queryClient.getQueryData(['userWatchlistMemberships', ['AAPL']]))
+      .toEqual({ memberships: { AAPL: [] } });
+    expect(screen.getByRole('menuitem', { name: 'Portfolio' })).toBeEnabled();
+  });
+
   it('shows the backend error when adding fails', async () => {
     api.addItem.mockRejectedValueOnce({
       response: { data: { detail: 'Stock already exists in watchlist' } },
@@ -112,6 +147,26 @@ describe('AddToWatchlistMenu', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Portfolio' }));
 
     expect(await screen.findByText('Stock already exists in watchlist')).toBeInTheDocument();
+  });
+
+  it('renders structured FastAPI validation details as text', async () => {
+    api.getWatchlistMemberships.mockRejectedValueOnce({
+      response: {
+        data: {
+          detail: [
+            {
+              type: 'string_too_long',
+              loc: ['query', 'symbols'],
+              msg: 'String should have at most 2000 characters',
+            },
+          ],
+        },
+      },
+    });
+    renderMenu();
+
+    expect(await screen.findByText('String should have at most 2000 characters'))
+      .toBeInTheDocument();
   });
 
   it('refreshes membership whenever the menu reopens despite the app cache window', async () => {

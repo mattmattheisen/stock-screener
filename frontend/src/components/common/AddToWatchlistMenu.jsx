@@ -37,8 +37,21 @@ import {
   bulkAddItems,
 } from '../../api/userWatchlists';
 
+const formatErrorDetail = (detail) => {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(formatErrorDetail).filter(Boolean).join('; ');
+  }
+  if (detail && typeof detail === 'object') {
+    return typeof detail.msg === 'string' ? detail.msg : JSON.stringify(detail);
+  }
+  return detail == null ? '' : String(detail);
+};
+
 const getErrorMessage = (error) => (
-  error?.response?.data?.detail || error?.message || 'Unable to update watchlist'
+  formatErrorDetail(error?.response?.data?.detail)
+  || error?.message
+  || 'Unable to update watchlist'
 );
 
 function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
@@ -80,8 +93,8 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   const watchlists = watchlistsData?.watchlists || [];
   const memberships = membershipData?.memberships || {};
 
-  const recordMembership = (watchlistId, symbolsToRecord = normalizedSymbols) => {
-    queryClient.setQueryData(membershipQueryKey, (current) => {
+  const recordMembership = (watchlistId, querySymbols, symbolsToRecord = querySymbols) => {
+    queryClient.setQueryData(['userWatchlistMemberships', querySymbols], (current) => {
       const nextMemberships = { ...(current?.memberships || {}) };
       symbolsToRecord.forEach((symbol) => {
         nextMemberships[symbol] = [
@@ -109,7 +122,7 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
     mutationFn: ({ watchlistId, data }) => addItem(watchlistId, data),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
-      recordMembership(variables.watchlistId);
+      recordMembership(variables.watchlistId, [variables.data.symbol]);
       onSuccess?.();
     },
   });
@@ -121,6 +134,7 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
       recordMembership(
         variables.watchlistId,
+        variables.symbols,
         addedItems.map((item) => item.symbol),
       );
       onSuccess?.();
