@@ -43,12 +43,12 @@ history. The bundle stores only frozen metadata, not formula-derived values:
 schema: static-breadth-contributor-metadata-v1
 market
 generated_at
-dates[] (newest first, at most 20)
-contributors_by_date:
-  YYYY-MM-DD:
-    SYMBOL:
-      company_name
-      ibd_industry_group
+sessions[] (newest first, at most 20):
+  - date: YYYY-MM-DD
+    contributors[] (sorted by symbol):
+      - symbol: SYMBOL
+        company_name
+        ibd_industry_group
 ```
 
 Asset names are deterministic:

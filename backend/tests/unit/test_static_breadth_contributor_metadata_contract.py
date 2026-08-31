@@ -106,6 +106,26 @@ def test_metadata_normalizes_symbols_text_and_blank_groups():
     assert contributor.ibd_industry_group == "No Group"
 
 
+@pytest.mark.parametrize("invalid_name", [123, [], {"name": "Alpha"}])
+def test_metadata_rejects_non_string_company_names(invalid_name):
+    with pytest.raises(ValidationError, match="company_name"):
+        FrozenBreadthContributorMetadata(
+            symbol="AAA",
+            company_name=invalid_name,
+            ibd_industry_group="Software",
+        )
+
+
+@pytest.mark.parametrize("invalid_group", [None, 123, [], {"group": "Software"}])
+def test_metadata_rejects_non_string_industry_groups(invalid_group):
+    with pytest.raises(ValidationError, match="ibd_industry_group"):
+        FrozenBreadthContributorMetadata(
+            symbol="AAA",
+            company_name=None,
+            ibd_industry_group=invalid_group,
+        )
+
+
 def test_metadata_sessions_must_be_newest_first_and_unique():
     newer = FrozenBreadthContributorSession(
         date=date(2026, 8, 28),

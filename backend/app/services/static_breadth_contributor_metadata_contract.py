@@ -62,11 +62,15 @@ class FrozenBreadthContributorMetadata(BaseModel):
     @field_validator("company_name", mode="before")
     @classmethod
     def normalize_company_name(cls, value: object) -> str | None:
+        if value is not None and not isinstance(value, str):
+            raise ValueError("company_name must be a string or null")
         return _normalized_text(value)
 
     @field_validator("ibd_industry_group", mode="before")
     @classmethod
     def normalize_group(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("ibd_industry_group must be a string")
         return _normalized_text(value) or NO_GROUP_LABEL
 
 
