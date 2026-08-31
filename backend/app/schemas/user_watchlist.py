@@ -124,6 +124,11 @@ class WatchlistListResponse(BaseModel):
     total: int
 
 
+class WatchlistMembershipResponse(BaseModel):
+    """Watchlist IDs containing each requested symbol."""
+    memberships: Dict[str, List[int]]
+
+
 # ================= Reorder Schemas =================
 
 class ReorderWatchlistsRequest(BaseModel):

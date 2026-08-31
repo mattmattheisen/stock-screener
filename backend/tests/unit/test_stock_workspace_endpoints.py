@@ -915,3 +915,46 @@ async def test_watchlist_import_endpoint_downgrades_duplicate_insert_race(client
     assert payload["added"] == ["NVDA"]
     assert payload["skipped_existing"] == ["AAPL", "MSFT"]
     assert payload["invalid_symbols"] == []
+
+
+@pytest.mark.asyncio
+async def test_watchlist_memberships_returns_watchlist_ids_by_normalized_symbol(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    leaders = _seed_search_and_import_data(session)
+    portfolio = UserWatchlist(name="Portfolio", position=1)
+    session.add(portfolio)
+    session.commit()
+    session.refresh(portfolio)
+    session.add_all(
+        [
+            WatchlistItem(watchlist_id=leaders.id, symbol="MSFT", position=1),
+            WatchlistItem(watchlist_id=portfolio.id, symbol="MSFT", position=0),
+        ]
+    )
+    session.commit()
+
+    response = await client.get(
+        "/api/v1/user-watchlists/memberships",
+        params={"symbols": "msft,nvda"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "memberships": {
+            "MSFT": [leaders.id, portfolio.id],
+            "NVDA": [],
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_watchlist_memberships_rejects_invalid_symbols(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+
+    response = await client.get(
+        "/api/v1/user-watchlists/memberships",
+        params={"symbols": "MSFT,BAD$"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Invalid symbol format: 'BAD$'"

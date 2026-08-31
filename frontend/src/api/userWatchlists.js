@@ -18,6 +18,18 @@ export const getWatchlists = async () => {
 };
 
 /**
+ * Get watchlist memberships for one or more symbols.
+ * @param {string[]} symbols - Symbols whose memberships should be returned
+ * @returns {Promise<Object>} Map of normalized symbols to watchlist IDs
+ */
+export const getWatchlistMemberships = async (symbols) => {
+  const response = await apiClient.get(`${BASE_PATH}/memberships`, {
+    params: { symbols: symbols.join(',') },
+  });
+  return response.data;
+};
+
+/**
  * Create a new watchlist.
  * @param {Object} watchlistData - Watchlist data { name, description?, color? }
  * @returns {Promise<Object>} Created watchlist

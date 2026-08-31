@@ -24,37 +24,86 @@ import {
   Typography,
   CircularProgress,
   Tooltip,
+  Alert,
 } from '@mui/material';
 import PlaylistAddIcon from '@mui/icons-material/PlaylistAdd';
 import AddIcon from '@mui/icons-material/Add';
 import CheckIcon from '@mui/icons-material/Check';
 import {
   getWatchlists,
+  getWatchlistMemberships,
   createWatchlist,
   addItem,
   bulkAddItems,
 } from '../../api/userWatchlists';
 
+const formatErrorDetail = (detail) => {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(formatErrorDetail).filter(Boolean).join('; ');
+  }
+  if (detail && typeof detail === 'object') {
+    return typeof detail.msg === 'string' ? detail.msg : JSON.stringify(detail);
+  }
+  return detail == null ? '' : String(detail);
+};
+
+const getErrorMessage = (error) => (
+  formatErrorDetail(error?.response?.data?.detail)
+  || error?.message
+  || 'Unable to update watchlist'
+);
+
 function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   const [anchorEl, setAnchorEl] = useState(null);
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const [showNewInput, setShowNewInput] = useState(false);
-  const [addedToIds, setAddedToIds] = useState(new Set());
   const queryClient = useQueryClient();
 
   const open = Boolean(anchorEl);
 
   // Normalize symbols to array
   const symbolList = Array.isArray(symbols) ? symbols : [symbols];
+  const normalizedSymbols = [...new Set(symbolList.map(
+    (symbol) => symbol.trim().replace(/^\$+/, '').toUpperCase(),
+  ))];
+  const membershipQueryKey = ['userWatchlistMemberships', normalizedSymbols];
 
   // Fetch watchlists
-  const { data: watchlistsData, isLoading } = useQuery({
+  const {
+    data: watchlistsData,
+    isLoading: isWatchlistsLoading,
+    error: watchlistsError,
+  } = useQuery({
     queryKey: ['userWatchlists'],
     queryFn: getWatchlists,
     enabled: open,
   });
 
+  const {
+    data: membershipData,
+    isFetching: isMembershipFetching,
+    error: membershipError,
+  } = useQuery({
+    queryKey: membershipQueryKey,
+    queryFn: () => getWatchlistMemberships(normalizedSymbols),
+    enabled: open && normalizedSymbols.length > 0,
+  });
+
   const watchlists = watchlistsData?.watchlists || [];
+  const memberships = membershipData?.memberships || {};
+
+  const recordMembership = (watchlistId, querySymbols, symbolsToRecord = querySymbols) => {
+    queryClient.setQueryData(['userWatchlistMemberships', querySymbols], (current) => {
+      const nextMemberships = { ...(current?.memberships || {}) };
+      symbolsToRecord.forEach((symbol) => {
+        nextMemberships[symbol] = [
+          ...new Set([...(nextMemberships[symbol] || []), watchlistId]),
+        ];
+      });
+      return { memberships: nextMemberships };
+    });
+  };
 
   // Create watchlist mutation
   const createMutation = useMutation({
@@ -73,7 +122,7 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
     mutationFn: ({ watchlistId, data }) => addItem(watchlistId, data),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
-      setAddedToIds((prev) => new Set([...prev, variables.watchlistId]));
+      recordMembership(variables.watchlistId, [variables.data.symbol]);
       onSuccess?.();
     },
   });
@@ -81,17 +130,24 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   // Bulk add mutation
   const bulkAddMutation = useMutation({
     mutationFn: ({ watchlistId, symbols }) => bulkAddItems(watchlistId, symbols),
-    onSuccess: (_, variables) => {
+    onSuccess: (addedItems, variables) => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
-      setAddedToIds((prev) => new Set([...prev, variables.watchlistId]));
+      recordMembership(
+        variables.watchlistId,
+        variables.symbols,
+        addedItems.map((item) => item.symbol),
+      );
       onSuccess?.();
     },
   });
 
   const handleClick = (event) => {
     event.stopPropagation();
+    queryClient.invalidateQueries({
+      queryKey: membershipQueryKey,
+      refetchType: 'none',
+    });
     setAnchorEl(event.currentTarget);
-    setAddedToIds(new Set());
   };
 
   const handleClose = () => {
@@ -101,15 +157,15 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   };
 
   const handleAddToWatchlist = async (watchlistId) => {
-    if (symbolList.length === 1) {
+    if (normalizedSymbols.length === 1) {
       addItemMutation.mutate({
         watchlistId,
-        data: { symbol: symbolList[0].toUpperCase() },
+        data: { symbol: normalizedSymbols[0] },
       });
     } else {
       bulkAddMutation.mutate({
         watchlistId,
-        symbols: symbolList.map((s) => s.toUpperCase()),
+        symbols: normalizedSymbols,
       });
     }
   };
@@ -121,6 +177,12 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
   };
 
   const isPending = addItemMutation.isPending || bulkAddMutation.isPending || createMutation.isPending;
+  const isLoading = isWatchlistsLoading || isMembershipFetching;
+  const visibleError = watchlistsError
+    || membershipError
+    || addItemMutation.error
+    || bulkAddMutation.error
+    || createMutation.error;
 
   return (
     <>
@@ -155,26 +217,42 @@ function AddToWatchlistMenu({ symbols, trigger, onSuccess, size = 'small' }) {
 
         <Divider />
 
+        {visibleError && (
+          <Alert severity="error" sx={{ mx: 1, my: 1 }}>
+            {getErrorMessage(visibleError)}
+          </Alert>
+        )}
+
         {isLoading ? (
           <Box display="flex" justifyContent="center" py={2}>
             <CircularProgress size={24} />
           </Box>
         ) : (
           <>
-            {watchlists.map((watchlist) => (
-              <MenuItem
-                key={watchlist.id}
-                onClick={() => handleAddToWatchlist(watchlist.id)}
-                disabled={isPending}
-              >
-                <ListItemText primary={watchlist.name} />
-                {addedToIds.has(watchlist.id) && (
-                  <ListItemIcon sx={{ minWidth: 'auto', ml: 1 }}>
-                    <CheckIcon fontSize="small" color="success" />
-                  </ListItemIcon>
-                )}
-              </MenuItem>
-            ))}
+            {watchlists.map((watchlist) => {
+              const alreadyAdded = normalizedSymbols.every(
+                (symbol) => memberships[symbol]?.includes(watchlist.id),
+              );
+              return (
+                <MenuItem
+                  key={watchlist.id}
+                  onClick={() => {
+                    if (!alreadyAdded) handleAddToWatchlist(watchlist.id);
+                  }}
+                  disabled={isPending || Boolean(membershipError) || alreadyAdded}
+                >
+                  <ListItemText
+                    primary={watchlist.name}
+                    secondary={alreadyAdded ? 'Already added' : undefined}
+                  />
+                  {alreadyAdded && (
+                    <ListItemIcon sx={{ minWidth: 'auto', ml: 1 }}>
+                      <CheckIcon fontSize="small" color="success" />
+                    </ListItemIcon>
+                  )}
+                </MenuItem>
+              );
+            })}
 
             {watchlists.length === 0 && (
               <Box sx={{ px: 2, py: 1 }}>

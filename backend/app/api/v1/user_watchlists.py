@@ -24,6 +24,7 @@ from ...schemas.user_watchlist import (
     WatchlistCreate, WatchlistUpdate, WatchlistResponse,
     WatchlistItemCreate, WatchlistItemUpdate, WatchlistItemResponse,
     WatchlistDataResponse, WatchlistListResponse,
+    WatchlistMembershipResponse,
     WatchlistStockData, PriceChangeBounds,
     ReorderWatchlistsRequest, ReorderItemsRequest,
     BulkAddItemsRequest,
@@ -74,6 +75,38 @@ async def list_watchlists(db: Session = Depends(get_db)):
         watchlists=[WatchlistResponse.model_validate(w) for w in watchlists],
         total=len(watchlists)
     )
+
+
+@router.get("/memberships", response_model=WatchlistMembershipResponse)
+async def get_watchlist_memberships(
+    symbols: str = Query(..., min_length=1, max_length=2000),
+    db: Session = Depends(get_db),
+):
+    """Return the watchlists containing each requested comma-separated symbol."""
+    normalized_symbols: list[str] = []
+    seen: set[str] = set()
+    for raw_symbol in symbols.split(","):
+        normalized = normalize_symbol(raw_symbol.strip())
+        if normalized is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid symbol format: {raw_symbol.strip()!r}",
+            )
+        if normalized not in seen:
+            seen.add(normalized)
+            normalized_symbols.append(normalized)
+
+    memberships = {symbol: [] for symbol in normalized_symbols}
+    rows = (
+        db.query(WatchlistItem.symbol, WatchlistItem.watchlist_id)
+        .filter(WatchlistItem.symbol.in_(normalized_symbols))
+        .order_by(WatchlistItem.watchlist_id)
+        .all()
+    )
+    for symbol, watchlist_id in rows:
+        memberships[symbol].append(watchlist_id)
+
+    return WatchlistMembershipResponse(memberships=memberships)
 
 
 @router.post("", response_model=WatchlistResponse, include_in_schema=False)
