@@ -9,6 +9,11 @@ from app.scanners.criteria.canslim_v2 import (
     STOCK_SCORE_MAX_POINTS,
     score_annual_earnings,
     score_current_earnings,
+    score_institutional_sponsorship,
+    score_leader,
+    score_market_gate,
+    score_new_highs,
+    score_supply_demand,
 )
 
 
@@ -103,6 +108,134 @@ def test_annual_earnings_below_growth_gate_does_not_pass() -> None:
     assert result.available is True
     assert result.passes is False
     assert result.points == 11.0
+
+
+def test_new_highs_uses_price_leadership_with_confirmations() -> None:
+    result = score_new_highs(
+        distance_from_52w_high_pct=4.0,
+        catalyst_recent=True,
+        breakout_volume_ratio=1.8,
+    )
+
+    assert result.passes is True
+    assert result.points == 14.0
+    assert result.metrics["catalyst_confirmation"] is True
+    assert result.metrics["volume_confirmation"] is True
+
+
+def test_new_highs_confirmations_cannot_rescue_stock_far_from_high() -> None:
+    result = score_new_highs(
+        distance_from_52w_high_pct=18.0,
+        catalyst_recent=True,
+        breakout_volume_ratio=3.0,
+    )
+
+    assert result.passes is False
+    assert result.points == 5.0
+
+
+def test_supply_demand_strong_accumulation_passes() -> None:
+    result = score_supply_demand(
+        up_down_volume_ratio=1.35,
+        volume_surge_ratio=1.6,
+        shares_outstanding_millions=50.0,
+    )
+
+    assert result.passes is True
+    assert result.points == 11.5
+    assert result.metrics["strong_demand"] is True
+
+
+def test_supply_demand_small_share_supply_cannot_rescue_weak_demand() -> None:
+    result = score_supply_demand(
+        up_down_volume_ratio=0.9,
+        volume_surge_ratio=1.1,
+        shares_outstanding_millions=10.0,
+    )
+
+    assert result.passes is False
+    assert result.points == 2.0
+
+
+def test_leader_is_anchored_to_rs_with_group_confirmation() -> None:
+    result = score_leader(rs_rating=91.0, group_rank=15)
+
+    assert result.passes is True
+    assert result.points == 20.0
+    assert result.metrics["group_points"] == 2.0
+
+
+def test_leading_group_cannot_rescue_lagging_stock_rs() -> None:
+    result = score_leader(rs_rating=74.0, group_rank=1)
+
+    assert result.passes is False
+    assert result.points == 12.0
+
+
+def test_institutional_sponsorship_rewards_increasing_ownership() -> None:
+    result = score_institutional_sponsorship(
+        institutional_ownership_pct=62.0,
+        ownership_change_pct=5.5,
+        institutional_transactions_pct=2.0,
+    )
+
+    assert result.passes is True
+    assert result.points == 14.0
+    assert result.metrics["increasing_sponsorship"] is True
+
+
+def test_institutional_high_ownership_is_not_penalized_by_legacy_sweet_spot() -> None:
+    result = score_institutional_sponsorship(
+        institutional_ownership_pct=88.0,
+        ownership_change_pct=1.0,
+    )
+
+    assert result.passes is True
+    assert result.points == 11.0
+
+
+def test_institutional_static_sponsorship_does_not_pass_trend_gate() -> None:
+    result = score_institutional_sponsorship(
+        institutional_ownership_pct=70.0,
+        ownership_change_pct=0.0,
+        institutional_transactions_pct=-1.0,
+    )
+
+    assert result.passes is False
+    assert result.points == 9.0
+
+
+@pytest.mark.parametrize(
+    ("score", "passes", "stance", "action"),
+    [
+        (90.0, True, "Power Trend", "aggressive"),
+        (70.0, True, "Confirmed Uptrend", "normal"),
+        (55.0, True, "Uptrend Under Pressure", "reduced"),
+        (45.0, False, "Downtrend/Caution", "watchlist_only"),
+        (20.0, False, "Correction — In Cash", "cash"),
+    ],
+)
+def test_market_gate_reuses_exposure_bands(
+    score: float,
+    passes: bool,
+    stance: str,
+    action: str,
+) -> None:
+    result = score_market_gate(exposure_score=score)
+
+    assert result.points == 0.0
+    assert result.max_points == 0.0
+    assert result.passes is passes
+    assert result.metrics["stance"] == stance
+    assert result.metrics["action"] == action
+
+
+def test_market_gate_missing_score_is_unavailable() -> None:
+    result = score_market_gate(exposure_score=None)
+
+    assert result.available is False
+    assert result.passes is False
+    assert result.points == 0.0
 
 
 def test_contract_serialization_is_api_friendly() -> None:
