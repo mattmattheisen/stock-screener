@@ -24,7 +24,9 @@ def main(
     parser.add_argument(
         "--release-tag", default="breadth-contributor-metadata-data"
     )
+    parser.add_argument("--market", required=True)
     parser.add_argument("--asset-name", required=True)
+    parser.add_argument("--previous-asset-name", required=True)
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--retry-delay-seconds", type=float, default=5)
@@ -37,7 +39,9 @@ def main(
         repository_full_name=args.repository,
         release_tag=args.release_tag,
         asset_name=args.asset_name,
+        previous_asset_name=args.previous_asset_name,
         output_path=Path(args.output_path),
+        expected_market=args.market,
         github_token=settings.github_data_token,
         request_timeout_seconds=settings.github_data_timeout_seconds,
         attempts=args.attempts,

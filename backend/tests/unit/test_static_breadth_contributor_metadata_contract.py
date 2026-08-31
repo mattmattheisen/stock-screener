@@ -77,13 +77,19 @@ def test_metadata_plan_uses_market_scoped_deterministic_paths(tmp_path):
     assert plan.enabled is True
     assert plan.market == "US"
     assert plan.asset_name == "breadth-contributor-metadata-us.json.gz"
+    assert plan.previous_asset_name == (
+        "breadth-contributor-metadata-us.previous.json.gz"
+    )
     assert plan.source_path == tmp_path / plan.asset_name
+    assert plan.previous_path == tmp_path / plan.previous_asset_name
     assert plan.output_path == tmp_path / "current" / plan.asset_name
     assert plan.as_dict() == {
         "enabled": True,
         "market": "US",
         "asset_name": plan.asset_name,
+        "previous_asset_name": plan.previous_asset_name,
         "source_path": str(plan.source_path),
+        "previous_path": str(plan.previous_path),
         "output_path": str(plan.output_path),
     }
 

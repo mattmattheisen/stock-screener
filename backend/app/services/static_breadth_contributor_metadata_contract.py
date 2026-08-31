@@ -116,7 +116,9 @@ class StaticBreadthContributorMetadataPlan:
     enabled: bool
     market: str
     asset_name: str
+    previous_asset_name: str
     source_path: Path
+    previous_path: Path
     output_path: Path
 
     def as_dict(self) -> dict[str, str | bool]:
@@ -124,7 +126,9 @@ class StaticBreadthContributorMetadataPlan:
             "enabled": self.enabled,
             "market": self.market,
             "asset_name": self.asset_name,
+            "previous_asset_name": self.previous_asset_name,
             "source_path": str(self.source_path),
+            "previous_path": str(self.previous_path),
             "output_path": str(self.output_path),
         }
 
@@ -132,6 +136,11 @@ class StaticBreadthContributorMetadataPlan:
 def static_breadth_contributor_metadata_asset_name(market: str) -> str:
     normalized = normalize_static_breadth_contributor_metadata_market(market)
     return f"breadth-contributor-metadata-{normalized.lower()}.json.gz"
+
+
+def static_breadth_contributor_metadata_previous_asset_name(market: str) -> str:
+    normalized = normalize_static_breadth_contributor_metadata_market(market)
+    return f"breadth-contributor-metadata-{normalized.lower()}.previous.json.gz"
 
 
 def build_static_breadth_contributor_metadata_plan(
@@ -143,11 +152,16 @@ def build_static_breadth_contributor_metadata_plan(
     catalog = market_catalog or get_market_catalog()
     normalized = normalize_static_breadth_contributor_metadata_market(market)
     asset_name = static_breadth_contributor_metadata_asset_name(normalized)
+    previous_asset_name = static_breadth_contributor_metadata_previous_asset_name(
+        normalized
+    )
     return StaticBreadthContributorMetadataPlan(
         enabled=bool(catalog.get(normalized).capabilities.breadth),
         market=normalized,
         asset_name=asset_name,
+        previous_asset_name=previous_asset_name,
         source_path=directory / asset_name,
+        previous_path=directory / previous_asset_name,
         output_path=directory / "current" / asset_name,
     )
 
@@ -203,5 +217,6 @@ __all__ = [
     "normalize_static_breadth_contributor_metadata_market",
     "read_static_breadth_contributor_metadata",
     "static_breadth_contributor_metadata_asset_name",
+    "static_breadth_contributor_metadata_previous_asset_name",
     "write_static_breadth_contributor_metadata",
 ]

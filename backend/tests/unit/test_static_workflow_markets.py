@@ -190,6 +190,10 @@ def test_static_workflow_publishes_breadth_metadata_before_market_artifact():
     assert publish["id"] == "publish-breadth-contributor-metadata"
     assert "for attempt in 1 2 3" in publish["run"]
     assert "metadata_state_published=false" in publish["run"]
+    assert "PREVIOUS_ASSET_NAME" in publish["env"]
+    assert publish["run"].index("$PREVIOUS_PATH\" --clobber") < publish[
+        "run"
+    ].index("$METADATA_PATH\" --clobber")
 
     upload_condition = step_by_name["Upload market artifact"]["if"]
     assert "publish-breadth-contributor-metadata.outputs.metadata_state_published" in upload_condition
@@ -203,6 +207,8 @@ def test_static_workflow_never_advances_breadth_metadata_after_unsafe_restore():
     restore = step_by_name["Restore breadth contributor metadata"]
     assert "safe_to_publish" in restore["run"]
     assert 'RESTORE_STATUS="$(jq -r' in restore["run"]
+    assert "--previous-asset-name" in restore["run"]
+    assert "--market" in restore["run"]
 
     publish_condition = step_by_name["Publish breadth contributor metadata"]["if"]
     assert "restore-breadth-contributor-metadata.outputs.safe_to_publish == 'true'" in publish_condition

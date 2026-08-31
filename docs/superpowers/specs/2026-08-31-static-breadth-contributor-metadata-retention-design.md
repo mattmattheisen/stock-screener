@@ -84,8 +84,11 @@ session and newly appearing symbols use current metadata.
 ### Restore and publication safety
 
 The workflow creates a `breadth-contributor-metadata-data` release when absent.
-Each market job restores its deterministic asset before running the static
-export.
+Each market job restores its deterministic canonical asset before running the
+static export. If that asset is absent after an interrupted replacement, the
+restorer tries the market's deterministic `.previous` asset before classifying
+the run as a genuine cold start. Downloaded bytes are validated for gzip,
+schema, and market identity before restore is declared safe.
 
 Restore outcomes follow three states:
 
@@ -96,11 +99,16 @@ Restore outcomes follow three states:
   the combine job retains the last-known-good market artifact.
 
 Publish the finalized metadata asset with bounded retries before uploading the
-corresponding market artifact. The market artifact may advance only after the
-metadata state is durable. If state publication fails, suppress the current
-market artifact and let the combine job retain the last-known-good fallback. If
-the later market-artifact upload fails, the safely advanced metadata state is
-harmless: it already contains the frozen values the next run must preserve.
+corresponding market artifact. Before replacing an existing canonical asset,
+copy its validated contents to the deterministic `.previous` asset. Do not
+touch the canonical asset if preserving that backup fails. The market artifact
+may advance only after the new canonical state is durable. If canonical
+replacement is interrupted after GitHub deletes the old asset, the `.previous`
+asset remains restorable on the next run. If state publication fails, suppress
+the current market artifact and let the combine job retain the last-known-good
+fallback. If the later market-artifact upload fails, the safely advanced
+metadata state is harmless: it already contains the frozen values the next run
+must preserve.
 
 ## Components
 
@@ -113,10 +121,11 @@ unsupported schemas.
 
 ### Release restorer
 
-A small adapter downloads the market asset from the dedicated release and
-returns a structured restore result with `status`, `safe_to_publish`, source
-path, and reason. It follows the existing RRG release-restorer pattern but does
-not share the RRG schema or domain types.
+A small adapter downloads and validates the market asset from the dedicated
+release, falling back to the `.previous` asset only when the canonical asset is
+missing. It returns a structured restore result with `status`,
+`safe_to_publish`, source asset/path, and reason. It follows the existing RRG
+release-restorer pattern but does not share the RRG schema or domain types.
 
 ### Static metadata finalizer
 

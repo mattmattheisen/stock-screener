@@ -327,7 +327,8 @@ git commit -m "fix: finalize breadth metadata after static enrichment"
 **Interfaces:**
 - Consumes Tasks 2 and 4.
 - Produces release: `breadth-contributor-metadata-data`.
-- Publishes: `breadth-contributor-metadata-<market>.json.gz`.
+- Publishes: `breadth-contributor-metadata-<market>.json.gz` plus its durable
+  `breadth-contributor-metadata-<market>.previous.json.gz` recovery asset.
 
 - [ ] **Step 1: Write failing workflow contract tests**
 
@@ -355,9 +356,12 @@ Expected: FAIL because no metadata lifecycle exists.
 - [ ] **Step 3: Implement the workflow lifecycle**
 
 Create the release in `ensure_daily_price_release`. Each market job plans paths,
-restores its asset, passes directory/status to export, and suppresses current
-market publication on failed restore. After a successful candidate export,
-upload finalized state with `--clobber` and three bounded retries. Record a
+restores and validates its canonical asset (falling back to `.previous` only
+when canonical is absent), passes directory/status to export, and suppresses
+current market publication on failed restore. After a successful candidate
+export, first preserve a restored canonical asset as `.previous`, then upload
+finalized canonical state with `--clobber` and three bounded retries. Never
+attempt canonical replacement when preserving `.previous` fails. Record a
 
 `metadata_state_published` step output and run `actions/upload-artifact` for the
 market only when it is `true`. A failed state upload must exit the publication

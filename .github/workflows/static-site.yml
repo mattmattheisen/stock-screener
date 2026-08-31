@@ -221,7 +221,9 @@ jobs:
             --directory /tmp/rrg-history)"
           echo "enabled=$(jq -r '.enabled' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "asset_name=$(jq -r '.asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "previous_asset_name=$(jq -r '.previous_asset_name' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "source_path=$(jq -r '.source_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
+          echo "previous_path=$(jq -r '.previous_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "output_path=$(jq -r '.output_path' <<<"$PLAN")" >> "$GITHUB_OUTPUT"
           echo "RRG_HISTORY_DIR=/tmp/rrg-history" >> "$GITHUB_ENV"
 
@@ -271,19 +273,24 @@ jobs:
         env:
           GITHUB_DATA_TOKEN: ${{ github.token }}
           ASSET_NAME: ${{ steps.breadth-contributor-metadata.outputs.asset_name }}
+          PREVIOUS_ASSET_NAME: ${{ steps.breadth-contributor-metadata.outputs.previous_asset_name }}
           SOURCE_PATH: ${{ steps.breadth-contributor-metadata.outputs.source_path }}
         run: |
           rm -f "$SOURCE_PATH"
           cd backend
           RESTORE_RESULT="$(python -m app.scripts.restore_static_breadth_contributor_metadata \
             --repository "${{ github.repository }}" \
+            --market "${{ matrix.market }}" \
             --asset-name "$ASSET_NAME" \
+            --previous-asset-name "$PREVIOUS_ASSET_NAME" \
             --output-path "$SOURCE_PATH" || true)"
           SAFE_TO_PUBLISH="$(jq -r '.safe_to_publish // false' <<<"$RESTORE_RESULT" 2>/dev/null || echo false)"
           RESTORE_STATUS="$(jq -r '.status // "failed"' <<<"$RESTORE_RESULT" 2>/dev/null || echo failed)"
+          SOURCE_ASSET_NAME="$(jq -r '.source_asset_name // ""' <<<"$RESTORE_RESULT" 2>/dev/null || echo '')"
           [ "$SAFE_TO_PUBLISH" = "true" ] || SAFE_TO_PUBLISH=false
           echo "safe_to_publish=$SAFE_TO_PUBLISH" >> "$GITHUB_OUTPUT"
           echo "restore_status=$RESTORE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "source_asset_name=$SOURCE_ASSET_NAME" >> "$GITHUB_OUTPUT"
           if [ "$RESTORE_STATUS" = "restored" ]; then
             echo "Restored breadth contributor metadata for ${{ matrix.market }}."
           elif [ "$RESTORE_STATUS" = "missing" ]; then
@@ -440,12 +447,36 @@ jobs:
         if: ${{ steps.export-market.outputs.has_artifact == 'true' && steps.breadth-contributor-metadata.outputs.enabled == 'true' && steps.restore-breadth-contributor-metadata.outputs.safe_to_publish == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          ASSET_NAME: ${{ steps.breadth-contributor-metadata.outputs.asset_name }}
+          PREVIOUS_ASSET_NAME: ${{ steps.breadth-contributor-metadata.outputs.previous_asset_name }}
+          SOURCE_PATH: ${{ steps.breadth-contributor-metadata.outputs.source_path }}
+          PREVIOUS_PATH: ${{ steps.breadth-contributor-metadata.outputs.previous_path }}
           METADATA_PATH: ${{ steps.breadth-contributor-metadata.outputs.output_path }}
+          RESTORE_STATUS: ${{ steps.restore-breadth-contributor-metadata.outputs.restore_status }}
+          SOURCE_ASSET_NAME: ${{ steps.restore-breadth-contributor-metadata.outputs.source_asset_name }}
         run: |
           if [ ! -s "$METADATA_PATH" ]; then
             echo "No current breadth contributor metadata state was produced; the market artifact will use its last-good fallback."
             echo "metadata_state_published=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if [ "$RESTORE_STATUS" = "restored" ] && [ "$SOURCE_ASSET_NAME" = "$ASSET_NAME" ]; then
+            cp "$SOURCE_PATH" "$PREVIOUS_PATH"
+            previous_published=false
+            for attempt in 1 2 3; do
+              if gh release upload breadth-contributor-metadata-data "$PREVIOUS_PATH" --clobber; then
+                previous_published=true
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            if [ "$previous_published" != "true" ]; then
+              echo "Unable to preserve the last-good breadth contributor metadata; canonical replacement was not attempted." >&2
+              echo "metadata_state_published=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           for attempt in 1 2 3; do
             if gh release upload breadth-contributor-metadata-data "$METADATA_PATH" --clobber; then
