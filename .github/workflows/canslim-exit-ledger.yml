@@ -1,0 +1,23 @@
+name: CAN SLIM Exit Ledger Tests
+on:
+  pull_request:
+    paths:
+      - 'research/canslim_exit/**'
+      - '.github/workflows/canslim-exit-ledger.yml'
+  workflow_dispatch:
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Execute Exit Ledger unit tests
+        run: python -m unittest discover -s research/canslim_exit/tests -v
+      - name: Smoke test CSV entrypoint
+        run: |
+          python research/canslim_exit/exit_ledger.py research/canslim_exit/example_input.csv /tmp/exit_signals.csv
+          test -s /tmp/exit_signals.csv
