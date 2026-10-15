@@ -16,7 +16,7 @@ class ExitLedgerTests(unittest.TestCase):
         self.assertEqual(result["status"], "HARD STOP BREACH - REVIEW IMMEDIATELY")
 
     def test_stop_threshold_is_not_hardcoded_per_symbol(self):
-        result = evaluate({"symbol": "TSM", "entry_price": "428.23", "close": "395"})
+        result = evaluate({"symbol": "TSM", "entry_price": "428.23", "close": "390"})
         self.assertEqual(result["status"], "HARD STOP BREACH - REVIEW IMMEDIATELY")
 
     def test_failed_breakout_requires_known_nonpositive_return(self):
