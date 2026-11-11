@@ -20,6 +20,20 @@ QUERIES = {
                count(*) FILTER (WHERE adj_close IS NULL) AS missing_adjusted_close
         FROM stock_prices
     """,
+    "price_symbol_depth": """
+        SELECT count(*) AS symbols,
+               count(*) FILTER (WHERE sessions >= 253) AS symbols_with_253_sessions,
+               count(*) FILTER (WHERE sessions < 253) AS symbols_below_253_sessions,
+               min(sessions) AS minimum_sessions,
+               max(sessions) AS maximum_sessions,
+               count(*) FILTER (WHERE incomplete_bars > 0) AS symbols_with_incomplete_bars
+        FROM (
+            SELECT symbol, count(*) AS sessions,
+                   count(*) FILTER (WHERE high IS NULL OR close IS NULL OR volume IS NULL) AS incomplete_bars
+            FROM stock_prices
+            GROUP BY symbol
+        ) symbol_history
+    """,
     "fundamentals_current_snapshot": """
         SELECT count(*) AS rows, count(DISTINCT symbol) AS symbols,
                min(data_source_timestamp) AS earliest_source_timestamp,
