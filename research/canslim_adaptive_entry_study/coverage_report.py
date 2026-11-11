@@ -50,7 +50,10 @@ def collect(connection) -> dict:
     report = {}
     for name, query in QUERIES.items():
         try:
-            row = connection.execute(text(query)).mappings().one()
+            # PostgreSQL aborts a transaction after a failed statement. A
+            # savepoint keeps later coverage queries independent.
+            with connection.begin_nested():
+                row = connection.execute(text(query)).mappings().one()
             report[name] = {key: str(value) if hasattr(value, "isoformat") else value for key, value in row.items()}
         except Exception as exc:
             # Do not expose DSNs or credentials from database exception messages.
