@@ -9,8 +9,7 @@ Outputs aggregate coverage only, never account or client data.
 from __future__ import annotations
 
 import json
-from sqlalchemy import create_engine, text
-from app.config import settings
+from sqlalchemy import text
 
 
 QUERIES = {
