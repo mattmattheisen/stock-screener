@@ -16,6 +16,8 @@ def test_missing_table_does_not_abort_other_queries():
         ))
         report = collect(conn)
     assert report["price_history"]["rows"] == 1
+    assert report["price_symbol_depth"]["symbols"] == 1
+    assert report["price_symbol_depth"]["symbols_below_253_sessions"] == 1
     assert report["price_history"]["missing_adjusted_close"] == 1
     assert report["fundamentals_current_snapshot"]["status"] == "UNAVAILABLE"
     assert report["daily_feature_runs"]["status"] == "UNAVAILABLE"
