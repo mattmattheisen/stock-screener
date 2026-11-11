@@ -41,3 +41,8 @@ def test_missing_data_never_passes():
 
 def test_invalid_price_history_rejected():
     assert evaluate(sample(close=101), "E").status == "UNAVAILABLE"
+
+
+def test_out_of_range_rs_fails_closed():
+    assert evaluate(sample(rs_rating=120), "E").status == "UNAVAILABLE"
+    assert evaluate(sample(rs_rating=0), "E").status == "UNAVAILABLE"
