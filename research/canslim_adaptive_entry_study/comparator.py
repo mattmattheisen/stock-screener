@@ -46,7 +46,7 @@ def evaluate(obs: Observation, variant: str = "A") -> Decision:
         return Decision("UNAVAILABLE", None, None, 0.0, "Inconsistent close/high")
     n_limit = 0.15 if variant in {"C", "E"} else 0.10
     n_pass = (obs.rolling_52w_high - obs.close) / obs.rolling_52w_high <= n_limit + 1e-12
-    if not obs.rs_source_verified or obs.rs_rating is None or not isfinite(obs.rs_rating):
+    if not obs.rs_source_verified or obs.rs_rating is None or not isfinite(obs.rs_rating) or not (1 <= obs.rs_rating <= 99):
         return Decision("UNAVAILABLE", n_pass, None, 0.0, "Verified proprietary RS required")
     l_limit = 75 if variant in {"D", "E"} else 80
     l_pass = obs.rs_rating >= l_limit
