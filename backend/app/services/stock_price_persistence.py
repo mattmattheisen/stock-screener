@@ -107,7 +107,11 @@ def persist_stock_price_mappings(
                 or not is_usable_adjusted_close(existing_adj_close)
                 or finite_ohlc_values(open_, high, low, close) is None
             ):
-                protected_row = protect_existing_adjusted_close(\n                    price_row, existing_adj_close\n                )\n                protected_row["id"] = existing_id\n                rows_to_update.append(protected_row)
+                protected_row = protect_existing_adjusted_close(
+                    price_row, existing_adj_close
+                )
+                protected_row["id"] = existing_id
+                rows_to_update.append(protected_row)
 
     for chunk_start in range(0, len(rows_to_insert), chunk_size):
         db.bulk_insert_mappings(
