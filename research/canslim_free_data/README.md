@@ -61,3 +61,34 @@ Unit tests for this adapter are in `tests/test_cache_bridge.py`; CI status must 
 The important difference is *data fetched today about 2026-08-14* versus *data actually observed by the system on 2026-08-14*. Today's dividend-adjusted data can be revised by later events and must not be treated as a point-in-time historical observation.
 
 No merge or live alert integration is authorized by these checks alone.
+
+## Cache provenance diagnostics wired to existing cache API
+
+`cache_audit_runner.inspect_cached_prices` consumes the real
+`PriceCacheService.get_cached_only(symbol, period="1y")` interface.
+It is **read-only**, never refreshes data, and always labels the results
+`data_certified=False`. It reports missing adjusted close, suspicious
+raw/adjusted equality, stale sessions, future bars and the outstanding
+split/corporate-action and historical snapshot verification requirements.
+
+Seven new isolated tests cover nominal-but-unverified data, potential
+raw-close substitution, missing adjusted columns, stale/future data,
+empty cache, and invalid as-of ordering.
+
+### Specific blocker uncovered in production path
+
+`backend/app/services/price_row_normalization.py` currently uses
+`"adj_close": adj_close if adj_close is not None else close`.
+That makes a populated database `adj_close` value *insufficient* to
+certify adjustment provenance. We cannot infer truthful adjustment
+metadata from the cached dataframe. Correcting this safely requires a
+separately reviewed change to the backend persistence contract and
+schema consumers; simply renaming the field would leave historical
+bad rows untouched. The price-contract ADR
+`docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md`
+already identifies this hazard.
+
+**Do not flip verification booleans based on this diagnostic report.**
+No existing production scanner code, database table or deployed task
+was modified by this change. GitHub CI execution and data-source
+certification are separate pending gates.
