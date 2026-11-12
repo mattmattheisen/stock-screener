@@ -36,3 +36,18 @@ Test: `python -m unittest discover -s research/canslim_free_data/tests -v`
 5. Existing CI and new tests pass on the integration branch. Never hide failures by skipping gates.
 
 This proposal introduces **no** extra subscription, secret requirement, scheduled job, live endpoint, broker connection, or automatic trade execution.
+
+## Existing-cache bridge added (Nov 2026)
+
+`cache_bridge.py` now reads the repository's existing `PriceCacheService.get_cached_only(symbol, period="1y")` cache-only contract. It never triggers live yfinance/Alpaca/Unusual Whales network calls and has **not** been wired to the running scanner.
+
+Read-only signals are blocked unless the caller has explicitly verified:
+- `Adj Close` is truly adjusted with known provenance (no implicit raw `Close` substitution);
+- the full lookback is corporate-action reconciled, including split effects on raw volume;
+- the expected completed market session exists (stale/intraday bars cannot masquerade as a final close).
+
+This matters because the existing `stock_price_row_from_ohlcv` normalization code currently substitutes `close` when `Adj Close` is missing; thus a populated cached field is **not proof of adjusted-price provenance**. The repository's price contract ADR also documents known historical adjustment/correction risks. Do **not** mark verification flags true without a demonstrated independent audit.
+
+**Remaining blockers:** reconciled adjustment factors and adjusted-volume semantics across splits; production data provenance feed; true historical as-of snapshots (modern dividend-adjusted series can be restated retrospectively); independent benchmark comparisons; and an operational alert transport. None is implemented by this read-only adapter.
+
+Unit tests for this adapter are in `tests/test_cache_bridge.py`; CI status must be checked separately. No merge or production alert activation has been performed.
