@@ -138,3 +138,38 @@ retrospective reconstruction from original as-of snapshots.
 **Merge gate:** actual database inventory, consumer compatibility tests, full
 CI plus migrated fixture tests, source contract review and rollback rehearsal.
 None has been certified by this branch alone. Rust is deferred.
+
+## Offline comparison workflow (no database writes)
+
+1. Execute `sql/historical_price_inventory.sql` against a **read-only** database
+   connection and retain the output with its execution timestamp.
+2. Export the required raw database rows to a separate local CSV containing
+   `symbol,date,close,adj_close,volume`. Preserve a backup/snapshot before
+   any migration. Do not upload confidential datasets to GitHub.
+3. Independently obtain and license an appropriately corporate-action-adjusted
+   reference series; export a separate CSV containing
+   `symbol,date,close,adj_close,volume,source_id`. A `source_id` string is
+   attribution, **not verification**. Note reference adjustment mode,
+   retrieval timestamp, symbol mappings, corporate events and volume policy.
+4. Generate a review-only report:
+
+```bash
+python research/canslim_free_data/reconcile.py \
+  --db-export existing_prices.csv \
+  --reference reference_prices.csv \
+  --as-of 2026-11-12 \
+  --report price_reconciliation_review.json
+```
+
+The tool compares symbol/trade-date keys, identifies missing/invalid price
+adjustments and raw or adjusted-close conflicts, and records SHA-256 hashes
+of its inputs. No SQL updates, trading signals, or API network calls occur.
+A matching row only means **numerical equality**, not trusted provenance,
+and a backfilled adjusted series is not a historical point-in-time snapshot.
+Eight local fixture tests for this utility passed. Actual database data has
+not been compared, so this is not yet a completed historical remediation.
+
+The dedicated workflow now watches modified backend files, compiles the
+touched Python files and executes the standalone research tests. Backend
+integration tests still require the repository's full dependency/setup CI;
+a syntax check does not prove semantic compatibility.
