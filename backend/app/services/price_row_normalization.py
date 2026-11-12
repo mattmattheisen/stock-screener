@@ -106,5 +106,5 @@ def stock_price_row_from_ohlcv(
         "low": low,
         "close": close,
         "volume": _volume_or_zero(row.get("Volume")),
-        "adj_close": adj_close if adj_close is not None else close,
+        "adj_close": adj_close,  # Preserve unknown adjustment; never alias raw close.
     }
