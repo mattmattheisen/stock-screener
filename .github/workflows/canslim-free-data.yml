@@ -3,6 +3,12 @@ on:
   pull_request:
     paths:
       - 'research/canslim_free_data/**'
+      - 'backend/app/services/price_row_normalization.py'
+      - 'backend/app/services/price_value_policy.py'
+      - 'backend/app/services/stock_price_persistence.py'
+      - 'backend/tests/unit/test_adjusted_close_refresh_guard.py'
+      - 'backend/tests/unit/test_price_adjustment_read_compatibility.py'
+      - 'backend/tests/unit/test_price_normalization_missing_adjusted_close.py'
       - '.github/workflows/canslim-free-data.yml'
   workflow_dispatch:
 jobs:
@@ -15,4 +21,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m unittest discover -s research/canslim_free_data/tests -v
+      - name: Compile touched backend and research modules
+        run: |
+          python -m compileall -q research/canslim_free_data backend/app/services/price_row_normalization.py backend/app/services/price_value_policy.py backend/app/services/stock_price_persistence.py backend/tests/unit/test_adjusted_close_refresh_guard.py backend/tests/unit/test_price_adjustment_read_compatibility.py backend/tests/unit/test_price_normalization_missing_adjusted_close.py
+      - name: Run offline CAN SLIM research tests
+        run: python -m unittest discover -s research/canslim_free_data/tests -v
