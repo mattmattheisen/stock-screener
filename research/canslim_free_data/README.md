@@ -106,3 +106,35 @@ external source data. Existing consumers that expect non-null adjusted closes
 may need updates. Therefore this shared-backend change must not be merged
 until baseline CI, consumers, and data migration plans are reviewed. It does
 not establish adjusted volume semantics or historical point-in-time evidence.
+
+## Compatibility and historical reconciliation work
+
+On this research branch only:
+- `stock_price_row_from_ohlcv` preserves missing adjusted prices as NULL.
+- `stock_price_persistence` protects an existing non-null, usable adjusted
+  value from an incomplete incoming refresh rather than overwriting it.
+  This is **not** certification of the existing adjusted value.
+- Three additional pandas/service compatibility tests and five refresh-policy
+  tests were added alongside the earlier ingestion regression tests.
+- `sql/historical_price_inventory.sql` supplies PostgreSQL **SELECT-only**
+  checks for missing/invalid adjusted prices, suspicious raw/adjusted equality,
+  possible corporate-action discontinuities and duplicate natural keys.
+
+### Not yet resolved with current access
+
+The GitHub repository alone does not expose the production PostgreSQL rows or
+the original market-provider payloads. Historical `adj_close` values previously
+filled from raw `close` cannot be reliably identified solely by equality,
+because equality is legitimate when adjustment factor = 1. Backfill requires
+independent provider corporate-action history, verified adjusted prices,
+a protected database snapshot, a reviewed deterministic reconciliation,
+and only then a staged migration. No DELETE/UPDATE SQL is supplied or run.
+
+For historic point-in-time backtests, even newly retrieved adjusted data is
+not equivalent to the original observation as of the historical trading date.
+Model dividends/splits explicitly, preserve raw event dates and distinguish
+retrospective reconstruction from original as-of snapshots.
+
+**Merge gate:** actual database inventory, consumer compatibility tests, full
+CI plus migrated fixture tests, source contract review and rollback rehearsal.
+None has been certified by this branch alone. Rust is deferred.
