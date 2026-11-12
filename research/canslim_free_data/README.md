@@ -51,3 +51,13 @@ This matters because the existing `stock_price_row_from_ohlcv` normalization cod
 **Remaining blockers:** reconciled adjustment factors and adjusted-volume semantics across splits; production data provenance feed; true historical as-of snapshots (modern dividend-adjusted series can be restated retrospectively); independent benchmark comparisons; and an operational alert transport. None is implemented by this read-only adapter.
 
 Unit tests for this adapter are in `tests/test_cache_bridge.py`; CI status must be checked separately. No merge or production alert activation has been performed.
+
+## Explicit provenance gate (Nov 12, 2026)
+
+`price_provenance.py` introduces a separate receipt/gate differentiating end-of-day observations from *historical point-in-time* data. It rejects missing audit identities, raw-close fallback, unverified corporate actions / split-volume treatment, stale sessions, naive retrieval timestamps, and retrospective downloads represented as historical-as-of snapshots. Eight isolated unit tests cover these cases.
+
+**Important limitation:** this is a validation contract, not an independent attestation service. An upstream system can currently fill verification identifiers without proving its adjustment logic. **Do not automatically generate or trust these identifiers.** A production-grade provenance service must supply reproducible source hashes, provider adjustment metadata, event reconciliation evidence, and historical snapshot timestamps before the receipt can be relied on for trading research. Existing `cache_bridge.py` still uses booleans and is not wired to this new gate. Consequently, neither this PR nor its presence in GitHub certifies the source data.
+
+The important difference is *data fetched today about 2026-08-14* versus *data actually observed by the system on 2026-08-14*. Today's dividend-adjusted data can be revised by later events and must not be treated as a point-in-time historical observation.
+
+No merge or live alert integration is authorized by these checks alone.
