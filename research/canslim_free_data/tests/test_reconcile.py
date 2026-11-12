@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from reconcile import reconcile, write_report
 
 DB='symbol,date,close,adj_close,volume\nMSFT,2026-11-11,100,,1000\nTSM,2026-11-11,200,200,1000\nANET,2026-11-11,10,9,1000\n'
