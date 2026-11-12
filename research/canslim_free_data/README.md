@@ -92,3 +92,17 @@ already identifies this hazard.
 No existing production scanner code, database table or deployed task
 was modified by this change. GitHub CI execution and data-source
 certification are separate pending gates.
+
+## Shared normalization patch staged (research branch only)
+
+The branch now changes `backend/app/services/price_row_normalization.py`
+so an absent `Adj Close` is persisted as SQL NULL rather than copied from
+raw `Close`. Three backend unit regression tests cover missing, explicit,
+and equal-but-not-provably-adjusted values.
+
+**Migration/reconciliation is not complete.** Historical rows that were already
+written with fabricated raw-close aliases remain indistinguishable without
+external source data. Existing consumers that expect non-null adjusted closes
+may need updates. Therefore this shared-backend change must not be merged
+until baseline CI, consumers, and data migration plans are reviewed. It does
+not establish adjusted volume semantics or historical point-in-time evidence.
