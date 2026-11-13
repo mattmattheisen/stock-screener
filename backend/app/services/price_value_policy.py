@@ -18,7 +18,8 @@ def protect_existing_adjusted_close(
 ) -> dict[str, object]:
     """Preserve a usable adjustment only when the raw close is unchanged.
 
-    Missing raw-close evidence is treated as a mismatch.\n    This is a *loss-prevention* rule only. The persisted value might itself
+    Missing raw-close evidence is treated as a mismatch.
+    This is a *loss-prevention* rule only. The persisted value might itself
     be legacy raw-close fallback; provenance must be audited separately.
     """
     merged = dict(incoming)
