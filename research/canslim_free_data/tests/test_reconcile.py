@@ -57,5 +57,26 @@ class ReconTest(unittest.TestCase):
         write_report(self.r(),p)
         self.assertIn('reference_sha256',p.read_text())
 
+
+    def test_volume_mismatch_is_not_certified(self):
+        self.b.write_text(REF.replace('MSFT,2026-11-11,100,99,1000,ref-1',
+                                      'MSFT,2026-11-11,100,99,500,ref-1'))
+        statuses = [r['status'] for r in self.r()['rows']]
+        self.assertIn('VOLUME_CONFLICT_REVIEW_SPLITS', statuses)
+
+    def test_fractional_volume_is_not_usable(self):
+        self.b.write_text(REF.replace('MSFT,2026-11-11,100,99,1000,ref-1',
+                                      'MSFT,2026-11-11,100,99,99.4,ref-1'))
+        self.assertIn('INVALID_REFERENCE', [r['status'] for r in self.r()['rows']])
+
+    def test_negative_tolerance_rejected(self):
+        with self.assertRaises(ValueError):
+            reconcile(self.a, self.b, as_of='2026-11-11', tolerance=-0.5)
+
+    def test_extra_csv_fields_rejected(self):
+        self.a.write_text(DB + 'MSFT,2026-11-12,101,99,1000,unexpected\\n')
+        with self.assertRaises(ValueError):
+            self.r()
+
 if __name__=='__main__':
     unittest.main()
