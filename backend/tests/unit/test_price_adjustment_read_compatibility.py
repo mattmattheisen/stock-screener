@@ -40,6 +40,6 @@ def test_new_missing_adj_uses_nullable_stock_price_column():
 
 def test_missing_refresh_does_not_erase_existing_adj():
     mapping = {"adj_close": None, "close": 101.0}
-    updated = protect_existing_adjusted_close(mapping, 99.5)
+    updated = protect_existing_adjusted_close(mapping, 99.5, existing_raw_close=101.0)
     assert updated["adj_close"] == 99.5
     assert mapping["adj_close"] is None
