@@ -261,3 +261,20 @@ been confirmed. Existing historical rows have not been reconciled, updated,
 or backfilled. This change also broadens single-symbol correction behavior
 to align with the shared writer; review the impact on cache freshness, row
 counts and non-latest historical corrections before production promotion.
+
+## Focused CI repair (Nov 13, 2026)
+
+The standalone workflow previously used `pytest --noconftest` with a
+four-package dependency set; this skipped the repo's SQLite-backed fixtures
+and could not meaningfully run the new SQLAlchemy persistence tests.
+The workflow now installs the repo's canonical
+`backend/requirements-runtime.txt` and `backend/requirements-test.txt`,
+runs pytest from `backend/`, and executes the five relevant test modules
+including `test_canslim_price_persistence_sqlite.py`. This matches the
+setup pattern of `.github/workflows/ci.yml`.
+
+The dedicated job is *configured*, **not confirmed green**. The existing
+default CI covers more features and remains a separate required merge gate.
+Do not promote the shared price normalization/persistence changes until
+dedicated and general CI both pass and historical actual-data reconciliation
+is independently reviewed.
