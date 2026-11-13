@@ -31,3 +31,19 @@ def test_does_not_claim_legacy_existing_value_verified():
     # Protection prevents data loss; source validation remains a separate gate.
     result = protect_existing_adjusted_close({"adj_close": None}, 100.0)
     assert result["adj_close"] == 100.0
+
+
+def test_changed_raw_close_invalidates_existing_adjusted_value():
+    result = protect_existing_adjusted_close(
+        {"adj_close": None, "close": 101.0}, 98.5,
+        existing_raw_close=100.0,
+    )
+    assert result["adj_close"] is None
+
+
+def test_unchanged_raw_close_preserves_existing_adjusted_value():
+    result = protect_existing_adjusted_close(
+        {"adj_close": None, "close": 100.0}, 98.5,
+        existing_raw_close=100.0,
+    )
+    assert result["adj_close"] == 98.5
