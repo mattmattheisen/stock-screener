@@ -22,6 +22,16 @@ def _number(value):
         return None
 
 
+def _integer(value):
+    try:
+        n = Decimal(str(value).strip())
+        if not n.is_finite() or n < 0 or n != n.to_integral_value():
+            return None
+        return int(n)
+    except (InvalidOperation, ValueError):
+        return None
+
+
 def _records(path, fields):
     with Path(path).open(newline='', encoding='utf-8-sig') as file:
         rdr = csv.DictReader(file)
@@ -35,6 +45,8 @@ def _records(path, fields):
                 date.fromisoformat(raw_date)
             except ValueError as exc:
                 raise ValueError(f'{path}:{line}: bad ISO date') from exc
+            if None in row:
+                raise ValueError(f'{path}:{line}: unexpected extra CSV fields')
             if not symbol:
                 raise ValueError(f'{path}:{line}: blank symbol')
             key = (symbol, raw_date)
@@ -50,6 +62,9 @@ def reconcile(db_csv, reference_csv, *, as_of, tolerance=Decimal('0.0001')):
     Trade-date cutoff alone does not establish point-in-time authenticity.
     """
     cutoff = date.fromisoformat(as_of)
+    tolerance = Decimal(str(tolerance))
+    if not tolerance.is_finite() or tolerance < 0:
+        raise ValueError('tolerance must be finite and nonnegative')
     db = _records(db_csv, DB_FIELDS)
     ref = _records(reference_csv, REF_FIELDS)
     audit = []
@@ -69,10 +84,13 @@ def reconcile(db_csv, reference_csv, *, as_of, tolerance=Decimal('0.0001')):
                 _number(b['close']), _number(b['adj_close']),
                 _number(a['close']), _number(a['adj_close'])
             )
-            if b_raw is None or b_adj is None:
+            a_vol, b_vol = _integer(a['volume']), _integer(b['volume'])
+            if b_raw is None or b_adj is None or b_vol is None:
                 status = 'INVALID_REFERENCE'
             elif a_raw is None or abs(a_raw - b_raw) > tolerance:
                 status = 'RAW_CLOSE_CONFLICT'
+            elif a_vol is None or a_vol != b_vol:
+                status = 'VOLUME_CONFLICT_REVIEW_SPLITS'
             elif a_adj is None:
                 status = 'PROPOSE_ADJ_CLOSE_REVIEW'
             elif abs(a_adj - b_adj) > tolerance:
