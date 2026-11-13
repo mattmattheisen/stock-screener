@@ -28,23 +28,29 @@ jobs:
           python -m compileall -q research/canslim_free_data backend/app/services/price_row_normalization.py backend/app/services/price_value_policy.py backend/app/services/stock_price_persistence.py backend/app/services/price_cache_service.py
       - name: Run offline CAN SLIM research tests
         run: python -m unittest discover -s research/canslim_free_data/tests -v
+
   backend-compatibility:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost/ci_unused
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install targeted backend test dependencies
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-runtime.txt
+            backend/requirements-test.txt
+      - name: Install repository runtime and test dependencies
+        run: python -m pip install -r backend/requirements-runtime.txt -r backend/requirements-test.txt
+      - name: Run focused real backend SQLite fixture tests
+        working-directory: backend
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install "pytest>=8,<9" "pandas==2.2.0" "numpy==1.26.4" "sqlalchemy==2.0.25"
-      - name: Run actual backend normalization and refresh regression tests
-        env:
-          PYTHONPATH: backend
-        run: |
-          python -m pytest --noconftest -q \
-            backend/tests/unit/test_price_row_normalization.py \
-            backend/tests/unit/test_price_normalization_missing_adjusted_close.py \
-            backend/tests/unit/test_adjusted_close_refresh_guard.py \
-            backend/tests/unit/test_price_adjustment_read_compatibility.py
+          python -m pytest -q \
+            tests/unit/test_price_row_normalization.py \
+            tests/unit/test_price_normalization_missing_adjusted_close.py \
+            tests/unit/test_adjusted_close_refresh_guard.py \
+            tests/unit/test_price_adjustment_read_compatibility.py \
+            tests/unit/test_canslim_price_persistence_sqlite.py
