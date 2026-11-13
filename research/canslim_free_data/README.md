@@ -240,3 +240,24 @@ Do not merge this shared price path while the live database inventory,
 independent historical source comparisons, actual backend pytest execution,
 and rollback procedure remain unverified. Never equate numerical equality
 with independently certified adjusted data.
+
+## November 13 single-symbol compatibility correction
+
+During downstream review, `PriceCacheService` was found to have two
+persistence paths. Bulk writes used the guarded
+`persist_stock_price_mappings` function, but the single-symbol cache writer
+performed direct `bulk_update_mappings` calls. This allowed missing adjusted
+closes to bypass the protection. The branch now routes both methods through
+the shared persistence function.
+
+The new SQLite regression tests exercise real SQLAlchemy update semantics:
+new missing adjustment, unchanged raw close with missing incoming adjustment,
+corrected raw close, and valid explicit replacement. Their actual execution
+still requires backend test dependencies and the repository test harness.
+
+CI now watches the single-symbol cache module and syntax-checks it. A complete
+backend integration run remains required before merge; no hosted CI run has
+been confirmed. Existing historical rows have not been reconciled, updated,
+or backfilled. This change also broadens single-symbol correction behavior
+to align with the shared writer; review the impact on cache freshness, row
+counts and non-latest historical corrections before production promotion.
