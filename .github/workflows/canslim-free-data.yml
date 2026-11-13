@@ -9,6 +9,7 @@ on:
       - 'backend/tests/unit/test_adjusted_close_refresh_guard.py'
       - 'backend/tests/unit/test_price_adjustment_read_compatibility.py'
       - 'backend/tests/unit/test_price_normalization_missing_adjusted_close.py'
+      - 'backend/tests/unit/test_canslim_price_persistence_sqlite.py'
       - '.github/workflows/canslim-free-data.yml'
   workflow_dispatch:
 permissions:
