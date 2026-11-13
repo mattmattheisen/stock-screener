@@ -173,3 +173,24 @@ The dedicated workflow now watches modified backend files, compiles the
 touched Python files and executes the standalone research tests. Backend
 integration tests still require the repository's full dependency/setup CI;
 a syntax check does not prove semantic compatibility.
+
+## November 13 reconciliation hardening
+
+The offline comparison now checks reference volume against stored volume and
+flags `VOLUME_CONFLICT_REVIEW_SPLITS` instead of treating equal closing
+prices as sufficient. It rejects fractional/invalid volume values, negative
+or nonfinite comparison tolerance and malformed extra CSV columns. Twelve
+targeted reconciliation tests passed in an independent local Python 3 run
+using a byte-for-byte transcription of the current module and its cases;
+the repository-wide and hosted CI runs are not yet validated.
+
+The price-persistence update guard now receives the *existing raw close*.
+When a corrected raw close differs from the stored raw close, an absent
+incoming adjusted close stays missing rather than inheriting a stale
+adjustment factor. This backend behavior requires integration testing
+against actual SQLAlchemy persistence and downstream readers.
+
+**Reconciliation status:** Code is prepared for a read-only export, but no
+actual PostgreSQL export or independent reference history was available in
+this session. Therefore **zero historical rows have been independently
+reconciled or backfilled**. CI and data certification remain merge gates.
