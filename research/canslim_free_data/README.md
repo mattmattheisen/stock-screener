@@ -181,7 +181,7 @@ flags `VOLUME_CONFLICT_REVIEW_SPLITS` instead of treating equal closing
 prices as sufficient. It rejects fractional/invalid volume values, negative
 or nonfinite comparison tolerance and malformed extra CSV columns. Twelve
 targeted reconciliation tests passed in an independent local Python 3 run
-using a byte-for-byte transcription of the current module and its cases;
+using a local reconstruction of the current reconciliation logic and its test cases;
 the repository-wide and hosted CI runs are not yet validated.
 
 The price-persistence update guard now receives the *existing raw close*.
