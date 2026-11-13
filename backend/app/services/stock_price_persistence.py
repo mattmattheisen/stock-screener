@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.models.stock import StockPrice
 from app.services.price_row_normalization import finite_ohlc_values
-from app.services.price_value_policy import is_usable_adjusted_close
+from app.services.price_value_policy import (
+    is_usable_adjusted_close,
+    protect_existing_adjusted_close,
+)
 
 
 def persist_stock_price_mappings(
@@ -104,8 +107,12 @@ def persist_stock_price_mappings(
                 or not is_usable_adjusted_close(existing_adj_close)
                 or finite_ohlc_values(open_, high, low, close) is None
             ):
-                price_row["id"] = existing_id
-                rows_to_update.append(price_row)
+                protected_row = protect_existing_adjusted_close(
+                    price_row, existing_adj_close,
+                    existing_raw_close=close,
+                )
+                protected_row["id"] = existing_id
+                rows_to_update.append(protected_row)
 
     for chunk_start in range(0, len(rows_to_insert), chunk_size):
         db.bulk_insert_mappings(
