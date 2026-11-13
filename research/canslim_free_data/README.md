@@ -194,3 +194,49 @@ against actual SQLAlchemy persistence and downstream readers.
 actual PostgreSQL export or independent reference history was available in
 this session. Therefore **zero historical rows have been independently
 reconciled or backfilled**. CI and data certification remain merge gates.
+
+## Next verification gate: run from an authorized Codespace
+
+This work cannot certify the production dataset from a GitHub file view.
+A database operator with a read-only role can execute the following in a
+trusted Codespace or approved environment. Never commit exports, credentials,
+reconciliation JSON containing user data, or database backups.
+
+1. Run the focused backend compatibility suite in an environment with the
+   existing backend dependencies and SQLite test harness installed:
+
+```bash
+cd backend
+python -m pytest -q \
+  tests/unit/test_price_normalization_missing_adjusted_close.py \
+  tests/unit/test_adjusted_close_refresh_guard.py \
+  tests/unit/test_price_adjustment_read_compatibility.py \
+  tests/unit/test_price_row_normalization.py
+cd ..
+python -m unittest discover -s research/canslim_free_data/tests -v
+```
+
+2. Run `sql/historical_price_inventory.sql` via the existing approved
+   database administration interface using **read-only permissions**.
+   Do not grant additional writes. Save execution timestamp, database schema
+   version, and counts per ticker for MSFT, TSM, ANET, LLY and FTNT.
+
+3. Export a date-scoped, account-free dataset from `stock_prices` with just
+   `symbol,date,close,adj_close,volume`. Cross-check independent source
+   semantics for corporate actions, split-adjusted volume and the
+   version of historical adjusted prices. Run `reconcile.py` offline.
+
+4. Categorize each discrepancy. No adjustment should be applied until
+   there is a reviewed event/source mapping and a reversible migration plan.
+   Avoid mutating preexisting prices from synthetic test fixtures.
+
+5. Re-run backend CI and compare results against `main`, specifically
+   looking for new failures caused by nullable adjusted prices. A passing
+   research-only unittest suite is not sufficient.
+
+### Release criteria
+
+Do not merge this shared price path while the live database inventory,
+independent historical source comparisons, actual backend pytest execution,
+and rollback procedure remain unverified. Never equate numerical equality
+with independently certified adjusted data.
