@@ -6,6 +6,7 @@ on:
       - 'backend/app/services/price_row_normalization.py'
       - 'backend/app/services/price_value_policy.py'
       - 'backend/app/services/stock_price_persistence.py'
+      - 'backend/app/services/price_cache_service.py'
       - 'backend/tests/unit/test_adjusted_close_refresh_guard.py'
       - 'backend/tests/unit/test_price_adjustment_read_compatibility.py'
       - 'backend/tests/unit/test_price_normalization_missing_adjusted_close.py'
@@ -24,7 +25,7 @@ jobs:
           python-version: '3.11'
       - name: Compile touched Python files
         run: |
-          python -m compileall -q research/canslim_free_data backend/app/services/price_row_normalization.py backend/app/services/price_value_policy.py backend/app/services/stock_price_persistence.py
+          python -m compileall -q research/canslim_free_data backend/app/services/price_row_normalization.py backend/app/services/price_value_policy.py backend/app/services/stock_price_persistence.py backend/app/services/price_cache_service.py
       - name: Run offline CAN SLIM research tests
         run: python -m unittest discover -s research/canslim_free_data/tests -v
   backend-compatibility:
