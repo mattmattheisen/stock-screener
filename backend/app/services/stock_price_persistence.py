@@ -108,7 +108,8 @@ def persist_stock_price_mappings(
                 or finite_ohlc_values(open_, high, low, close) is None
             ):
                 protected_row = protect_existing_adjusted_close(
-                    price_row, existing_adj_close
+                    price_row, existing_adj_close,
+                    existing_raw_close=close,
                 )
                 protected_row["id"] = existing_id
                 rows_to_update.append(protected_row)
