@@ -1467,64 +1467,38 @@ class PriceCacheService:
                     row_date = row_date.date()
                 normalized_dates.append(row_date)
 
-            latest_row_date = max(normalized_dates)
-            existing_rows = {
-                record.date: record.id
-                for record in db.query(StockPrice.id, StockPrice.date).filter(
-                    StockPrice.symbol == symbol,
-                    StockPrice.date.in_(normalized_dates),
-                ).all()
-            }
-
-            rows_to_insert = []
-            rows_to_update = []
-
+            # Use the same reviewed adjustment-preserving write path as bulk ingestion.
+            # Previously this single-symbol path bypassed the shared safeguard.
+            normalized_rows = []
             for _, row in df.iterrows():
-                row_date = row['Date']
-
-                # Convert pd.Timestamp to date for proper comparison with existing_dates
-                if isinstance(row_date, pd.Timestamp):
+                row_date = row["Date"]
+                if isinstance(row_date, (pd.Timestamp, datetime)):
                     row_date = row_date.date()
-                elif isinstance(row_date, datetime):
-                    row_date = row_date.date()
-
-                # Prepare row for bulk insert
                 try:
-                    price_dict = stock_price_row_from_ohlcv(
-                        symbol=symbol,
-                        row_date=row_date,
-                        row=row,
+                    mapping = stock_price_row_from_ohlcv(
+                        symbol=symbol, row_date=row_date, row=row
                     )
-                    if price_dict is None:
-                        continue
-                    existing_id = existing_rows.get(row_date)
-                    if existing_id is None:
-                        rows_to_insert.append(price_dict)
-                    elif row_date == latest_row_date:
-                        price_dict["id"] = existing_id
-                        rows_to_update.append(price_dict)
-
-                except Exception as e:
-                    logger.warning(f"Error preparing row for {symbol} on {row.get('Date')}: {e}")
-                    continue
-
-            # Bulk insert historical rows, overwrite the latest day if it already exists.
-            if rows_to_insert:
-                db.bulk_insert_mappings(StockPrice, rows_to_insert)
-            if rows_to_update:
-                db.bulk_update_mappings(StockPrice, rows_to_update)
-
+                    if mapping is not None:
+                        normalized_rows.append(mapping)
+                except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                    logger.warning(
+                        "Error preparing row for %s on %s: %s",
+                        symbol, row_date, exc,
+                    )
+            result = persist_stock_price_mappings(
+                db, {symbol: normalized_rows}, chunk_size=100
+            )
             db.commit()
-            if rows_to_insert or rows_to_update:
+            if result["inserted"] or result["updated"]:
                 logger.info(
-                    "Persisted %s price rows for %s (%d inserts, %d latest-day updates)",
-                    len(rows_to_insert) + len(rows_to_update),
+                    "Persisted %s price rows for %s (%d inserts, %d updates)",
+                    result["inserted"] + result["updated"],
                     symbol,
-                    len(rows_to_insert),
-                    len(rows_to_update),
+                    result["inserted"],
+                    result["updated"],
                 )
             else:
-                logger.debug(f"No new rows to persist for {symbol}")
+                logger.debug("No new rows to persist for %s", symbol)
 
         except Exception as e:
             logger.error(f"Error storing {symbol} in database: {e}", exc_info=True)
